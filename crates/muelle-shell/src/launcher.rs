@@ -1,4 +1,9 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::{OnceLock, mpsc},
+    time::{Duration, Instant},
+};
+
+mod hidden_icons;
 
 use thiserror::Error;
 use windows::{
@@ -9,8 +14,8 @@ use windows::{
         UI::{
             Input::KeyboardAndMouse::{
                 INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
-                KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_A, VK_B, VK_D, VK_LCONTROL, VK_LWIN,
-                VK_N, VK_RETURN, VK_S, VK_SPACE, VK_TAB, VK_V, VK_W,
+                KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_A, VK_B, VK_D, VK_ESCAPE, VK_LCONTROL,
+                VK_LWIN, VK_N, VK_RETURN, VK_S, VK_SPACE, VK_TAB, VK_V, VK_W,
             },
             Shell::ShellExecuteW,
             WindowsAndMessaging::{
@@ -156,6 +161,11 @@ fn tap(keys: &[VIRTUAL_KEY]) {
             }
         }
     }
+    send_keys(keys);
+}
+
+/// Sends keyboard input without changing focus or injecting mouse input.
+fn send_keys(keys: &[VIRTUAL_KEY]) {
     let key = |vk: VIRTUAL_KEY, flags: KEYBD_EVENT_FLAGS| INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
@@ -235,11 +245,6 @@ pub fn open_input_switcher() {
     tap(&[VK_LWIN, VK_SPACE]);
 }
 
-/// How long the taskbar takes to put the focus on its notification area.
-const HIDDEN_ICONS_DELAY: Duration = Duration::from_millis(250);
-/// How long the flyout is kept under the arrow while Windows finishes
-/// opening it (it may place it again during its animation).
-const HIDDEN_ICONS_HOLD: Duration = Duration::from_millis(1200);
 /// Space between the menu bar and the flyout, in physical pixels.
 const HIDDEN_ICONS_GAP: i32 = 6;
 /// The hidden-icons flyout: Windows 11, then Windows 10.
@@ -248,28 +253,92 @@ const OVERFLOW_CLASSES: [PCWSTR; 2] = [
     w!("NotifyIconOverflowWindow"),
 ];
 
-/// The notification area's hidden icons, the taskbar's "^" button: Win+B
-/// moves the focus to that button and Enter opens it. The taskbar itself
-/// stays invisible while Muelle runs; only its flyout shows. Windows offers
-/// no other way: the button is not exposed while the taskbar is hidden.
+/// Toggles the notification area's hidden icons, the taskbar's "^" button.
+/// Win+B focuses that button and Enter opens it; Escape dismisses the flyout.
+/// The taskbar itself stays invisible while Muelle runs.
 ///
 /// Windows opens the flyout at the bottom of the screen, above where the
 /// taskbar would be, so it is then moved under the arrow that opened it:
 /// `anchor` is the arrow's centre and the bottom of the menu bar.
-pub fn open_hidden_icons(anchor: (i32, i32)) {
-    tap(&[VK_LWIN, VK_B]);
-    // The rest waits on its own short-lived thread so the dock never sleeps.
-    std::thread::spawn(move || {
-        std::thread::sleep(HIDDEN_ICONS_DELAY);
-        tap(&[VK_RETURN]);
-        let until = Instant::now() + HIDDEN_ICONS_HOLD;
-        while Instant::now() < until {
-            if let Some(flyout) = open_overflow() {
-                keep_under(flyout, anchor);
+pub fn toggle_hidden_icons(anchor: (i32, i32)) {
+    static CLICKS: OnceLock<mpsc::Sender<(i32, i32)>> = OnceLock::new();
+    let clicks = CLICKS.get_or_init(|| {
+        let (send, receive) = mpsc::channel();
+        // A single worker serializes clicks and delayed input. It sleeps on
+        // the channel when idle instead of polling the shell indefinitely.
+        std::thread::spawn(move || {
+            let mut toggle = hidden_icons::Toggle::default();
+            let mut anchor = (0, 0);
+            loop {
+                let click = if toggle.active() {
+                    match receive.recv_timeout(Duration::from_millis(10)) {
+                        Ok(anchor) => Some(anchor),
+                        Err(mpsc::RecvTimeoutError::Timeout) => None,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                } else {
+                    match receive.recv() {
+                        Ok(anchor) => Some(anchor),
+                        Err(_) => break,
+                    }
+                };
+                let flyout = open_overflow();
+                let now = Instant::now();
+                let action = if let Some(clicked_anchor) = click {
+                    anchor = clicked_anchor;
+                    toggle.click(now, flyout.is_some())
+                } else {
+                    toggle.tick(now, flyout.is_some())
+                };
+                match action {
+                    hidden_icons::Action::FocusTray => tap(&[VK_LWIN, VK_B]),
+                    hidden_icons::Action::Activate => {
+                        // The user may have switched apps during the delay.
+                        // Do not deliver the pending Enter to that app.
+                        if tray_has_focus() {
+                            send_keys(&[VK_RETURN]);
+                        }
+                    }
+                    hidden_icons::Action::Dismiss => dismiss_overflow(flyout),
+                    hidden_icons::Action::Reposition => {
+                        if let Some(flyout) = flyout {
+                            keep_under(flyout, anchor);
+                        }
+                    }
+                    hidden_icons::Action::None => {}
+                }
             }
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        });
+        send
     });
+    let _ = clicks.send(anchor);
+}
+
+/// Let Explorer dismiss its own flyout rather than hiding or destroying its
+/// window. Never send Escape to an unrelated foreground app, or use the
+/// mouse-input fallback in `bring_to_front`.
+fn dismiss_overflow(flyout: Option<HWND>) {
+    // SAFETY: Window queries and focus changes within the current session.
+    unsafe {
+        if let Some(flyout) = flyout {
+            if GetForegroundWindow() != flyout {
+                let _ = SetForegroundWindow(flyout);
+            }
+            if GetForegroundWindow() == flyout {
+                send_keys(&[VK_ESCAPE]);
+            }
+        } else if tray_has_focus() {
+            // Cancelling before Enter also releases Win+B's tray focus.
+            send_keys(&[VK_ESCAPE]);
+        }
+    }
+}
+
+fn tray_has_focus() -> bool {
+    // SAFETY: Read-only lookups of the taskbar and the foreground window.
+    unsafe {
+        FindWindowW(w!("Shell_TrayWnd"), None).is_ok_and(|taskbar| GetForegroundWindow() == taskbar)
+    }
 }
 
 /// The hidden-icons flyout, if it is open.

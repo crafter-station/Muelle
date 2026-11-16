@@ -1056,7 +1056,7 @@ impl MenuBar {
             Some(Action::Search) => launcher::open_search(),
             Some(Action::TaskView) => launcher::open_task_view(),
             Some(Action::Widgets) => launcher::open_widgets(),
-            Some(Action::HiddenIcons) => launcher::open_hidden_icons(anchor),
+            Some(Action::HiddenIcons) => launcher::toggle_hidden_icons(anchor),
             Some(Action::InputLanguage) => launcher::open_input_switcher(),
             Some(Action::ShowDesktop) => launcher::show_desktop(),
             // Windows' own pages list which apps use each device.
