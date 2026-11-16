@@ -13,6 +13,7 @@ enum Phase {
     Closing {
         until: Instant,
         dismissed: bool,
+        reopen: bool,
     },
 }
 
@@ -38,11 +39,18 @@ impl Toggle {
     }
 
     pub(super) fn click(&mut self, now: Instant, visible: bool) -> Action {
+        if let Phase::Closing { reopen, .. } = &mut self.phase {
+            // Explorer may still be processing Escape. Preserve toggle intent
+            // until dismissal completes instead of sending another Escape.
+            *reopen = !*reopen;
+            return Action::None;
+        }
         if visible || matches!(self.phase, Phase::Opening(_) | Phase::Waiting(_)) {
             self.phase = if visible || matches!(self.phase, Phase::Waiting(_)) {
                 Phase::Closing {
                     until: now + HOLD,
                     dismissed: visible,
+                    reopen: false,
                 }
             } else {
                 // Enter has not been sent, so nothing can open later.
@@ -65,9 +73,7 @@ impl Toggle {
                 self.phase = Phase::Waiting(now + HOLD);
                 Action::Activate
             }
-            Phase::Waiting(until) | Phase::Open(until) | Phase::Closing { until, .. }
-                if now >= until =>
-            {
+            Phase::Waiting(until) | Phase::Open(until) if now >= until => {
                 self.phase = Phase::Idle;
                 Action::None
             }
@@ -81,10 +87,20 @@ impl Toggle {
             }
             Phase::Open(_) => Action::Reposition,
             Phase::Closing {
-                dismissed: true, ..
-            } if !visible => {
-                self.phase = Phase::Idle;
-                Action::None
+                until,
+                dismissed,
+                reopen,
+            } if (dismissed && !visible) || now >= until => {
+                if !reopen {
+                    self.phase = Phase::Idle;
+                    Action::None
+                } else if visible {
+                    self.phase = Phase::Open(now + HOLD);
+                    Action::Reposition
+                } else {
+                    self.phase = Phase::Opening(now + OPEN_DELAY);
+                    Action::FocusTray
+                }
             }
             // Enter may already be queued in Explorer when the second click
             // arrives. Dismiss a late flyout once, without queuing Escapes
@@ -92,10 +108,12 @@ impl Toggle {
             Phase::Closing {
                 until,
                 dismissed: false,
+                reopen,
             } if visible => {
                 self.phase = Phase::Closing {
                     until,
                     dismissed: true,
+                    reopen,
                 };
                 Action::Dismiss
             }
@@ -136,6 +154,76 @@ mod tests {
         assert_eq!(toggle.click(now, false), Action::FocusTray);
         assert_eq!(toggle.tick(now + OPEN_DELAY, false), Action::Activate);
         assert_eq!(toggle.tick(now + OPEN_DELAY, true), Action::Reposition);
+    }
+
+    #[test]
+    fn third_click_reopens_after_pending_dismissal() {
+        let now = Instant::now();
+        let mut toggle = Toggle::default();
+        toggle.click(now, false);
+        toggle.tick(now + OPEN_DELAY, false);
+        toggle.tick(now + OPEN_DELAY, true);
+        assert_eq!(toggle.click(now + OPEN_DELAY, true), Action::Dismiss);
+        assert_eq!(toggle.click(now + OPEN_DELAY, true), Action::None);
+        assert_eq!(toggle.tick(now + OPEN_DELAY, true), Action::None);
+        assert_eq!(toggle.tick(now + OPEN_DELAY, false), Action::FocusTray);
+        assert_eq!(toggle.tick(now + OPEN_DELAY * 2, false), Action::Activate);
+        assert_eq!(toggle.tick(now + OPEN_DELAY * 2, true), Action::Reposition);
+    }
+
+    #[test]
+    fn fourth_click_cancels_reopen_during_pending_dismissal() {
+        let now = Instant::now();
+        let mut toggle = Toggle::default();
+        toggle.click(now, true);
+        toggle.click(now, true);
+        assert_eq!(toggle.click(now, true), Action::None);
+        assert_eq!(toggle.tick(now, false), Action::None);
+        assert!(!toggle.active());
+        assert_eq!(toggle.tick(now + OPEN_DELAY, false), Action::None);
+    }
+
+    #[test]
+    fn click_after_disappearance_reopens_before_the_next_tick() {
+        let now = Instant::now();
+        let mut toggle = Toggle::default();
+        toggle.click(now, true);
+        assert_eq!(toggle.click(now, false), Action::None);
+        assert_eq!(toggle.tick(now, false), Action::FocusTray);
+        assert_eq!(toggle.tick(now + OPEN_DELAY, false), Action::Activate);
+    }
+
+    #[test]
+    fn reopen_waits_for_a_late_flyout_to_be_dismissed() {
+        let now = Instant::now();
+        let mut toggle = Toggle::default();
+        toggle.click(now, false);
+        toggle.tick(now + OPEN_DELAY, false);
+        toggle.click(now + OPEN_DELAY, false);
+        assert_eq!(toggle.click(now + OPEN_DELAY, false), Action::None);
+        assert_eq!(toggle.tick(now + OPEN_DELAY, false), Action::None);
+        assert_eq!(toggle.tick(now + OPEN_DELAY, true), Action::Dismiss);
+        assert_eq!(toggle.tick(now + OPEN_DELAY, true), Action::None);
+        assert_eq!(toggle.tick(now + OPEN_DELAY, false), Action::FocusTray);
+        assert_eq!(toggle.tick(now + OPEN_DELAY * 2, false), Action::Activate);
+    }
+
+    #[test]
+    fn reopen_recovers_when_the_cancelled_flyout_never_appears() {
+        let now = Instant::now();
+        let mut toggle = Toggle::default();
+        toggle.click(now, false);
+        toggle.tick(now + OPEN_DELAY, false);
+        toggle.click(now + OPEN_DELAY, false);
+        toggle.click(now + OPEN_DELAY, false);
+        assert_eq!(
+            toggle.tick(now + OPEN_DELAY + HOLD, false),
+            Action::FocusTray
+        );
+        assert_eq!(
+            toggle.tick(now + OPEN_DELAY * 2 + HOLD, false),
+            Action::Activate
+        );
     }
 
     #[test]
