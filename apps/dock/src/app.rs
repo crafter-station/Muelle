@@ -4344,14 +4344,15 @@ impl App {
             bluetooth: self.config.menu_bar_bluetooth,
             battery_percent: self.config.menu_bar_battery_percent,
             island_style: self.config.menu_bar_island_style,
+            island: self.config.menu_bar_island,
         };
         if !self.config.menu_bar {
             self.menubar = None;
         } else if self.menubar.is_none() {
             self.menubar = MenuBar::create(
                 &self.gfx,
-                self.config.ai_usage,
-                self.config.menu_bar_music,
+                self.config.menu_bar_island && self.config.ai_usage,
+                self.config.menu_bar_island && self.config.menu_bar_music,
                 self.config.menu_bar_auto_hide,
                 widgets,
             )
@@ -4361,8 +4362,18 @@ impl App {
         if let Some(bar) = &mut self.menubar {
             let applied = bar
                 .set_auto_hide(self.config.menu_bar_auto_hide)
-                .and_then(|()| bar.set_usage_enabled(&self.gfx, self.config.ai_usage))
-                .and_then(|()| bar.set_media_enabled(&self.gfx, self.config.menu_bar_music))
+                .and_then(|()| {
+                    bar.set_usage_enabled(
+                        &self.gfx,
+                        self.config.menu_bar_island && self.config.ai_usage,
+                    )
+                })
+                .and_then(|()| {
+                    bar.set_media_enabled(
+                        &self.gfx,
+                        self.config.menu_bar_island && self.config.menu_bar_music,
+                    )
+                })
                 .and_then(|()| bar.set_widgets(&self.gfx, widgets))
                 .and_then(|()| {
                     let covered = primary_monitor()

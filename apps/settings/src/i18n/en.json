@@ -31,6 +31,8 @@
   "menuBarHint": "Time, battery, and access to the Windows quick settings and notifications.",
   "menuBarAutoHide": "Automatically hide",
   "menuBarAutoHideHint": "Rest the pointer at the top edge to reveal it.",
+  "menuBarIsland": "Show notch (menu bar island)",
+  "menuBarIslandHint": "Show the curved notch or compact bubble with music and AI provider usage.",
   "menuBarMusic": "Show what's playing",
   "menuBarMusicHint": "Music and video, with controls. With music and AI off, the island disappears.",
   "aiUsage": "AI usage",

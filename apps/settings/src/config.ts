@@ -22,6 +22,7 @@ export interface Config {
   showPreviewCloseButton: boolean;
   menuBar: boolean;
   menuBarAutoHide: boolean;
+  menuBarIsland: boolean;
   aiUsage: boolean;
   menuBarMusic: boolean;
   menuBarIslandStyle: IslandStyle;

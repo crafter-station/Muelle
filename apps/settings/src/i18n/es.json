@@ -31,6 +31,8 @@
   "menuBarHint": "Hora, batería y acceso a los ajustes rápidos y las notificaciones de Windows.",
   "menuBarAutoHide": "Ocultar automáticamente",
   "menuBarAutoHideHint": "Deja el puntero en el borde superior para mostrarla.",
+  "menuBarIsland": "Mostrar notch (isla de la barra superior)",
+  "menuBarIslandHint": "Muestra el notch curvado o la burbuja compacta con música y uso de proveedores de IA.",
   "menuBarMusic": "Mostrar lo que se reproduce",
   "menuBarMusicHint": "Música y vídeo, con controles. Sin música ni IA, la isla desaparece.",
   "aiUsage": "Uso de IA",
