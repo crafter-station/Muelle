@@ -16,16 +16,15 @@ use windows::{
         UI::{
             Shell::{ABM_GETSTATE, ABM_SETSTATE, ABS_AUTOHIDE, APPBARDATA, SHAppBarMessage},
             WindowsAndMessaging::{
-                FindWindowExW, FindWindowW, GWL_EXSTYLE, GetLayeredWindowAttributes,
-                GetWindowLongPtrW, LWA_ALPHA, SetLayeredWindowAttributes, SetWindowLongPtrW,
-                WS_EX_LAYERED, WS_EX_TRANSPARENT,
+                FindWindowExW, GWL_EXSTYLE, GetLayeredWindowAttributes, GetWindowLongPtrW,
+                LWA_ALPHA, SetLayeredWindowAttributes, SetWindowLongPtrW, WS_EX_LAYERED,
+                WS_EX_TRANSPARENT,
             },
         },
     },
     core::{PCWSTR, w},
 };
 
-const PRIMARY: PCWSTR = w!("Shell_TrayWnd");
 const SECONDARY: PCWSTR = w!("Shell_SecondaryTrayWnd");
 const GHOST_STYLES: isize = (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0) as isize;
 
@@ -117,8 +116,10 @@ fn taskbars() -> Vec<HWND> {
     let mut found = Vec::new();
     // SAFETY: Read-only calls with valid static strings.
     unsafe {
-        if let Ok(hwnd) = FindWindowW(PRIMARY, None) {
-            found.push(hwnd);
+        // Explorer's taskbar, never the tray relay's own `Shell_TrayWnd`
+        // (crate::tray), which FindWindow would return first while it runs.
+        if let Some(hwnd) = crate::tray::find_explorer_tray() {
+            found.push(HWND(hwnd as *mut _));
         }
         let mut previous = None;
         while let Ok(hwnd) = FindWindowExW(None, previous, SECONDARY, None) {
