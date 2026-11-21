@@ -340,6 +340,14 @@ impl Roster {
         self.recent.len() != before
     }
 
+    /// Prunes stale recent entries whose targets no longer exist.
+    /// Returns whether any entries were pruned.
+    pub fn prune_recent<F: Fn(&str) -> bool>(&mut self, exists: F) -> bool {
+        let before = self.recent.len();
+        self.recent.retain(|id| exists(id));
+        self.recent.len() != before
+    }
+
     /// Pinned items and open apps in display order, with pinned items first.
     /// A group is running when any of its apps is.
     #[must_use]
@@ -536,6 +544,23 @@ mod tests {
         roster.sync(["a"]);
         roster.sync([]);
         assert_eq!(roster.recent(), ["a", "b"]);
+    }
+
+    #[test]
+    fn prune_recent_drops_missing_unpinned_apps() {
+        let mut roster = roster();
+        // Open two unpinned apps and close them so they enter recent
+        roster.sync(["app_installed", "app_uninstalled"]);
+        roster.sync([]);
+        assert_eq!(roster.recent(), ["app_uninstalled", "app_installed"]);
+
+        let pruned = roster.prune_recent(|id| id == "app_installed");
+        assert!(pruned);
+        assert_eq!(roster.recent(), ["app_installed"]);
+
+        // Pruning again when all remaining exist changes nothing
+        let pruned = roster.prune_recent(|id| id == "app_installed");
+        assert!(!pruned);
     }
 
     #[test]

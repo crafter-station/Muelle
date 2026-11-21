@@ -3907,17 +3907,8 @@ impl App {
         for id in &missing {
             self.roster.unpin(id);
         }
-        let gone: Vec<String> = self
-            .roster
-            .recent()
-            .iter()
-            .filter(|id| !app_exists(id))
-            .cloned()
-            .collect();
-        for id in &gone {
-            self.roster.forget_recent(id);
-        }
-        !missing.is_empty() || !gone.is_empty()
+        let recent_pruned = self.roster.prune_recent(app_exists);
+        !missing.is_empty() || recent_pruned
     }
 
     fn toggle_hiding(&mut self) -> Result<()> {
