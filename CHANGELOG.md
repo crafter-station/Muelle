@@ -34,6 +34,7 @@ copia la sección de la versión que se publica a la release de GitHub.
   windows have closed.
 - New setting in Settings → Windows: "Show close button on previews" (on by default).
 - Settings → Menu bar: added "Show notch (menu bar island)" setting (on by default) to turn off the dynamic island / curved notch completely, stopping background AI usage polling and reflowing the menu bar without layout gaps (Refs #28, Refs #25).
+- Optimized Genie animation performance: reduced strip and keyframe allocations by over 60%, reduced settle delay from 120ms to 60ms, and optimized transition toggling to O(1) active set checks, preventing UI lag on window open/close and minimize (Refs #27).
 
 ### Español
 
@@ -65,6 +66,7 @@ copia la sección de la versión que se publica a la release de GitHub.
 - Nuevo ajuste en Ajustes → Ventanas: «Mostrar botón de cerrar en previsualizaciones»
   (activado por defecto).
 - Ajustes → Barra superior: incorporada la opción «Mostrar notch (isla de la barra superior)» (activada por defecto) para desactivar por completo la isla dinámica / notch curvado, deteniendo los sondeos de uso de IA en segundo plano y reorganizando la barra superior sin huecos (Refs #28, Refs #25).
+- Rendimiento del efecto genio optimizado: reducción de más del 60% en asignaciones de tiras y fotogramas clave, menor tiempo de asentamiento de 120 ms a 60 ms y comprobación O(1) al alternar transiciones de ventana, evitando ralentizaciones al abrir, cerrar y minimizar ventanas (Refs #27).
 
 ## [0.1.18]
 

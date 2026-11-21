@@ -1835,14 +1835,15 @@ impl App {
             return;
         }
         let windows = &self.windows;
-        self.calmed
-            .retain(|hwnd| windows.iter().any(|window| window.hwnd == *hwnd));
+        let mut active = std::collections::HashSet::with_capacity(windows.len());
         for window in windows {
+            active.insert(window.hwnd);
             if !self.calmed.contains(&window.hwnd) {
                 set_window_transitions(window.hwnd, false);
                 self.calmed.push(window.hwnd);
             }
         }
+        self.calmed.retain(|hwnd| active.contains(hwnd));
     }
 
     fn restore_transitions(&mut self) {
