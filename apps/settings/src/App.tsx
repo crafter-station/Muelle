@@ -8,6 +8,8 @@ import {
   type GenieSpeed,
   type IslandStyle,
   type Language,
+  type MenuBarItem,
+  effectiveMenuBarOrder,
   type UpdateInfo,
   type WindowsPreferences,
   ICON_SIZE,
@@ -26,7 +28,7 @@ import {
   saveConfig,
   setAutostart,
 } from "./config";
-import { Card, Row, Segmented, Slider, SubRow, Toggle, VisualChoices } from "./controls";
+import { Card, Row, Segmented, Select, Slider, SubRow, Toggle, VisualChoices } from "./controls";
 import { DockPreview, IslandPreview, SettingIcon, SpeedPreview } from "./visuals";
 import { type SectionId, SectionIcon } from "./icons";
 import { UpdateBanner } from "./UpdateBanner";
@@ -78,6 +80,9 @@ export function App() {
   const [config, setConfig] = useState<Config | null>(null);
   const [autostart, setAutostartState] = useState(false);
   const [windowsPreferences, setWindowsPreferences] = useState<WindowsPreferences | null>(null);
+  // Native drag and drop of the menu bar items: the one held and the one it is over.
+  const [draggedItem, setDraggedItem] = useState<MenuBarItem | null>(null);
+  const [dropItem, setDropItem] = useState<MenuBarItem | null>(null);
   // Keep the animation notice from flashing while the initial system read is pending.
   const animations = windowsPreferences?.animations ?? true;
   useEffect(() => {
@@ -247,6 +252,46 @@ export function App() {
 
   if (!config) return <div className="window" />;
   const t = textsFor(config.language);
+  const menuOrder = effectiveMenuBarOrder(config.menuBarOrder);
+  const menuHidden = config.menuBarHidden ?? [];
+  const moveMenuItem = (item: MenuBarItem, to: number) => {
+    const from = menuOrder.indexOf(item);
+    if (from < 0 || to < 0 || to >= menuOrder.length || from === to) return;
+    const next = [...menuOrder];
+    next.splice(from, 1);
+    next.splice(to, 0, item);
+    update({ menuBarOrder: next });
+  };
+  const menuItemShown = (item: MenuBarItem): boolean | undefined => {
+    switch (item) {
+      case "bluetooth":
+        return config.menuBarBluetooth;
+      case "search":
+        return config.menuBarSearch ?? windowsPreferences?.menuBarSearch;
+      case "task-view":
+        return config.menuBarTaskView ?? windowsPreferences?.menuBarTaskView;
+      case "widgets":
+        return config.menuBarWidgets ?? windowsPreferences?.menuBarWidgets;
+      default:
+        return !menuHidden.includes(item);
+    }
+  };
+  const showMenuItem = (item: MenuBarItem, shown: boolean) => {
+    switch (item) {
+      case "bluetooth":
+        return update({ menuBarBluetooth: shown });
+      case "search":
+        return update({ menuBarSearch: shown });
+      case "task-view":
+        return update({ menuBarTaskView: shown });
+      case "widgets":
+        return update({ menuBarWidgets: shown });
+      default:
+        return update({
+          menuBarHidden: shown ? menuHidden.filter((hidden) => hidden !== item) : [...new Set([...menuHidden, item])],
+        });
+    }
+  };
   const durationFormat = new Intl.NumberFormat(config.language === "auto" ? navigator.language : config.language);
   const chooseFolder = () => {
     pickFolder(config.shortcutsFolder)
@@ -475,7 +520,29 @@ export function App() {
                     onChange={(menuBarAutoHide) => update({ menuBarAutoHide })}
                   />
                 </SubRow>
-                <SubRow label={t.menuBarMusic} hint={t.menuBarMusicHint} open={config.menuBar}>
+                <SubRow label={t.menuBarGlass} hint={t.menuBarGlassHint} open={config.menuBar}>
+                  <Toggle
+                    label={t.menuBarGlass}
+                    checked={config.menuBarGlass}
+                    onChange={(menuBarGlass) => update({ menuBarGlass })}
+                  />
+                </SubRow>
+                <SubRow
+                  label={t.menuBarGlassStrength}
+                  hint={`${t.menuBarGlassClear} … ${t.menuBarGlassFrosted}`}
+                  open={config.menuBar && config.menuBarGlass}
+                >
+                  <Slider
+                    label={t.menuBarGlassStrength}
+                    value={config.menuBarGlassStrength ?? 50}
+                    min={0}
+                    max={100}
+                    step={5}
+                    unit="%"
+                    onChange={(menuBarGlassStrength) => update({ menuBarGlassStrength })}
+                  />
+                </SubRow>
+                <SubRow label={t.menuBarMusic}hint={t.menuBarMusicHint} open={config.menuBar}>
                   <Toggle
                     label={t.menuBarMusic}
                     checked={config.menuBarMusic}
@@ -514,14 +581,115 @@ export function App() {
                 </SubRow>
               </Card>
               {config.menuBar && (
-                <Card title={t.menuBarItems}>
-                  <Row icon={<SettingIcon name="bluetooth" />} label={t.menuBarBluetooth} hint={t.menuBarBluetoothHint}>
+                <Card title={t.clock}>
+                  <Row label={t.clockShowDate}>
                     <Toggle
-                      label={t.menuBarBluetooth}
-                      checked={config.menuBarBluetooth}
-                      onChange={(menuBarBluetooth) => update({ menuBarBluetooth })}
+                      label={t.clockShowDate}
+                      checked={config.clockShowDate ?? true}
+                      onChange={(clockShowDate) => update({ clockShowDate })}
                     />
                   </Row>
+                  <Row label={t.clockShowWeekday}>
+                    <Toggle
+                      label={t.clockShowWeekday}
+                      checked={config.clockShowWeekday ?? true}
+                      onChange={(clockShowWeekday) => update({ clockShowWeekday })}
+                    />
+                  </Row>
+                  <Row label={t.clockSeconds}>
+                    <Toggle
+                      label={t.clockSeconds}
+                      checked={config.clockSeconds ?? false}
+                      onChange={(clockSeconds) => update({ clockSeconds })}
+                    />
+                  </Row>
+                  <Row label={t.clock24h}>
+                    <Select<"auto" | "on" | "off">
+                      label={t.clock24h}
+                      value={config.clock24h === true ? "on" : config.clock24h === false ? "off" : "auto"}
+                      options={[
+                        { value: "auto", label: t.clock24hAuto },
+                        { value: "on", label: t.clock24hOn },
+                        { value: "off", label: t.clock24hOff },
+                      ]}
+                      onChange={(choice) => update({ clock24h: choice === "auto" ? null : choice === "on" })}
+                    />
+                  </Row>
+                </Card>
+              )}
+              {config.menuBar && (
+                <Card title={t.menuBarItems}>
+                  <p className="list-hint">{t.menuBarItemsHint}</p>
+                  <ul className="reorder-list">
+                    {menuOrder.map((item, index) => {
+                      const label = menuItemLabel(t, item);
+                      return (
+                        <li
+                          key={item}
+                          className="row reorder-row"
+                          draggable
+                          data-dragging={draggedItem === item}
+                          data-over={dropItem === item && draggedItem !== item}
+                          onDragStart={(event) => {
+                            event.dataTransfer.effectAllowed = "move";
+                            event.dataTransfer.setData("text/plain", item);
+                            setDraggedItem(item);
+                          }}
+                          onDragOver={(event) => {
+                            if (!draggedItem) return;
+                            event.preventDefault();
+                            event.dataTransfer.dropEffect = "move";
+                            if (dropItem !== item) setDropItem(item);
+                          }}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            if (draggedItem) moveMenuItem(draggedItem, index);
+                            setDraggedItem(null);
+                            setDropItem(null);
+                          }}
+                          onDragEnd={() => {
+                            setDraggedItem(null);
+                            setDropItem(null);
+                          }}
+                        >
+                          <span className="reorder-grip" title={t.menuBarDrag} aria-hidden="true">
+                            <SettingIcon name="grip" />
+                          </span>
+                          <span className="row-icon"><SettingIcon name={MENU_ITEM_ICONS[item]} /></span>
+                          <div className="row-text">
+                            <span className="row-label">{label}</span>
+                          </div>
+                          <div className="reorder-buttons">
+                            <button
+                              type="button"
+                              className="reorder-button"
+                              aria-label={`${t.menuBarMoveUp}: ${label}`}
+                              disabled={index === 0}
+                              onClick={() => moveMenuItem(item, index - 1)}
+                            >
+                              <SettingIcon name="up" size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              className="reorder-button"
+                              aria-label={`${t.menuBarMoveDown}: ${label}`}
+                              disabled={index === menuOrder.length - 1}
+                              onClick={() => moveMenuItem(item, index + 1)}
+                            >
+                              <SettingIcon name="down" size={14} />
+                            </button>
+                          </div>
+                          <div className="row-control">
+                            <Toggle
+                              label={label}
+                              checked={menuItemShown(item)}
+                              onChange={(shown) => showMenuItem(item, shown)}
+                            />
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
                   <Row icon={<SettingIcon name="battery" />} label={t.menuBarBatteryPercent} hint={t.menuBarBatteryPercentHint}>
                     <Toggle
                       label={t.menuBarBatteryPercent}
@@ -529,25 +697,11 @@ export function App() {
                       onChange={(menuBarBatteryPercent) => update({ menuBarBatteryPercent })}
                     />
                   </Row>
-                  <Row icon={<SettingIcon name="search" />} label={t.menuBarSearch} hint={t.menuBarSearchHint}>
+                  <Row icon={<SettingIcon name="tray" />} label={t.menuBarTrayPopup} hint={t.menuBarTrayPopupHint}>
                     <Toggle
-                      label={t.menuBarSearch}
-                      checked={config.menuBarSearch ?? windowsPreferences?.menuBarSearch}
-                      onChange={(menuBarSearch) => update({ menuBarSearch })}
-                    />
-                  </Row>
-                  <Row icon={<SettingIcon name="windows" />} label={t.menuBarTaskView} hint={t.menuBarTaskViewHint}>
-                    <Toggle
-                      label={t.menuBarTaskView}
-                      checked={config.menuBarTaskView ?? windowsPreferences?.menuBarTaskView}
-                      onChange={(menuBarTaskView) => update({ menuBarTaskView })}
-                    />
-                  </Row>
-                  <Row icon={<SettingIcon name="widgets" />} label={t.menuBarWidgets} hint={t.menuBarWidgetsHint}>
-                    <Toggle
-                      label={t.menuBarWidgets}
-                      checked={config.menuBarWidgets ?? windowsPreferences?.menuBarWidgets}
-                      onChange={(menuBarWidgets) => update({ menuBarWidgets })}
+                      label={t.menuBarTrayPopup}
+                      checked={config.menuBarTrayPopup}
+                      onChange={(menuBarTrayPopup) => update({ menuBarTrayPopup })}
                     />
                   </Row>
                 </Card>
@@ -704,7 +858,53 @@ function updateHint(t: Texts, state: UpdateState, version: string): string {
   }
 }
 
-const SECTIONS: readonly SectionId[] = ["dock", "windows", "menubar", "notifications", "system"];
+type MenuItemIcon = Parameters<typeof SettingIcon>[0]["name"];
+
+const MENU_ITEM_ICONS: Record<MenuBarItem, MenuItemIcon> = {
+  "control-center": "control",
+  focus: "focus",
+  wifi: "wifi",
+  bluetooth: "bluetooth",
+  sound: "sound",
+  battery: "battery",
+  "input-language": "keyboard",
+  "hidden-icons": "tray",
+  search: "search",
+  "task-view": "windows",
+  widgets: "widgets",
+  privacy: "microphone",
+};
+
+function menuItemLabel(t: Texts, item: MenuBarItem): string {
+  switch (item) {
+    case "control-center":
+      return t.itemControlCenter;
+    case "focus":
+      return t.itemFocus;
+    case "wifi":
+      return t.itemWifi;
+    case "bluetooth":
+      return t.menuBarBluetooth;
+    case "sound":
+      return t.itemSound;
+    case "battery":
+      return t.itemBattery;
+    case "input-language":
+      return t.itemInputLanguage;
+    case "hidden-icons":
+      return t.itemHiddenIcons;
+    case "search":
+      return t.menuBarSearch;
+    case "task-view":
+      return t.menuBarTaskView;
+    case "widgets":
+      return t.menuBarWidgets;
+    case "privacy":
+      return t.itemPrivacy;
+  }
+}
+
+const SECTIONS: readonly SectionId[] =["dock", "windows", "menubar", "notifications", "system"];
 
 function sectionTitle(t: Texts, section: SectionId): string {
   switch (section) {

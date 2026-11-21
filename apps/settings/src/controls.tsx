@@ -88,11 +88,12 @@ interface SliderProps {
   max: number;
   label: string;
   unit?: string;
+  step?: number;
   disabled?: boolean;
   onChange: (value: number) => void;
 }
 
-export function Slider({ value, min, max, label, unit = "px", disabled, onChange }: SliderProps) {
+export function Slider({ value, min, max, label, unit = "px", step, disabled, onChange }: SliderProps) {
   const filled = ((value - min) / (max - min)) * 100;
   return (
     <div className="slider">
@@ -101,6 +102,7 @@ export function Slider({ value, min, max, label, unit = "px", disabled, onChange
         aria-label={label}
         min={min}
         max={max}
+        step={step}
         value={value}
         aria-valuetext={`${value} ${unit}`}
         disabled={disabled}
@@ -166,5 +168,20 @@ export function Segmented<T extends string>({ value, label, options, onChange }:
         </label>
       ))}
     </div>
+  );
+}
+
+interface SelectProps<T extends string> {
+  value: T;
+  label: string;
+  options: readonly { value: T; label: string }[];
+  onChange: (value: T) => void;
+}
+
+export function Select<T extends string>({ value, label, options, onChange }: SelectProps<T>) {
+  return (
+    <select className="select" aria-label={label} value={value} onChange={(event) => onChange(event.target.value as T)}>
+      {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+    </select>
   );
 }
