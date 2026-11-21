@@ -13,6 +13,7 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     env,
+    rc::Rc,
     sync::{
         OnceLock,
         atomic::{AtomicIsize, AtomicU8, Ordering},
@@ -48,6 +49,7 @@ use muelle_shell::{
     },
     taskbar,
     tracker::{self, TrackedWindow, WindowTracker, normalize_id},
+    tray::{TrayButton, TrayHost, TrayKey},
 };
 use windows::{
     UI::Composition::{CompositionSurfaceBrush, Desktop::DesktopWindowTarget},
@@ -103,7 +105,7 @@ use crate::{
     group_view::{DragGhost, GroupItem, GroupView, Placement, Released},
     mascot,
     menu::{self, MenuItem},
-    menubar::{MenuBar, MenuBarWidgets},
+    menubar::{Deferred, Dropdown, MenuBar, MenuBarWidgets},
     multi_window_view::{self, MultiWindowAction, MultiWindowView},
     notification_banner,
     scene::{Drag, Frame, Scene, SceneInput, SlotContent, Theme},
@@ -433,7 +435,9 @@ pub(crate) enum Outside {
         placement: menu::Placement,
         dark: bool,
     },
-    InputMenu {
+    /// A Mac-style dropdown hanging from a menu-bar item.
+    BarMenu {
+        kind: Dropdown,
         gfx: Gfx,
         anchor: POINT,
         dark: bool,
@@ -444,6 +448,13 @@ pub(crate) enum Outside {
     /// Unpin from the Windows taskbar too (see `pins::unpin_from_taskbar`).
     UnpinFromTaskbar(String),
     ShowDesktop,
+    /// Deliver a click to the app behind a tray icon.
+    TrayClick {
+        tray: Rc<TrayHost>,
+        key: TrayKey,
+        button: TrayButton,
+        at: POINT,
+    },
 }
 
 pub(crate) struct MenuRequest {
@@ -821,6 +832,8 @@ pub(crate) struct App {
     /// What the windows minimized with the genie looked like, oldest first.
     snapshots: Vec<(isize, Snapshot)>,
     menubar: Option<MenuBar>,
+    /// The tray relay behind the menu bar's hidden-icons popup.
+    tray: Option<Rc<TrayHost>>,
     edge_watch: Option<EdgeWatch>,
     /// Screen point identifying the last display chosen by a bottom-edge dwell.
     dock_display: Option<POINT>,
@@ -4108,7 +4121,12 @@ impl App {
             serde_json::Value::Bool(self.config.notification_dnd),
         );
         let _ = muelle_config::update_preferences(&muelle_config::default_path(), patch);
-        menu_bar_refresh();
+        // Callers hold the app, so the bar is updated directly.
+        if let Some(bar) = &mut self.menubar
+            && let Err(error) = bar.set_dnd(&self.gfx, self.config.notification_dnd)
+        {
+            muelle_shell::log::line(&format!("barra superior: {error:#}"));
+        }
     }
 
     fn sync_attention_visuals(&mut self) -> Result<()> {
@@ -4344,21 +4362,53 @@ impl App {
             bluetooth: self.config.menu_bar_bluetooth,
             battery_percent: self.config.menu_bar_battery_percent,
             island_style: self.config.menu_bar_island_style,
+            order: muelle_config::effective_menu_bar_order(&self.config),
+            hidden: self.config.menu_bar_hidden.clone(),
+            clock: muelle_shell::system::ClockFormat {
+                date: self.config.clock_show_date,
+                weekday: self.config.clock_show_weekday,
+                seconds: self.config.clock_seconds,
+                h24: self.config.clock_24h,
+            },
+            glass_strength: self.config.menu_bar_glass_strength.min(100),
         };
         if !self.config.menu_bar {
             self.menubar = None;
+            self.tray = None;
         } else if self.menubar.is_none() {
+            // The relay notifies the bar's window, so a new bar needs a new one.
+            self.tray = None;
             self.menubar = MenuBar::create(
                 &self.gfx,
                 self.config.ai_usage,
                 self.config.menu_bar_music,
                 self.config.menu_bar_auto_hide,
-                widgets,
+                widgets.clone(),
             )
             .inspect_err(|error| eprintln!("muelle: barra superior: {error:#}"))
             .ok();
         }
+        muelle_shell::system::set_force_menu_glass(self.config.menu_bar_glass);
         if let Some(bar) = &mut self.menubar {
+            if self.config.menu_bar_tray_popup {
+                if self.tray.is_none() {
+                    self.tray =
+                        TrayHost::start(bar.window(), crate::menubar::TRAY_CHANGED).map(Rc::new);
+                    // Learn the icons now, so the first open of the popup is
+                    // already full instead of filling in as apps answer.
+                    if let Some(tray) = &self.tray {
+                        tray.refresh();
+                    }
+                    if self.tray.is_none() {
+                        muelle_shell::log::line(
+                            "bandeja: no se pudo iniciar el relé; la flecha abre el panel de Windows",
+                        );
+                    }
+                }
+            } else {
+                self.tray = None;
+            }
+            bar.set_tray(self.tray.clone());
             let applied = bar
                 .set_auto_hide(self.config.menu_bar_auto_hide)
                 .and_then(|()| bar.set_usage_enabled(&self.gfx, self.config.ai_usage))
@@ -4371,7 +4421,10 @@ impl App {
                 })
                 .and_then(|()| {
                     bar.set_accessories_enabled(&self.gfx, self.config.accessory_battery)
-                });
+                })
+                .and_then(|()| bar.set_dnd(&self.gfx, self.config.notification_dnd))
+                // Picks up the glass setting.
+                .and_then(|()| bar.refresh(&self.gfx));
             if let Err(error) = applied {
                 eprintln!("muelle: barra superior: {error:#}");
             }
@@ -4802,17 +4855,73 @@ fn with_app_value<T: Default>(what: &str, action: impl FnOnce(&mut App) -> Resul
 pub fn menu_bar_clicked(x: f32, y: f32) {
     with_app_then("barra superior", |app| {
         if let Some(bar) = &mut app.menubar {
-            if let Some(anchor) = bar.input_switcher_anchor(x, y) {
+            if let Some((kind, anchor)) = bar.dropdown_at(x, y) {
                 bar.dismiss_island(&app.gfx)?;
-                return Ok(Some(Outside::InputMenu {
+                return Ok(Some(Outside::BarMenu {
+                    kind,
                     gfx: app.gfx.clone(),
                     anchor,
                     dark: !uses_light_theme(),
                 }));
             }
             bar.click(&app.gfx, x, y)?;
+            match bar.take_deferred() {
+                Some(Deferred::TrayClick(key, button, at)) => {
+                    return Ok(tray_click(app, key, button, at));
+                }
+                Some(Deferred::ToggleDnd) => app.toggle_dnd(),
+                Some(Deferred::OpenNetwork(anchor)) => {
+                    return Ok(Some(Outside::BarMenu {
+                        kind: Dropdown::Network,
+                        gfx: app.gfx.clone(),
+                        anchor,
+                        dark: !uses_light_theme(),
+                    }));
+                }
+                None => {}
+            }
         }
         Ok(None)
+    });
+}
+
+/// The click on a tray icon, to deliver once the app is no longer borrowed.
+fn tray_click(app: &App, key: TrayKey, button: TrayButton, at: POINT) -> Option<Outside> {
+    app.tray.as_ref().map(|tray| Outside::TrayClick {
+        tray: Rc::clone(tray),
+        key,
+        button,
+        at,
+    })
+}
+
+/// A right click on the menu bar (tiles of the hidden-icons popup).
+pub fn menu_bar_right_clicked(x: f32, y: f32) {
+    with_app_then("barra superior", |app| {
+        let Some(bar) = &mut app.menubar else {
+            return Ok(None);
+        };
+        bar.right_click(&app.gfx, x, y)?;
+        Ok(match bar.take_deferred() {
+            Some(Deferred::TrayClick(key, button, at)) => tray_click(app, key, button, at),
+            _ => None,
+        })
+    });
+}
+
+/// The tray relay saw a change in the icons.
+pub fn menu_bar_tray_changed() {
+    with_app("bandeja", |app| match &mut app.menubar {
+        Some(bar) => bar.tray_changed(&app.gfx),
+        None => Ok(()),
+    });
+}
+
+/// A worker thread read the radios or the brightness for the popups.
+pub fn menu_bar_panel_data_changed() {
+    with_app("centro de control", |app| match &mut app.menubar {
+        Some(bar) => bar.panel_data_changed(&app.gfx),
+        None => Ok(()),
     });
 }
 
@@ -5058,6 +5167,26 @@ pub fn menu_bar_registry_changed() {
     });
 }
 
+/// The clock timer fired: redraws the clock alone when that is all that
+/// changed.
+pub fn menu_bar_clock_tick() {
+    with_app("barra superior", |app| {
+        if let Some(bar) = &mut app.menubar {
+            bar.clock_tick(&app.gfx)?;
+        }
+        app.take_bar_cue();
+        Ok(())
+    });
+}
+
+/// The settling timer of a burst of tray changes fired.
+pub fn menu_bar_tray_flush() {
+    with_app("bandeja", |app| match &mut app.menubar {
+        Some(bar) => bar.tray_flush(&app.gfx),
+        None => Ok(()),
+    });
+}
+
 pub fn menu_bar_tick() {
     with_app("barra superior", |app| {
         if let Some(bar) = &mut app.menubar {
@@ -5132,6 +5261,230 @@ fn main_window() -> HWND {
     HWND(MAIN_WINDOW.load(Ordering::Relaxed) as *mut _)
 }
 
+/// Shows a menu-bar dropdown and returns the chosen command. The app state is
+/// not borrowed while the menu runs.
+fn show_bar_menu(gfx: &Gfx, anchor: POINT, dark: bool, items: &[MenuItem]) -> Option<u32> {
+    let owner = main_window();
+    with_app("abrir menú de la barra", |app| {
+        app.menu_open = true;
+        Ok(())
+    });
+    let chosen = menu::show_below(gfx, owner, items, anchor, dark);
+    with_app("cerrar menú de la barra", App::after_menu);
+    chosen
+}
+
+/// A greyed-out line of text.
+fn info_item(label: impl Into<String>) -> MenuItem {
+    MenuItem::Action {
+        command: 0,
+        label: label.into().replace('&', "&&"),
+        checked: false,
+        enabled: false,
+    }
+}
+
+/// Opens a Settings page, logging when Windows refuses.
+fn open_settings_page(page: &str) {
+    if let Err(error) = launcher::open(page) {
+        muelle_shell::log::line(&format!("abrir {page}: {error}"));
+    }
+}
+
+fn input_menu(gfx: &Gfx, anchor: POINT, dark: bool, submit: &dyn Fn(ShellAction)) {
+    use muelle_shell::keyboard;
+    let context = keyboard::Context::current();
+    let layouts = keyboard::layouts(strings::text().keyboard);
+    const SETTINGS: u32 = u32::MAX;
+    let mut items: Vec<MenuItem> = layouts
+        .iter()
+        .enumerate()
+        .map(|(index, layout)| MenuItem::Action {
+            command: index as u32 + 1,
+            label: layout.name.replace('&', "&&"),
+            checked: context.is_some_and(|context| context.layout == layout.handle),
+            enabled: context.is_some(),
+        })
+        .collect();
+    if !items.is_empty() {
+        items.push(MenuItem::Separator);
+    }
+    items.push(MenuItem::action(
+        SETTINGS,
+        strings::text().keyboard_settings,
+    ));
+    let chosen = show_bar_menu(gfx, anchor, dark, &items);
+    if chosen == Some(SETTINGS) {
+        submit(ShellAction::Open {
+            id: "ms-settings:regionlanguage".into(),
+        });
+    } else if let (Some(context), Some(layout)) = (
+        context,
+        chosen
+            .and_then(|command| command.checked_sub(1))
+            .and_then(|index| layouts.get(index as usize)),
+    ) && let Err(error) = context.request(layout.handle)
+    {
+        muelle_shell::log::line(&format!("cambiar teclado: {error}"));
+        shell_work::notify_not_started();
+    }
+}
+
+fn network_menu(gfx: &Gfx, anchor: POINT, dark: bool) {
+    const TOGGLE: u32 = 1;
+    const SETTINGS: u32 = 2;
+    const NETWORK: u32 = 100;
+    let text = strings::text();
+    // Windows lists the radios asynchronously; do not hang the bar on it.
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let _ = thread::Builder::new()
+        .name("muelle-wifi-radio".into())
+        .spawn(move || {
+            let _ = sender.send(muelle_shell::wifi::radio_on());
+        });
+    // The scan, the network list and the wired connections are gathered off
+    // the UI thread too, in parallel with the radio.
+    let (list_sender, list_receiver) = std::sync::mpsc::channel();
+    let _ = thread::Builder::new()
+        .name("muelle-network-list".into())
+        .spawn(move || {
+            muelle_shell::wifi::scan();
+            let networks = muelle_shell::wifi::networks();
+            let wired = status::wired_connections();
+            let _ = list_sender.send((networks, wired));
+        });
+    let radio = receiver
+        .recv_timeout(std::time::Duration::from_millis(400))
+        .ok()
+        .flatten();
+    let (mut networks, wired) = list_receiver
+        .recv_timeout(std::time::Duration::from_millis(1500))
+        .unwrap_or_default();
+    if radio == Some(false) {
+        networks.clear();
+    }
+    const ETHERNET: u32 = 3;
+    let mut items = Vec::new();
+    // As macOS lists Ethernet above Wi-Fi when a cable is plugged in.
+    if !wired.is_empty() {
+        items.push(info_item(text.ethernet));
+        for connection in &wired {
+            let state = if connection.has_internet {
+                text.connected
+            } else {
+                text.no_internet
+            };
+            let name = if connection.name.is_empty() {
+                text.ethernet
+            } else {
+                connection.name.as_str()
+            };
+            items.push(MenuItem::Action {
+                command: ETHERNET,
+                label: format!("{}  —  {state}", name.replace('&', "&&")),
+                checked: true,
+                enabled: true,
+            });
+        }
+        items.push(MenuItem::Separator);
+    }
+    if let Some(on) = radio {
+        items.push(info_item(text.wifi));
+        items.push(MenuItem::Action {
+            command: TOGGLE,
+            label: text.wifi.replace('&', "&&"),
+            checked: on,
+            enabled: true,
+        });
+        items.push(MenuItem::Separator);
+    }
+    for (index, network) in networks.iter().enumerate() {
+        let level = match network.signal_quality {
+            0..25 => 1,
+            25..50 => 2,
+            50..75 => 3,
+            _ => 4,
+        };
+        let bars: String = "▂▄▆█".chars().take(level).collect();
+        let lock = if network.secured { " 🔒" } else { "" };
+        items.push(MenuItem::Action {
+            command: NETWORK + index as u32,
+            label: format!("{}  {bars}{lock}", network.ssid.replace('&', "&&")),
+            checked: network.connected,
+            enabled: true,
+        });
+    }
+    if networks.is_empty() && radio.is_none() && wired.is_empty() {
+        items.push(info_item(text.not_connected));
+    }
+    if !items.is_empty() && !matches!(items.last(), Some(MenuItem::Separator)) {
+        items.push(MenuItem::Separator);
+    }
+    items.push(MenuItem::action(SETTINGS, text.network_settings));
+    match show_bar_menu(gfx, anchor, dark, &items) {
+        Some(TOGGLE) => {
+            let on = radio.unwrap_or(false);
+            let _ = thread::Builder::new()
+                .name("muelle-wifi-toggle".into())
+                .spawn(move || {
+                    if let Err(error) = muelle_shell::wifi::set_radio(!on) {
+                        muelle_shell::log::line(&format!("cambiar Wi-Fi: {error}"));
+                    }
+                });
+        }
+        Some(SETTINGS) => open_settings_page("ms-settings:network"),
+        Some(ETHERNET) => open_settings_page("ms-settings:network-ethernet"),
+        Some(command) if command >= NETWORK => {
+            if let Some(network) = networks.get((command - NETWORK) as usize) {
+                if network.connected {
+                    return;
+                }
+                let joined = network.has_profile
+                    && muelle_shell::wifi::connect(network)
+                        .inspect_err(|error| {
+                            muelle_shell::log::line(&format!("conectar a Wi-Fi: {error}"));
+                        })
+                        .is_ok();
+                if !joined {
+                    open_settings_page("ms-settings:network-wifi");
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn battery_menu(gfx: &Gfx, anchor: POINT, dark: bool) {
+    const SAVER: u32 = 1;
+    const SETTINGS: u32 = 2;
+    let text = strings::text();
+    let mut items = Vec::new();
+    if let Some(battery) = muelle_shell::system::battery() {
+        items.push(info_item(format!("{}: {}%", text.battery, battery.percent)));
+        items.push(info_item(if battery.charging {
+            text.charging
+        } else {
+            text.on_battery
+        }));
+        items.push(MenuItem::Separator);
+    }
+    items.push(MenuItem::Action {
+        command: SAVER,
+        label: text.energy_saver.replace('&', "&&"),
+        checked: muelle_shell::system::energy_saver_on(),
+        enabled: true,
+    });
+    items.push(MenuItem::Separator);
+    items.push(MenuItem::action(SETTINGS, text.battery_settings));
+    // Windows has no public API to switch energy saver, so both open its page.
+    if matches!(
+        show_bar_menu(gfx, anchor, dark, &items),
+        Some(SAVER | SETTINGS)
+    ) {
+        open_settings_page("ms-settings:batterysaver");
+    }
+}
+
 fn run_outside(outside: Outside) {
     let submit = |action| {
         let result = shell_work::dispatch(action);
@@ -5161,6 +5514,12 @@ fn run_outside(outside: Outside) {
         Outside::QuitDock => request_quit(),
         Outside::OpenAsAdmin(id) => submit(ShellAction::OpenAsAdmin { id }),
         Outside::ShowDesktop => launcher::show_desktop(),
+        Outside::TrayClick {
+            tray,
+            key,
+            button,
+            at,
+        } => tray.click(&key, button, (at.x, at.y)),
         Outside::UnpinFromTaskbar(id) => submit(ShellAction::Unpin { id }),
         Outside::OpenSettings => {
             // The settings app is installed next to the dock.
@@ -5174,48 +5533,16 @@ fn run_outside(outside: Outside) {
                 _ => eprintln!("muelle: no se encontró muelle-settings.exe junto al dock"),
             }
         }
-        Outside::InputMenu { gfx, anchor, dark } => {
-            use muelle_shell::keyboard;
-            let context = keyboard::Context::current();
-            let layouts = keyboard::layouts(strings::text().keyboard);
-            const SETTINGS: u32 = u32::MAX;
-            let mut items: Vec<MenuItem> = layouts
-                .iter()
-                .enumerate()
-                .map(|(index, layout)| MenuItem::Action {
-                    command: index as u32 + 1,
-                    label: layout.name.replace('&', "&&"),
-                    checked: context.is_some_and(|context| context.layout == layout.handle),
-                    enabled: context.is_some(),
-                })
-                .collect();
-            if !items.is_empty() {
-                items.push(MenuItem::Separator);
-            }
-            items.push(MenuItem::action(
-                SETTINGS,
-                strings::text().keyboard_settings,
-            ));
-            let owner = main_window();
-            with_app("abrir selector de teclado", |app| {
-                app.menu_open = true;
-                Ok(())
-            });
-            let chosen = menu::show_below(&gfx, owner, &items, anchor, dark);
-            with_app("cerrar selector de teclado", App::after_menu);
-            if chosen == Some(SETTINGS) {
-                submit(ShellAction::Open {
-                    id: "ms-settings:regionlanguage".into(),
-                });
-            } else if let (Some(context), Some(layout)) = (
-                context,
-                chosen
-                    .and_then(|command| command.checked_sub(1))
-                    .and_then(|index| layouts.get(index as usize)),
-            ) && let Err(error) = context.request(layout.handle)
-            {
-                muelle_shell::log::line(&format!("cambiar teclado: {error}"));
-                shell_work::notify_not_started();
+        Outside::BarMenu {
+            kind,
+            gfx,
+            anchor,
+            dark,
+        } => {
+            match kind {
+                Dropdown::Input => input_menu(&gfx, anchor, dark, &submit),
+                Dropdown::Network => network_menu(&gfx, anchor, dark),
+                Dropdown::Battery => battery_menu(&gfx, anchor, dark),
             }
             menu_bar_refresh();
         }
@@ -5457,6 +5784,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             });
         }
         _ if CONFIG_CHANGED.get() == Some(&msg) => with_app("ajustes", App::reload_config),
+        // The tray relay's own broadcast (asking apps to re-add their tray
+        // icons) is not Explorer restarting; redoing the taskbar for it
+        // makes the bar glitch.
+        _ if TASKBAR_CREATED.get() == Some(&msg)
+            && muelle_shell::tray::sent_taskbar_created_recently() => {}
         _ if TASKBAR_CREATED.get() == Some(&msg) => {
             with_app("Explorer reiniciado", |app| {
                 app.taskbar_attempts = 0;
@@ -5688,6 +6020,7 @@ pub fn run() -> Result<()> {
             flights: Vec::new(),
             snapshots: Vec::new(),
             menubar: None,
+            tray: None,
             edge_watch: None,
             dock_display: None,
             names: HashMap::new(),

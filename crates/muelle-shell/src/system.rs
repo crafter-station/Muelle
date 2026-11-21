@@ -45,6 +45,27 @@ pub fn transparency_enabled() -> bool {
     !energy_saver_on() && personalize(w!("EnableTransparency")) != Some(0)
 }
 
+static FORCE_MENU_GLASS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Sets whether the menu bar and its dropdowns stay frosted even when Windows
+/// transparency effects are off.
+pub fn set_force_menu_glass(on: bool) {
+    FORCE_MENU_GLASS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the user asked for glass regardless of the Windows setting.
+#[must_use]
+pub fn force_menu_glass() -> bool {
+    FORCE_MENU_GLASS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether the menu bar and its dropdowns are drawn as glass: forced by the
+/// user (unless energy saver is on) or following Windows' transparency.
+#[must_use]
+pub fn menu_glass() -> bool {
+    (force_menu_glass() && !energy_saver_on()) || transparency_enabled()
+}
+
 /// `true` while energy saver (battery saver on Windows 10) is on.
 #[must_use]
 pub fn energy_saver_on() -> bool {
@@ -331,28 +352,144 @@ pub fn battery() -> Option<Battery> {
         })
 }
 
+/// What the menu bar clock shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct ClockFormat {
+    /// Day and month, e.g. "13 nov".
+    pub date: bool,
+    /// Short weekday, e.g. "vie".
+    pub weekday: bool,
+    pub seconds: bool,
+    /// `Some(true)` 24-hour, `Some(false)` 12-hour, `None` the user's locale.
+    pub h24: Option<bool>,
+}
+
+/// Date picture string for `GetDateFormatEx`; `None` when no date is shown.
+fn date_picture(format: &ClockFormat) -> Option<&'static str> {
+    match (format.weekday, format.date) {
+        (true, true) => Some("ddd d MMM"),
+        (true, false) => Some("ddd"),
+        (false, true) => Some("d MMM"),
+        (false, false) => None,
+    }
+}
+
+/// Time picture string; `None` means the locale's own format.
+fn time_picture(format: &ClockFormat) -> Option<&'static str> {
+    match (format.h24, format.seconds) {
+        (None, _) => None,
+        (Some(true), false) => Some("HH:mm"),
+        (Some(true), true) => Some("HH:mm:ss"),
+        (Some(false), false) => Some("h:mm tt"),
+        (Some(false), true) => Some("h:mm:ss tt"),
+    }
+}
+
 /// Current date and time in the regional format of the user, e.g. "vie 13 nov  19:42".
 #[must_use]
 pub fn clock_text() -> String {
-    use windows::Win32::Globalization::{GetDateFormatEx, GetTimeFormatEx, TIME_NOSECONDS};
-    let mut date = [0u16; 64];
-    let mut time = [0u16; 32];
-    // SAFETY: The buffers live for the calls, which return the length written
-    // including the terminator (0 on failure).
-    let (date_len, time_len) = unsafe {
-        (
+    clock_text_with(&ClockFormat {
+        date: true,
+        weekday: true,
+        seconds: false,
+        h24: None,
+    })
+}
+
+/// Current date and time as `format` asks, joined by two spaces.
+#[must_use]
+pub fn clock_text_with(format: &ClockFormat) -> String {
+    use windows::{
+        Win32::Globalization::{
+            GetDateFormatEx, GetTimeFormatEx, TIME_FORMAT_FLAGS, TIME_NOSECONDS,
+        },
+        core::HSTRING,
+    };
+    let text =
+        |buffer: &[u16], len: i32| String::from_utf16_lossy(&buffer[..(len - 1).max(0) as usize]);
+    let mut parts = Vec::with_capacity(2);
+    if let Some(picture) = date_picture(format) {
+        let picture = HSTRING::from(picture);
+        let mut date = [0u16; 64];
+        // SAFETY: The buffer and picture live for the call, which returns the
+        // length written including the terminator (0 on failure).
+        let len = unsafe {
             GetDateFormatEx(
                 None,
                 Default::default(),
                 None,
-                w!("ddd d MMM"),
+                PCWSTR(picture.as_ptr()),
                 Some(&mut date),
                 None,
-            ),
-            GetTimeFormatEx(None, TIME_NOSECONDS, None, None, Some(&mut time)),
+            )
+        };
+        parts.push(text(&date, len));
+    }
+    let picture = time_picture(format).map(HSTRING::from);
+    let flags = if picture.is_none() && !format.seconds {
+        TIME_NOSECONDS
+    } else {
+        TIME_FORMAT_FLAGS(0)
+    };
+    let mut time = [0u16; 32];
+    // SAFETY: As above; a null picture means the locale's time format.
+    let len = unsafe {
+        GetTimeFormatEx(
+            None,
+            flags,
+            None,
+            picture
+                .as_ref()
+                .map_or(PCWSTR::null(), |picture| PCWSTR(picture.as_ptr())),
+            Some(&mut time),
         )
     };
-    let text =
-        |buffer: &[u16], len: i32| String::from_utf16_lossy(&buffer[..(len - 1).max(0) as usize]);
-    format!("{}  {}", text(&date, date_len), text(&time, time_len))
+    parts.push(text(&time, len));
+    parts.join("  ")
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+
+    fn fmt(date: bool, weekday: bool, seconds: bool, h24: Option<bool>) -> ClockFormat {
+        ClockFormat {
+            date,
+            weekday,
+            seconds,
+            h24,
+        }
+    }
+
+    #[test]
+    fn date_pictures() {
+        assert_eq!(
+            date_picture(&fmt(true, true, false, None)),
+            Some("ddd d MMM")
+        );
+        assert_eq!(date_picture(&fmt(false, true, false, None)), Some("ddd"));
+        assert_eq!(date_picture(&fmt(true, false, false, None)), Some("d MMM"));
+        assert_eq!(date_picture(&fmt(false, false, false, None)), None);
+    }
+
+    #[test]
+    fn time_pictures() {
+        assert_eq!(time_picture(&fmt(false, false, true, None)), None);
+        assert_eq!(
+            time_picture(&fmt(false, false, false, Some(true))),
+            Some("HH:mm")
+        );
+        assert_eq!(
+            time_picture(&fmt(false, false, true, Some(true))),
+            Some("HH:mm:ss")
+        );
+        assert_eq!(
+            time_picture(&fmt(false, false, false, Some(false))),
+            Some("h:mm tt")
+        );
+        assert_eq!(
+            time_picture(&fmt(false, false, true, Some(false))),
+            Some("h:mm:ss tt")
+        );
+    }
 }

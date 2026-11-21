@@ -25,6 +25,16 @@ const PATHS = {
   updates: <><path d="M20 8a8 8 0 0 0-14-3L3 8m0-5v5h5m-4 8a8 8 0 0 0 14 3l3-3m-5 0h5v5" /></>,
   reset: <><path d="M3 10a9 9 0 1 1 1 8M3 4v6h6" /></>,
   star: <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2-5.5-2.9-5.5 2.9 1-6.2L3 9.6l6.2-.9z" />,
+  wifi: <><path d="M2 9a15 15 0 0 1 20 0M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0" /><circle cx="12" cy="19.5" r="1" fill="currentColor" /></>,
+  sound: <><path d="M4 9h3l5-4v14l-5-4H4zM16 9a4 4 0 0 1 0 6m2.5-9a8 8 0 0 1 0 12" /></>,
+  focus: <><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" /></>,
+  control: <><rect x="3" y="4" width="18" height="6" rx="3" /><rect x="3" y="14" width="18" height="6" rx="3" /><circle cx="16" cy="7" r="1.5" fill="currentColor" /><circle cx="8" cy="17" r="1.5" fill="currentColor" /></>,
+  keyboard: <><rect x="2" y="6" width="20" height="12" rx="2" /><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" /></>,
+  tray: <><path d="m6 15 6-6 6 6" /></>,
+  microphone: <><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></>,
+  grip: <><path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01" strokeWidth="2.6" /></>,
+  up: <><path d="m6 14 6-6 6 6" /></>,
+  down: <><path d="m6 10 6 6 6-6" /></>,
   external: <><path d="M14 3h7v7m0-7L10 14M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5" /></>,
 } satisfies Record<string, ReactNode>;
 

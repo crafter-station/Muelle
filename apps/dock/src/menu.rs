@@ -291,7 +291,7 @@ impl Popup {
             });
         }
 
-        let glass = muelle_shell::system::transparency_enabled();
+        let glass = muelle_shell::system::menu_glass();
         let root = c.CreateContainerVisual()?;
         root.SetSize(Vector2::new(width, height))?;
         let layers = root.Children()?;
@@ -785,9 +785,19 @@ pub(crate) fn draw_popup_background(
 }
 
 pub(crate) fn popup_tint(dark: bool, glass: bool) -> Color {
+    popup_tint_with(dark, glass, DEFAULT_GLASS_STRENGTH)
+}
+
+/// The glass strength that reproduces the original popup tints.
+pub(crate) const DEFAULT_GLASS_STRENGTH: u8 = 50;
+
+/// `popup_tint` with the glass alpha scaled by a strength of 0..=100.
+pub(crate) fn popup_tint_with(dark: bool, glass: bool, strength: u8) -> Color {
+    let delta = f32::from(strength.min(100)) - f32::from(DEFAULT_GLASS_STRENGTH);
+    let alpha = |base: f32, k: f32| (base + delta * k).round().clamp(0.0, 255.0) as u8;
     match (dark, glass) {
-        (true, true) => rgba(38, 38, 40, 175),
-        (false, true) => rgba(246, 246, 248, 215),
+        (true, true) => rgba(38, 38, 40, alpha(175.0, 1.3)),
+        (false, true) => rgba(246, 246, 248, alpha(215.0, 1.2)),
         (true, false) => rgba(44, 44, 46, 255),
         (false, false) => rgba(240, 240, 242, 255),
     }

@@ -5,6 +5,37 @@ export type NotificationPosition = "top-right" | "bottom-right";
 export type IslandStyle = "notch" | "bubble";
 export type GenieSpeed = "normal" | "fast" | "faster";
 export type DockPosition = "left" | "bottom" | "right";
+export type MenuBarItem =
+  | "control-center" | "focus" | "wifi" | "bluetooth" | "sound" | "battery"
+  | "input-language" | "hidden-icons" | "search" | "task-view" | "widgets" | "privacy";
+
+/** Left to right, as macOS lays them out. Mirrors `MenuBarItem::DEFAULT_ORDER`. */
+export const MENU_BAR_DEFAULT_ORDER: readonly MenuBarItem[] = [
+  "widgets", "task-view", "search", "hidden-icons", "input-language",
+  "bluetooth", "battery", "sound", "wifi", "focus", "control-center", "privacy",
+];
+
+/**
+ * Mirrors `effective_menu_bar_order`: the saved order without duplicates or
+ * unknown items, each missing item placed after the nearest preceding default
+ * item that is present (or first).
+ */
+export function effectiveMenuBarOrder(saved: readonly MenuBarItem[] | undefined): MenuBarItem[] {
+  const order: MenuBarItem[] = [];
+  for (const item of saved ?? []) {
+    if (MENU_BAR_DEFAULT_ORDER.includes(item) && !order.includes(item)) order.push(item);
+  }
+  MENU_BAR_DEFAULT_ORDER.forEach((item, index) => {
+    if (order.includes(item)) return;
+    let at = 0;
+    for (let previous = index - 1; previous >= 0; previous--) {
+      const found = order.indexOf(MENU_BAR_DEFAULT_ORDER[previous]);
+      if (found >= 0) { at = found + 1; break; }
+    }
+    order.splice(at, 0, item);
+  });
+  return order;
+}
 
 /** Mirrors `muelle_config::Config`. */
 export interface Config {
@@ -22,6 +53,7 @@ export interface Config {
   showPreviewCloseButton: boolean;
   menuBar: boolean;
   menuBarAutoHide: boolean;
+  menuBarGlass: boolean;
   aiUsage: boolean;
   menuBarMusic: boolean;
   menuBarIslandStyle: IslandStyle;
@@ -31,6 +63,21 @@ export interface Config {
   menuBarWidgets: boolean | null;
   menuBarBluetooth: boolean;
   menuBarBatteryPercent: boolean | null;
+  menuBarTrayPopup: boolean;
+  /** Left to right; empty means the default order. May omit items. */
+  menuBarOrder: MenuBarItem[];
+  /**
+   * Items turned off. Bluetooth, Search, Task View and Widgets keep their own
+   * fields as the source of truth and never appear here.
+   */
+  menuBarHidden: MenuBarItem[];
+  clockShowDate: boolean;
+  clockShowWeekday: boolean;
+  clockSeconds: boolean;
+  /** `null` follows Windows. */
+  clock24h: boolean | null;
+  /** 0 (clear) to 100 (frosted). */
+  menuBarGlassStrength: number;
   showIndicators: boolean;
   showRecents: boolean;
   bounceOnOpen: boolean;

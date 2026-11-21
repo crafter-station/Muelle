@@ -5,9 +5,12 @@
 //! callbacks on its own threads; they only post `message` to the bar's window,
 //! which then reads the new state on its UI thread.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    ffi::c_void,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use windows::{
     Networking::Connectivity::{
@@ -16,21 +19,26 @@ use windows::{
     Win32::{
         Foundation::{HWND, LPARAM, PROPERTYKEY, WPARAM},
         Media::Audio::{
-            AUDIO_VOLUME_NOTIFICATION_DATA, DEVICE_STATE, EDataFlow, ERole,
+            AUDIO_VOLUME_NOTIFICATION_DATA, DEVICE_STATE, DEVICE_STATE_ACTIVE, EDataFlow, ERole,
             Endpoints::{
                 IAudioEndpointVolume, IAudioEndpointVolumeCallback,
                 IAudioEndpointVolumeCallback_Impl,
             },
             IMMDeviceEnumerator, IMMNotificationClient, IMMNotificationClient_Impl,
-            MMDeviceEnumerator, eConsole, eRender,
+            MMDeviceEnumerator, eCommunications, eConsole, eMultimedia, eRender,
         },
         System::{
-            Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree},
+            Com::{
+                CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
+                CoUninitialize,
+            },
             Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW},
         },
         UI::WindowsAndMessaging::PostMessageW,
     },
-    core::{HSTRING, PCWSTR, Result, implement, w},
+    core::{
+        GUID, HRESULT, HSTRING, IUnknown, IUnknown_Vtbl, PCWSTR, Result, implement, interface, w,
+    },
 };
 
 fn notify(window: isize, message: u32) {
@@ -77,6 +85,43 @@ pub fn network() -> Network {
     } else {
         Network::Ethernet
     }
+}
+
+/// A connected wired (Ethernet) network.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WiredConnection {
+    /// The name Windows gives the network, e.g. "Network 3".
+    pub name: String,
+    /// Whether it reaches the internet, not only the local network.
+    pub has_internet: bool,
+}
+
+/// Connected wired networks; Wi-Fi and mobile connections are left out.
+#[must_use]
+pub fn wired_connections() -> Vec<WiredConnection> {
+    let Ok(profiles) = NetworkInformation::GetConnectionProfiles() else {
+        return Vec::new();
+    };
+    let mut wired = Vec::new();
+    for profile in profiles {
+        let wireless = profile.IsWlanConnectionProfile().unwrap_or(true)
+            || profile.IsWwanConnectionProfile().unwrap_or(true);
+        let level = profile
+            .GetNetworkConnectivityLevel()
+            .unwrap_or(NetworkConnectivityLevel::None);
+        if wireless || level == NetworkConnectivityLevel::None {
+            continue;
+        }
+        let name = profile
+            .ProfileName()
+            .map(|name| name.to_string_lossy())
+            .unwrap_or_default();
+        wired.push(WiredConnection {
+            name,
+            has_internet: level == NetworkConnectivityLevel::InternetAccess,
+        });
+    }
+    wired
 }
 
 /// Posts `message` to `window` whenever the network changes.
@@ -316,6 +361,173 @@ impl Drop for AudioWatch {
                 .UnregisterEndpointNotificationCallback(&self.devices);
         }
     }
+}
+
+/* ---------------------------------------------------------- Output devices */
+
+/// An active audio output (speakers, headphones...).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudioOutput {
+    /// Endpoint id, the value [`set_default_output`] takes.
+    pub id: String,
+    pub name: String,
+    /// It is the default output for the console role.
+    pub default: bool,
+}
+
+/// Reads a COM-allocated string and frees it.
+///
+/// # Safety
+/// `raw` must be null or a string allocated with CoTaskMemAlloc that is not
+/// used afterwards.
+unsafe fn take_com_string(raw: windows::core::PWSTR) -> String {
+    // SAFETY: Guaranteed by the caller.
+    unsafe {
+        let text = raw.to_string().unwrap_or_default();
+        CoTaskMemFree(Some(raw.0.cast()));
+        text
+    }
+}
+
+/// Active output devices. Needs COM initialized on this thread; empty on any
+/// failure.
+#[must_use]
+pub fn output_devices() -> Vec<AudioOutput> {
+    use windows::Win32::System::Com::{
+        STGM_READ,
+        StructuredStorage::{PropVariantClear, PropVariantToStringAlloc},
+    };
+    // PKEY_Device_FriendlyName, defined here to avoid a whole feature for it.
+    const FRIENDLY_NAME: PROPERTYKEY = PROPERTYKEY {
+        fmtid: GUID::from_u128(0xa45c254e_df1c_4efd_8020_67d146a850e0),
+        pid: 14,
+    };
+    // SAFETY: Read-only Core Audio queries on live COM objects. Every id and
+    // name string is freed once with CoTaskMemFree, and the property variant
+    // is cleared after use.
+    unsafe {
+        let Ok(enumerator): Result<IMMDeviceEnumerator> =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+        else {
+            return Vec::new();
+        };
+        let default_id = enumerator
+            .GetDefaultAudioEndpoint(eRender, eConsole)
+            .and_then(|device| device.GetId())
+            .map(|raw| take_com_string(raw))
+            .ok();
+        let Ok(devices) = enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE) else {
+            return Vec::new();
+        };
+        let count = devices.GetCount().unwrap_or(0);
+        let mut outputs = Vec::new();
+        for index in 0..count {
+            let Ok(device) = devices.Item(index) else {
+                continue;
+            };
+            let Ok(raw) = device.GetId() else {
+                continue;
+            };
+            let id = take_com_string(raw);
+            let name = device
+                .OpenPropertyStore(STGM_READ)
+                .and_then(|store| store.GetValue(&FRIENDLY_NAME))
+                .ok()
+                .and_then(|mut value| {
+                    let text = PropVariantToStringAlloc(&value)
+                        .ok()
+                        .map(|raw| take_com_string(raw));
+                    let _ = PropVariantClear(&mut value);
+                    text
+                })
+                .unwrap_or_default();
+            let default = default_id.as_deref() == Some(id.as_str());
+            outputs.push(AudioOutput { id, name, default });
+        }
+        outputs
+    }
+}
+
+/// [`output_devices`] for a worker thread: initializes COM for the call.
+#[must_use]
+pub fn output_devices_on_worker() -> Vec<AudioOutput> {
+    // SAFETY: Balanced below when it succeeded; a thread that already runs
+    // another apartment is used as it is.
+    let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
+    let outputs = output_devices();
+    if initialized {
+        // SAFETY: Balances the successful `CoInitializeEx` above.
+        unsafe { CoUninitialize() };
+    }
+    outputs
+}
+
+/// Undocumented Windows interface behind the Sound settings' "set default".
+/// Slots before `SetDefaultEndpoint` only keep the vtable offsets right.
+#[allow(non_snake_case)]
+mod policy_config {
+    use super::{ERole, HRESULT, IUnknown, IUnknown_Vtbl, PCWSTR, PROPERTYKEY, c_void, interface};
+
+    #[interface("f8679f50-850a-41cf-9c72-430f290290c8")]
+    pub unsafe trait IPolicyConfig: IUnknown {
+        fn GetMixFormat(&self, id: PCWSTR, format: *mut *mut c_void) -> HRESULT;
+        fn GetDeviceFormat(&self, id: PCWSTR, default: i32, format: *mut *mut c_void) -> HRESULT;
+        fn ResetDeviceFormat(&self, id: PCWSTR) -> HRESULT;
+        fn SetDeviceFormat(&self, id: PCWSTR, endpoint: *mut c_void, mix: *mut c_void) -> HRESULT;
+        fn GetProcessingPeriod(
+            &self,
+            id: PCWSTR,
+            default: i32,
+            default_period: *mut i64,
+            min_period: *mut i64,
+        ) -> HRESULT;
+        fn SetProcessingPeriod(&self, id: PCWSTR, period: *mut i64) -> HRESULT;
+        fn GetShareMode(&self, id: PCWSTR, mode: *mut c_void) -> HRESULT;
+        fn SetShareMode(&self, id: PCWSTR, mode: *mut c_void) -> HRESULT;
+        fn GetPropertyValue(
+            &self,
+            id: PCWSTR,
+            fx_store: i32,
+            key: *const PROPERTYKEY,
+            value: *mut c_void,
+        ) -> HRESULT;
+        fn SetPropertyValue(
+            &self,
+            id: PCWSTR,
+            fx_store: i32,
+            key: *const PROPERTYKEY,
+            value: *mut c_void,
+        ) -> HRESULT;
+        fn SetDefaultEndpoint(&self, id: PCWSTR, role: ERole) -> HRESULT;
+        fn SetEndpointVisibility(&self, id: PCWSTR, visible: i32) -> HRESULT;
+    }
+
+    /// Calls `SetDefaultEndpoint`, whose generated method is private to this
+    /// module.
+    ///
+    /// # Safety
+    /// COM must be initialized and `id` must be a live NUL-terminated string.
+    pub unsafe fn set_default(policy: &IPolicyConfig, id: PCWSTR, role: ERole) -> HRESULT {
+        // SAFETY: Upheld by the caller.
+        unsafe { policy.SetDefaultEndpoint(id, role) }
+    }
+}
+use policy_config::IPolicyConfig;
+
+/// Makes the output device `id` (from [`AudioOutput::id`]) the default for
+/// every role. The volume watcher follows through its default-change callback.
+pub fn set_default_output(id: &str) -> Result<()> {
+    const POLICY_CONFIG_CLIENT: GUID = GUID::from_u128(0x870af99c_171d_4f9e_af0d_e63df40c2bc9);
+    let id = HSTRING::from(id);
+    // SAFETY: COM is initialized on this thread. `id` outlives the calls and is
+    // a NUL-terminated wide string; the interface layout matches the vtable.
+    unsafe {
+        let policy: IPolicyConfig = CoCreateInstance(&POLICY_CONFIG_CLIENT, None, CLSCTX_ALL)?;
+        for role in [eConsole, eMultimedia, eCommunications] {
+            policy_config::set_default(&policy, PCWSTR(id.as_ptr()), role).ok()?;
+        }
+    }
+    Ok(())
 }
 
 /* ------------------------------------------------------ Taskbar buttons */

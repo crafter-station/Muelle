@@ -71,6 +71,8 @@ pub struct Config {
     pub menu_bar: bool,
     /// Keep the menu bar off screen until the pointer touches the top edge.
     pub menu_bar_auto_hide: bool,
+    /// Frosted glass menu bar even when Windows transparency effects are off.
+    pub menu_bar_glass: bool,
     /// Show supported AI providers' plan usage in the menu bar.
     pub ai_usage: bool,
     /// Show what is playing (title, controls) in the menu bar. With this and
@@ -90,6 +92,32 @@ pub struct Config {
     pub menu_bar_bluetooth: bool,
     /// Show battery percentage in the menu bar (`None` follows Windows setting).
     pub menu_bar_battery_percent: Option<bool>,
+    /// The hidden-icons arrow opens Muelle's own tray popup instead of the
+    /// Windows flyout.
+    pub menu_bar_tray_popup: bool,
+    /// Left-to-right order of the status items. Empty means
+    /// [`MenuBarItem::DEFAULT_ORDER`]; use [`effective_menu_bar_order`] to
+    /// read it, since the saved list may omit items. Unknown items in the
+    /// file are skipped on load.
+    #[serde(deserialize_with = "deserialize_menu_bar_items")]
+    pub menu_bar_order: Vec<MenuBarItem>,
+    /// Status items the user turned off. An item is shown unless it is listed
+    /// here, EXCEPT `Bluetooth` (source of truth: `menu_bar_bluetooth`) and
+    /// `Search` / `TaskView` / `Widgets` (`menu_bar_search`, `menu_bar_task_view`,
+    /// `menu_bar_widgets`, which follow Windows when `None`). Those four are
+    /// never put in this list.
+    #[serde(deserialize_with = "deserialize_menu_bar_items")]
+    pub menu_bar_hidden: Vec<MenuBarItem>,
+    /// Show the date in the menu bar clock.
+    pub clock_show_date: bool,
+    /// Show the day of the week in the menu bar clock.
+    pub clock_show_weekday: bool,
+    /// Show seconds in the menu bar clock.
+    pub clock_seconds: bool,
+    /// 24-hour clock: `Some(true)` / `Some(false)` force it, `None` follows Windows.
+    pub clock_24h: Option<bool>,
+    /// Opacity of the glass menu bar, 0 (clear) to 100 (frosted).
+    pub menu_bar_glass_strength: u8,
     /// The dot under apps that have windows open.
     pub show_indicators: bool,
     /// The section of recently used apps that are not pinned.
@@ -126,6 +154,82 @@ pub struct Config {
     pub notification_dnd: bool,
     /// List of app identifiers whose notifications are muted.
     pub muted_apps: Vec<String>,
+}
+
+/// A status item of the menu bar (the Windows buttons included).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MenuBarItem {
+    ControlCenter,
+    Focus,
+    Wifi,
+    Bluetooth,
+    Sound,
+    Battery,
+    InputLanguage,
+    HiddenIcons,
+    Search,
+    TaskView,
+    Widgets,
+    /// The microphone and camera indicators, shown only while an app uses
+    /// them. Hiding them hides the icons only; apps can still use the devices.
+    Privacy,
+}
+
+impl MenuBarItem {
+    /// Left to right, as macOS lays them out.
+    pub const DEFAULT_ORDER: [MenuBarItem; 12] = [
+        Self::Widgets,
+        Self::TaskView,
+        Self::Search,
+        Self::HiddenIcons,
+        Self::InputLanguage,
+        Self::Bluetooth,
+        Self::Battery,
+        Self::Sound,
+        Self::Wifi,
+        Self::Focus,
+        Self::ControlCenter,
+        // Next to the clock, where the indicators always were.
+        Self::Privacy,
+    ];
+}
+
+/// Reads a list of items, skipping the ones this version does not know.
+fn deserialize_menu_bar_items<'de, D>(deserializer: D) -> Result<Vec<MenuBarItem>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(values
+        .into_iter()
+        .filter_map(|value| serde_json::from_value(value).ok())
+        .collect())
+}
+
+/// The menu bar order to draw: the saved order without duplicates, with each
+/// missing item inserted right after the nearest preceding item (in
+/// [`MenuBarItem::DEFAULT_ORDER`]) that is present, or at the start.
+#[must_use]
+pub fn effective_menu_bar_order(config: &Config) -> Vec<MenuBarItem> {
+    let mut order: Vec<MenuBarItem> = Vec::with_capacity(MenuBarItem::DEFAULT_ORDER.len());
+    for item in &config.menu_bar_order {
+        if !order.contains(item) {
+            order.push(*item);
+        }
+    }
+    for (index, item) in MenuBarItem::DEFAULT_ORDER.iter().enumerate() {
+        if order.contains(item) {
+            continue;
+        }
+        let at = MenuBarItem::DEFAULT_ORDER[..index]
+            .iter()
+            .rev()
+            .find_map(|previous| order.iter().position(|saved| saved == previous))
+            .map_or(0, |position| position + 1);
+        order.insert(at, *item);
+    }
+    order
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -212,6 +316,7 @@ pub enum Language {
 
 pub const ICON_SIZE_RANGE: (u32, u32) = (32, 96);
 pub const MAX_MAGNIFIED_SIZE: u32 = 160;
+pub const MENU_BAR_GLASS_STRENGTH_MAX: u8 = 100;
 
 impl Config {
     /// Brings out-of-range values (a hand-edited file) back into range.
@@ -226,6 +331,9 @@ impl Config {
             .map(|folder| folder.trim().to_owned())
             .filter(|folder| !folder.is_empty());
         self.notification_duration = self.notification_duration.clamp(1, 30);
+        self.menu_bar_glass_strength = self
+            .menu_bar_glass_strength
+            .min(MENU_BAR_GLASS_STRENGTH_MAX);
         self
     }
 
@@ -258,6 +366,7 @@ impl Default for Config {
             show_minimized: false,
             menu_bar: true,
             menu_bar_auto_hide: false,
+            menu_bar_glass: false,
             ai_usage: true,
             menu_bar_music: true,
             menu_bar_island_style: IslandStyle::Notch,
@@ -267,6 +376,14 @@ impl Default for Config {
             menu_bar_widgets: None,
             menu_bar_bluetooth: false,
             menu_bar_battery_percent: None,
+            menu_bar_tray_popup: true,
+            menu_bar_order: Vec::new(),
+            menu_bar_hidden: Vec::new(),
+            clock_show_date: true,
+            clock_show_weekday: true,
+            clock_seconds: false,
+            clock_24h: None,
+            menu_bar_glass_strength: 50,
             show_indicators: true,
             show_recents: true,
             bounce_on_open: true,
@@ -704,5 +821,83 @@ mod tests {
         fs::write(&path, r#"{"version":1,"pinned":["a"],"auto_hide":true}"#).ok();
         let loaded = load(&path).ok().flatten();
         assert_eq!(loaded.map(|config| config.auto_hide), Some(true));
+    }
+
+    #[test]
+    fn an_empty_menu_bar_order_is_the_default_order() {
+        assert_eq!(
+            effective_menu_bar_order(&Config::default()),
+            MenuBarItem::DEFAULT_ORDER
+        );
+    }
+
+    #[test]
+    fn a_partial_menu_bar_order_gets_missing_items_beside_their_neighbors() {
+        use MenuBarItem::*;
+        let config = Config {
+            menu_bar_order: vec![Wifi, Battery, Widgets],
+            ..Config::default()
+        };
+        assert_eq!(
+            effective_menu_bar_order(&config),
+            [
+                Wifi,
+                Focus,
+                ControlCenter,
+                Privacy,
+                Battery,
+                Sound,
+                Widgets,
+                TaskView,
+                Search,
+                HiddenIcons,
+                InputLanguage,
+                Bluetooth
+            ]
+        );
+    }
+
+    #[test]
+    fn a_menu_bar_order_drops_duplicates() {
+        use MenuBarItem::*;
+        let config = Config {
+            menu_bar_order: vec![Sound, Sound, Wifi, Sound],
+            ..Config::default()
+        };
+        let order = effective_menu_bar_order(&config);
+        assert_eq!(order.len(), MenuBarItem::DEFAULT_ORDER.len());
+        assert_eq!(order.iter().filter(|item| **item == Sound).count(), 1);
+        let position = |wanted| order.iter().position(|item| *item == wanted);
+        assert!(position(Sound) < position(Wifi));
+    }
+
+    #[test]
+    fn load_should_skip_unknown_menu_bar_items() {
+        let path = scratch("unknown-items");
+        save(&path, &Config::default()).ok();
+        fs::write(
+            &path,
+            r#"{"menuBarOrder":["wifi","teleporter","sound",7],"menuBarHidden":["focus","nope"]}"#,
+        )
+        .ok();
+        let config = load(&path).ok().flatten().unwrap_or_default();
+        assert_eq!(
+            config.menu_bar_order,
+            [MenuBarItem::Wifi, MenuBarItem::Sound]
+        );
+        assert_eq!(config.menu_bar_hidden, [MenuBarItem::Focus]);
+    }
+
+    #[test]
+    fn load_should_give_older_files_the_menu_bar_clock_defaults() {
+        let path = scratch("before-clock");
+        save(&path, &Config::default()).ok();
+        fs::write(&path, r#"{"version":1}"#).ok();
+        let config = load(&path).ok().flatten().unwrap_or_default();
+        assert!(config.menu_bar_order.is_empty() && config.menu_bar_hidden.is_empty());
+        assert!(config.clock_show_date && config.clock_show_weekday);
+        assert!(!config.clock_seconds);
+        assert_eq!(config.clock_24h, None);
+        assert_eq!(config.menu_bar_glass_strength, 50);
     }
 }
