@@ -120,10 +120,17 @@ input:focus-visible {
 }
 
 .light {
+  position: relative;
   width: 12px;
   height: 12px;
   border-radius: 50%;
   border: 0.5px solid rgba(0, 0, 0, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  background-clip: padding-box;
 }
 
 .light-close {
@@ -136,6 +143,33 @@ input:focus-visible {
 
 .light-zoom {
   background: #28c840;
+}
+
+.light-close:active {
+  background: #d0433d;
+}
+
+.light-minimize:active {
+  background: #d69720;
+}
+
+.light-zoom:active {
+  background: #209e33;
+}
+
+.light-icon {
+  width: 12px;
+  height: 12px;
+  display: block;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+
+.traffic:hover .light-icon,
+.light:hover .light-icon,
+.light:focus-visible .light-icon {
+  opacity: 1;
 }
 
 .nav-item {

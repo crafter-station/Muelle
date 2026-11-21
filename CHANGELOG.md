@@ -30,6 +30,7 @@ copia la sección de la versión que se publica a la release de GitHub.
 - Fixed stale recent apps: uninstalled apps and broken shortcut targets are now automatically pruned from recent apps without disk deletion, and added "Remove from Dock" to right-click menus of unpinned recent apps (Refs #25, Refs #28).
 - Added macOS-style Control Center panel with interactive display brightness and master sound volume sliders, dark/light mode toggle, and quick system shortcuts with Acrylic blur backdrop.
 - Added Settings → Menu bar: "Show Control Center" toggle (on by default) with fallback to Windows Quick Settings when disabled.
+- Added macOS-style traffic light symbols (close ✕, minimize −, and zoom opposing diagonal expand triangles) to the Settings window controls, smoothly revealed upon hovering the buttons.
 
 ### Español
 
@@ -55,6 +56,7 @@ copia la sección de la versión que se publica a la release de GitHub.
 - Corrección de apps recientes obsoletas: las apps desinstaladas y los accesos directos rotos ahora se eliminan automáticamente de recientes sin borrar nada en disco, y se incorpora «Quitar del Dock» en el menú contextual de apps recientes no fijadas (Refs #25, Refs #28).
 - Incorporado panel de Centro de control estilo macOS con controles deslizantes interactivos para brillo de pantalla y volumen principal, conmutador de tema claro/oscuro y accesos directos del sistema con fondo desenfocado Acrylic.
 - Añadida opción en Ajustes → Barra de menús: «Mostrar Centro de control» (activada por defecto) con alternativa a los ajustes rápidos de Windows al desactivarse.
+- Incorporados símbolos estilo macOS en los botones de semáforo de la ventana de Ajustes (cerrar ✕, minimizar − y ampliar con triángulos opuestos en diagonal), mostrados con suavidad al posar el cursor.
 
 ## [0.1.18]
 

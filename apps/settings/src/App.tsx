@@ -250,19 +250,44 @@ export function App() {
             className="light light-close"
             aria-label={t.close}
             onClick={() => appWindow.close()}
-          />
+          >
+            <svg viewBox="0 0 12 12" className="light-icon" aria-hidden="true">
+              <path
+                d="M 3.5 3.5 L 8.5 8.5 M 8.5 3.5 L 3.5 8.5"
+                stroke="#4c0002"
+                strokeWidth="1.2"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
           <button
             type="button"
             className="light light-minimize"
             aria-label={t.minimize}
             onClick={() => appWindow.minimize()}
-          />
+          >
+            <svg viewBox="0 0 12 12" className="light-icon" aria-hidden="true">
+              <path
+                d="M 2.5 6 L 9.5 6"
+                stroke="#995700"
+                strokeWidth="1.3"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
           <button
             type="button"
             className="light light-zoom"
             aria-label={t.zoom}
             onClick={() => appWindow.toggleMaximize()}
-          />
+          >
+            <svg viewBox="0 0 12 12" className="light-icon" aria-hidden="true">
+              <path
+                d="M 9.5 2.5 L 9.5 6.5 L 5.5 2.5 Z M 2.5 9.5 L 2.5 5.5 L 6.5 9.5 Z"
+                fill="#006500"
+              />
+            </svg>
+          </button>
         </div>
         <nav>
           {SECTIONS.map((id) => (
