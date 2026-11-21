@@ -43,7 +43,7 @@ Smooth magnification, live window previews, and an optional Genie-style minimize
   input language, microphone/camera in use, the hidden tray icons, plus
   the Search, Task View and Widgets buttons if you have them on the Windows taskbar.
 - A curved island in the menu bar for usage limits from Claude Code, Codex,
-  OpenCode Go, Gemini CLI, and Antigravity. Gemini Pro
+  OpenCode Go, Z.ai GLM Coding Plan, Gemini CLI, and Antigravity. Gemini Pro
   and Flash quotas appear separately when available.
 - Separate Settings app with live changes, Spanish, English and French, and a
   configurable Genie-style minimize animation.

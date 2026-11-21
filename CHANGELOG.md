@@ -10,6 +10,7 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Added Z.ai GLM Coding Plan usage limits to the menu bar island. The 5-hour rolling quota and weekly plan limits appear alongside their reset times whenever OpenCode CLI is active with a configured Z.ai Coding Plan key.
 - Fixed notification controls and stray conditional text appearing in Menu Bar
   settings. Each page now starts at the top when selected. Failed preference
   writes remain retryable and keep Settings open until changes can be saved.
@@ -36,6 +37,7 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
+- Incorporado el uso del plan Z.ai GLM Coding Plan a la isla de la barra superior. El cupo móvil de 5 horas y el límite semanal aparecen junto con sus horas de reinicio cuando OpenCode CLI está en ejecución con una clave de Z.ai Coding Plan configurada.
 - Corregidas las opciones de Notificaciones y el texto de una condición que
   aparecían en Barra superior. Cada sección comienza arriba al seleccionarla.
   Los cambios que fallen al guardarse se conservan para reintentar y Ajustes

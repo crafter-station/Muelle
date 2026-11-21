@@ -114,9 +114,10 @@ impl Snapshot {
     }
 
     /// OpenCode's process also serves Zen and unrelated providers. Only real
-    /// Go quota windows justify its indicator; a running process alone does not.
+    /// Go or Z.ai quota windows justify their indicator; a running process alone does not.
     pub fn visible_providers(&self, mut active: ActiveProviders) -> ActiveProviders {
         active.0[Provider::OpenCode as usize] &= !self.get(Provider::OpenCode).windows.is_empty();
+        active.0[Provider::Zai as usize] &= !self.get(Provider::Zai).windows.is_empty();
         active
     }
 }
@@ -128,11 +129,18 @@ pub enum Provider {
     Codex,
     OpenCode,
     Gemini,
+    Zai,
 }
 
 impl Provider {
-    pub const COUNT: usize = 4;
-    pub const ALL: [Self; Self::COUNT] = [Self::Claude, Self::Codex, Self::OpenCode, Self::Gemini];
+    pub const COUNT: usize = 5;
+    pub const ALL: [Self; Self::COUNT] = [
+        Self::Claude,
+        Self::Codex,
+        Self::OpenCode,
+        Self::Gemini,
+        Self::Zai,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -140,6 +148,7 @@ impl Provider {
             Self::Codex => "Codex",
             Self::OpenCode => "OpenCode Go",
             Self::Gemini => "Gemini",
+            Self::Zai => "Z.ai GLM",
         }
     }
 }
@@ -182,14 +191,18 @@ pub fn active_providers() -> ActiveProviders {
                 .position(|&unit| unit == 0)
                 .unwrap_or(entry.szExeFile.len());
             let name = String::from_utf16_lossy(&entry.szExeFile[..name_len]);
-            if let Some(provider) = match name.to_ascii_lowercase().as_str() {
-                "claude.exe" => Some(Provider::Claude),
-                "codex.exe" => Some(Provider::Codex),
-                "opencode.exe" => Some(Provider::OpenCode),
-                "gemini.exe" | "antigravity.exe" | "agy.exe" => Some(Provider::Gemini),
-                _ => None,
-            } {
-                active.0[provider as usize] = true;
+            match name.to_ascii_lowercase().as_str() {
+                "claude.exe" => active.0[Provider::Claude as usize] = true,
+                "codex.exe" => active.0[Provider::Codex as usize] = true,
+                "opencode.exe" => {
+                    active.0[Provider::OpenCode as usize] = true;
+                    active.0[Provider::Zai as usize] = true;
+                }
+                "zai.exe" => active.0[Provider::Zai as usize] = true,
+                "gemini.exe" | "antigravity.exe" | "agy.exe" => {
+                    active.0[Provider::Gemini as usize] = true;
+                }
+                _ => {}
             }
             if active.count() == Provider::COUNT {
                 break;
@@ -212,6 +225,7 @@ pub fn logo(provider: Provider) -> Option<&'static IconImage> {
     static CODEX: std::sync::OnceLock<Option<IconImage>> = std::sync::OnceLock::new();
     static OPENCODE: std::sync::OnceLock<Option<IconImage>> = std::sync::OnceLock::new();
     static GEMINI: std::sync::OnceLock<Option<IconImage>> = std::sync::OnceLock::new();
+    static ZAI: std::sync::OnceLock<Option<IconImage>> = std::sync::OnceLock::new();
     match provider {
         Provider::Claude => CLAUDE
             .get_or_init(|| decode_logo(include_bytes!("../../../assets/usage/claude.png")))
@@ -224,6 +238,9 @@ pub fn logo(provider: Provider) -> Option<&'static IconImage> {
             .as_ref(),
         Provider::Gemini => GEMINI
             .get_or_init(|| decode_logo(include_bytes!("../../../assets/usage/gemini.png")))
+            .as_ref(),
+        Provider::Zai => ZAI
+            .get_or_init(|| decode_logo(include_bytes!("../../../assets/usage/zai.png")))
             .as_ref(),
     }
 }
@@ -391,6 +408,7 @@ fn fetch_all() -> Snapshot {
                 Provider::Codex => fetch_codex(&client),
                 Provider::OpenCode => fetch_opencode(&client),
                 Provider::Gemini => fetch_gemini(&client),
+                Provider::Zai => fetch_zai(&client),
             }
         }),
     }
@@ -654,6 +672,170 @@ fn parse_opencode(value: &Value) -> Vec<Window> {
         })
     })
     .collect()
+}
+
+fn fetch_zai(client: &Client) -> ProviderUsage {
+    let api_key = env::var("ZAI_API_KEY")
+        .ok()
+        .or_else(|| env::var("ZHIPU_API_KEY").ok());
+    let data_home = env::var_os("XDG_DATA_HOME").map(PathBuf::from);
+    let home = home();
+    zai_token(api_key.as_deref(), data_home.as_deref(), home.as_deref())
+        .as_deref()
+        .map_or_else(sign_in, |token| fetch_zai_quota(client, token))
+}
+
+fn fetch_zai_quota(client: &Client, token: &str) -> ProviderUsage {
+    for endpoint in [
+        "https://api.z.ai/api/monitor/usage/quota/limit",
+        "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
+    ] {
+        let Ok(response) = client
+            .get(endpoint)
+            .header("Authorization", token)
+            .header("Accept", "application/json")
+            .send()
+        else {
+            continue;
+        };
+        let status = response.status().as_u16();
+        if status == 401 || status == 403 {
+            return sign_in();
+        }
+        let Ok(body) = response.error_for_status().and_then(|resp| resp.text()) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&body) else {
+            continue;
+        };
+        let windows = parse_zai(&value);
+        if !windows.is_empty() {
+            return ready(windows);
+        }
+    }
+    unavailable()
+}
+
+fn zai_auth_paths(data_home: Option<&Path>, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(path) = data_home.filter(|p| !p.as_os_str().is_empty()) {
+        if path.is_absolute() {
+            paths.push(path.join("opencode/auth.json"));
+        }
+    } else if let Some(home) = home {
+        paths.push(home.join(".local/share/opencode/auth.json"));
+    }
+    if let Some(local_app_data) = env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        let p = local_app_data.join("opencode/auth.json");
+        if !paths.contains(&p) {
+            paths.push(p);
+        }
+    }
+    if let Some(app_data) = env::var_os("APPDATA").map(PathBuf::from) {
+        let p = app_data.join("opencode/auth.json");
+        if !paths.contains(&p) {
+            paths.push(p);
+        }
+    }
+    paths
+}
+
+fn zai_usable_key(key: &str) -> Option<&str> {
+    let key = key.trim();
+    (!key.is_empty()
+        && key != "opencode-oauth-dummy-key"
+        && !key
+            .bytes()
+            .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control()))
+    .then_some(key)
+}
+
+fn zai_entry<'a>(auth: &'a Value, id: &str) -> Option<&'a str> {
+    let entry = auth.get(id)?;
+    if entry
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|t| t != "api")
+    {
+        return None;
+    }
+    entry.get("key")?.as_str().and_then(zai_usable_key)
+}
+
+fn zai_key<'a>(api_key: Option<&'a str>, auth: Option<&'a Value>) -> Option<&'a str> {
+    api_key.and_then(zai_usable_key).or_else(|| {
+        let auth = auth?;
+        zai_entry(auth, "zai-coding-plan").or_else(|| zai_entry(auth, "zai"))
+    })
+}
+
+fn zai_token(
+    api_key: Option<&str>,
+    data_home: Option<&Path>,
+    home: Option<&Path>,
+) -> Option<String> {
+    if let Some(key) = zai_key(api_key, None) {
+        return Some(key.to_owned());
+    }
+    for path in zai_auth_paths(data_home, home) {
+        if let Some(auth) = read_opencode_auth(&path) {
+            if let Some(key) = zai_key(None, Some(&auth)) {
+                return Some(key.to_owned());
+            }
+        }
+    }
+    None
+}
+
+fn parse_zai(value: &Value) -> Vec<Window> {
+    if value.get("success").and_then(Value::as_bool) != Some(true) {
+        return Vec::new();
+    }
+    let code = value.get("code").and_then(Value::as_i64).unwrap_or(0);
+    if code != 200 {
+        return Vec::new();
+    }
+    let Some(limits) = value.pointer("/data/limits").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut windows = Vec::new();
+    for entry in limits {
+        let limit_type = entry.get("type").and_then(Value::as_str).unwrap_or("");
+        if limit_type != "TOKENS_LIMIT" {
+            continue;
+        }
+        let unit = entry.get("unit").and_then(Value::as_i64);
+        let number = entry.get("number").and_then(Value::as_i64);
+        let minutes = match (unit, number) {
+            (Some(3), Some(5)) => 300,
+            (Some(6), Some(1)) => 10_080,
+            _ => continue,
+        };
+        let used_percent = entry.get("percentage").and_then(percent).or_else(|| {
+            let current = entry
+                .get("currentValue")
+                .and_then(Value::as_f64)
+                .or_else(|| entry.get("usage").and_then(Value::as_f64))?;
+            let remaining = entry.get("remaining").and_then(Value::as_f64)?;
+            let total = current + remaining;
+            (total > 0.0).then(|| (current * 100.0 / total).clamp(0.0, 100.0).round() as u8)
+        });
+        let Some(used_percent) = used_percent else {
+            continue;
+        };
+        let resets_at = entry
+            .get("nextResetTime")
+            .and_then(Value::as_i64)
+            .and_then(DateTime::from_timestamp_millis);
+        windows.push(Window {
+            label: None,
+            minutes,
+            used_percent,
+            resets_at,
+        });
+    }
+    windows.sort_unstable_by_key(|window| window.minutes);
+    windows
 }
 
 fn fetch_gemini(client: &Client) -> ProviderUsage {
@@ -1352,5 +1534,189 @@ mod tests {
         assert_eq!(windows[0].used_percent, 60);
         assert_eq!(windows[1].title(), "Flash");
         assert_eq!(windows[1].used_percent, 10);
+    }
+
+    #[test]
+    fn zai_coding_plan_parses_real_sample_fixture_with_five_hour_and_weekly_windows() {
+        let fixture = json!({
+            "code": 200,
+            "msg": "Operation successful",
+            "success": true,
+            "data": {
+                "level": "max",
+                "limits": [
+                    { "type": "TOKENS_LIMIT", "unit": 3, "number": 5, "percentage": 10, "nextResetTime": 1795286560510_i64 },
+                    { "type": "TOKENS_LIMIT", "unit": 6, "number": 1, "percentage": 38, "nextResetTime": 1795744817983_i64 },
+                    { "type": "TIME_LIMIT", "unit": 5, "number": 1, "usage": 4000, "currentValue": 0, "remaining": 4000,
+                      "percentage": 0, "nextResetTime": 1797818417999_i64,
+                      "usageDetails": [ {"modelCode":"search-prime","usage":0}, {"modelCode":"web-reader","usage":0}, {"modelCode":"zread","usage":0} ] }
+                ]
+            }
+        });
+        let windows = parse_zai(&fixture);
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0].title(), "5 h");
+        assert_eq!(windows[0].used_percent, 10);
+        assert_eq!(
+            windows[0].resets_at,
+            DateTime::from_timestamp_millis(1795286560510)
+        );
+        assert_eq!(windows[1].title(), "7 d");
+        assert_eq!(windows[1].used_percent, 38);
+        assert_eq!(
+            windows[1].resets_at,
+            DateTime::from_timestamp_millis(1795744817983)
+        );
+    }
+
+    #[test]
+    fn zai_handles_missing_windows_unknown_types_and_unsuccessful_envelope() {
+        let unsucc = json!({
+            "code": 200,
+            "msg": "failed",
+            "success": false,
+            "data": { "limits": [{ "type": "TOKENS_LIMIT", "unit": 3, "number": 5, "percentage": 10, "nextResetTime": 1795286560510_i64 }] }
+        });
+        assert!(parse_zai(&unsucc).is_empty());
+
+        let err_code = json!({
+            "code": 500,
+            "msg": "error",
+            "success": true,
+            "data": { "limits": [{ "type": "TOKENS_LIMIT", "unit": 3, "number": 5, "percentage": 10, "nextResetTime": 1795286560510_i64 }] }
+        });
+        assert!(parse_zai(&err_code).is_empty());
+
+        let unknown = json!({
+            "code": 200,
+            "success": true,
+            "data": {
+                "limits": [
+                    { "type": "CREDIT_LIMIT", "unit": 3, "number": 5, "percentage": 50 },
+                    { "type": "TOKENS_LIMIT", "unit": 99, "number": 1, "percentage": 25 },
+                    { "type": "TOKENS_LIMIT", "unit": 3, "number": 99, "percentage": 75 },
+                    { "type": "UNKNOWN_LIMIT", "unit": 6, "number": 1, "percentage": 30 }
+                ]
+            }
+        });
+        assert!(parse_zai(&unknown).is_empty());
+
+        assert!(parse_zai(&json!({"code": 200, "success": true, "data": {}})).is_empty());
+        assert!(
+            parse_zai(&json!({"code": 200, "success": true, "data": {"limits": null}})).is_empty()
+        );
+
+        let single = json!({
+            "code": 200,
+            "success": true,
+            "data": {
+                "limits": [
+                    { "type": "TOKENS_LIMIT", "unit": 3, "number": 5, "percentage": 42 }
+                ]
+            }
+        });
+        let single_windows = parse_zai(&single);
+        assert_eq!(single_windows.len(), 1);
+        assert_eq!(single_windows[0].title(), "5 h");
+        assert_eq!(single_windows[0].used_percent, 42);
+        assert!(single_windows[0].resets_at.is_none());
+    }
+
+    #[test]
+    fn zai_clamps_percentage_and_computes_fallback_from_usage_details() {
+        let invalid = json!({
+            "code": 200,
+            "success": true,
+            "data": {
+                "limits": [
+                    { "type": "TOKENS_LIMIT", "unit": 3, "number": 5, "percentage": 150 },
+                    { "type": "TOKENS_LIMIT", "unit": 6, "number": 1, "percentage": -5 }
+                ]
+            }
+        });
+        assert!(parse_zai(&invalid).is_empty());
+
+        let fallback = json!({
+            "code": 200,
+            "success": true,
+            "data": {
+                "limits": [
+                    { "type": "TOKENS_LIMIT", "unit": 3, "number": 5, "currentValue": 250, "remaining": 750 }
+                ]
+            }
+        });
+        let windows = parse_zai(&fallback);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].used_percent, 25);
+    }
+
+    #[test]
+    fn zai_only_shows_measured_quotas_for_a_running_client() {
+        let mut snapshot = Snapshot::default();
+        let mut active = ActiveProviders::default();
+        active.0[Provider::Zai as usize] = true;
+        assert!(!snapshot.visible_providers(active).has(Provider::Zai));
+
+        snapshot.providers[Provider::Zai as usize] = ready(vec![Window {
+            label: None,
+            minutes: 300,
+            used_percent: 15,
+            resets_at: None,
+        }]);
+        assert!(snapshot.visible_providers(active).has(Provider::Zai));
+        assert_eq!(Provider::Zai.name(), "Z.ai GLM");
+        assert_eq!(snapshot.get(Provider::Zai).compact_text(), "15%");
+
+        active.0[Provider::Zai as usize] = false;
+        assert!(!snapshot.visible_providers(active).has(Provider::Zai));
+    }
+
+    #[test]
+    fn zai_key_extraction_and_file_parsing() -> anyhow::Result<()> {
+        let auth = json!({
+            "zai-coding-plan": { "type": "api", "key": "test-key-1" },
+            "opencode-go": { "type": "api", "key": "go-key" }
+        });
+        assert_eq!(zai_key(None, Some(&auth)), Some("test-key-1"));
+        assert_eq!(
+            zai_key(Some("env-override"), Some(&auth)),
+            Some("env-override")
+        );
+        assert_eq!(zai_key(Some("  "), Some(&auth)), Some("test-key-1"));
+
+        let legacy_auth = json!({
+            "zai": { "type": "api", "key": "test-key-2" }
+        });
+        assert_eq!(zai_key(None, Some(&legacy_auth)), Some("test-key-2"));
+
+        let dummy = json!({
+            "zai-coding-plan": { "type": "api", "key": "opencode-oauth-dummy-key" }
+        });
+        assert_eq!(zai_key(None, Some(&dummy)), None);
+
+        let root = env::temp_dir().join(format!(
+            "muelle-zai-auth-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        fs::create_dir(&root)?;
+        let result = (|| -> anyhow::Result<()> {
+            let home = root.join("home");
+            let default_path = home.join(".local/share/opencode/auth.json");
+            fs::create_dir_all(
+                default_path
+                    .parent()
+                    .ok_or_else(|| anyhow::anyhow!("missing default parent"))?,
+            )?;
+            let original = br#"{"zai-coding-plan":{"type":"api","key":"test-file-key"}}"#;
+            fs::write(&default_path, original)?;
+            assert_eq!(
+                zai_token(None, None, Some(&home)).as_deref(),
+                Some("test-file-key")
+            );
+            Ok(())
+        })();
+        fs::remove_dir_all(&root)?;
+        result
     }
 }
