@@ -22,6 +22,7 @@ export interface Config {
   showPreviewCloseButton: boolean;
   menuBar: boolean;
   menuBarAutoHide: boolean;
+  menuBarIsland: boolean;
   aiUsage: boolean;
   menuBarMusic: boolean;
   menuBarIslandStyle: IslandStyle;
@@ -31,6 +32,7 @@ export interface Config {
   menuBarWidgets: boolean | null;
   menuBarBluetooth: boolean;
   menuBarBatteryPercent: boolean | null;
+  controlCenter: boolean;
   showIndicators: boolean;
   showRecents: boolean;
   bounceOnOpen: boolean;

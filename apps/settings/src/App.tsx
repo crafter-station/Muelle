@@ -268,19 +268,44 @@ export function App() {
             className="light light-close"
             aria-label={t.close}
             onClick={() => appWindow.close()}
-          />
+          >
+            <svg viewBox="0 0 12 12" className="light-icon" aria-hidden="true">
+              <path
+                d="M 3.5 3.5 L 8.5 8.5 M 8.5 3.5 L 3.5 8.5"
+                stroke="#4c0002"
+                strokeWidth="1.2"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
           <button
             type="button"
             className="light light-minimize"
             aria-label={t.minimize}
             onClick={() => appWindow.minimize()}
-          />
+          >
+            <svg viewBox="0 0 12 12" className="light-icon" aria-hidden="true">
+              <path
+                d="M 2.5 6 L 9.5 6"
+                stroke="#995700"
+                strokeWidth="1.3"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
           <button
             type="button"
             className="light light-zoom"
             aria-label={t.zoom}
             onClick={() => appWindow.toggleMaximize()}
-          />
+          >
+            <svg viewBox="0 0 12 12" className="light-icon" aria-hidden="true">
+              <path
+                d="M 9.5 2.5 L 9.5 6.5 L 5.5 2.5 Z M 2.5 9.5 L 2.5 5.5 L 6.5 9.5 Z"
+                fill="#006500"
+              />
+            </svg>
+          </button>
         </div>
         <nav>
           {SECTIONS.map((id) => (
@@ -475,14 +500,21 @@ export function App() {
                     onChange={(menuBarAutoHide) => update({ menuBarAutoHide })}
                   />
                 </SubRow>
-                <SubRow label={t.menuBarMusic} hint={t.menuBarMusicHint} open={config.menuBar}>
+                <SubRow label={t.menuBarIsland} hint={t.menuBarIslandHint} open={config.menuBar}>
+                  <Toggle
+                    label={t.menuBarIsland}
+                    checked={config.menuBarIsland}
+                    onChange={(menuBarIsland) => update({ menuBarIsland })}
+                  />
+                </SubRow>
+                <SubRow label={t.menuBarMusic} hint={t.menuBarMusicHint} open={config.menuBar && config.menuBarIsland}>
                   <Toggle
                     label={t.menuBarMusic}
                     checked={config.menuBarMusic}
                     onChange={(menuBarMusic) => update({ menuBarMusic })}
                   />
                 </SubRow>
-                <SubRow label={t.aiUsage} hint={t.aiUsageHint} open={config.menuBar}>
+                <SubRow label={t.aiUsage} hint={t.aiUsageHint} open={config.menuBar && config.menuBarIsland}>
                   <Toggle
                     label={t.aiUsage}
                     checked={config.aiUsage}
@@ -492,7 +524,7 @@ export function App() {
                 <SubRow
                   label={t.islandStyle}
                   stacked
-                  open={config.menuBar && (config.menuBarMusic || config.aiUsage)}
+                  open={config.menuBar && config.menuBarIsland && (config.menuBarMusic || config.aiUsage)}
                 >
                   <VisualChoices<IslandStyle>
                     label={t.islandStyle}
@@ -515,6 +547,13 @@ export function App() {
               </Card>
               {config.menuBar && (
                 <Card title={t.menuBarItems}>
+                  <Row icon={<SettingIcon name="sliders" />} label={t.controlCenter} hint={t.controlCenterHint}>
+                    <Toggle
+                      label={t.controlCenter}
+                      checked={config.controlCenter}
+                      onChange={(controlCenter) => update({ controlCenter })}
+                    />
+                  </Row>
                   <Row icon={<SettingIcon name="bluetooth" />} label={t.menuBarBluetooth} hint={t.menuBarBluetoothHint}>
                     <Toggle
                       label={t.menuBarBluetooth}

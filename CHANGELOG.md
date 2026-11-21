@@ -33,6 +33,12 @@ copia la sección de la versión que se publica a la release de GitHub.
   automatically re-layout when windows close, and close the popup when all
   windows have closed.
 - New setting in Settings → Windows: "Show close button on previews" (on by default).
+- Settings → Menu bar: added "Show notch (menu bar island)" setting (on by default) to turn off the dynamic island / curved notch completely, stopping background AI usage polling and reflowing the menu bar without layout gaps (Refs #28, Refs #25).
+- Optimized Genie animation performance: reduced strip and keyframe allocations by over 60%, reduced settle delay from 120ms to 60ms, and optimized transition toggling to O(1) active set checks, preventing UI lag on window open/close and minimize (Refs #27).
+- Fixed stale recent apps: uninstalled apps and broken shortcut targets are now automatically pruned from recent apps without disk deletion, and added "Remove from Dock" to right-click menus of unpinned recent apps (Refs #25, Refs #28).
+- Added macOS-style Control Center panel with interactive display brightness and master sound volume sliders, dark/light mode toggle, and quick system shortcuts with Acrylic blur backdrop.
+- Added Settings → Menu bar: "Show Control Center" toggle (on by default) with fallback to Windows Quick Settings when disabled.
+- Added macOS-style traffic light symbols (close ✕, minimize −, and zoom opposing diagonal expand triangles) to the Settings window controls, smoothly revealed upon hovering the buttons.
 
 ### Español
 
@@ -63,6 +69,12 @@ copia la sección de la versión que se publica a la release de GitHub.
   emergente cuando no quedan más ventanas abiertas.
 - Nuevo ajuste en Ajustes → Ventanas: «Mostrar botón de cerrar en previsualizaciones»
   (activado por defecto).
+- Ajustes → Barra superior: incorporada la opción «Mostrar notch (isla de la barra superior)» (activada por defecto) para desactivar por completo la isla dinámica / notch curvado, deteniendo los sondeos de uso de IA en segundo plano y reorganizando la barra superior sin huecos (Refs #28, Refs #25).
+- Rendimiento del efecto genio optimizado: reducción de más del 60% en asignaciones de tiras y fotogramas clave, menor tiempo de asentamiento de 120 ms a 60 ms y comprobación O(1) al alternar transiciones de ventana, evitando ralentizaciones al abrir, cerrar y minimizar ventanas (Refs #27).
+- Corrección de apps recientes obsoletas: las apps desinstaladas y los accesos directos rotos ahora se eliminan automáticamente de recientes sin borrar nada en disco, y se incorpora «Quitar del Dock» en el menú contextual de apps recientes no fijadas (Refs #25, Refs #28).
+- Incorporado panel de Centro de control estilo macOS con controles deslizantes interactivos para brillo de pantalla y volumen principal, conmutador de tema claro/oscuro y accesos directos del sistema con fondo desenfocado Acrylic.
+- Añadida opción en Ajustes → Barra de menús: «Mostrar Centro de control» (activada por defecto) con alternativa a los ajustes rápidos de Windows al desactivarse.
+- Incorporados símbolos estilo macOS en los botones de semáforo de la ventana de Ajustes (cerrar ✕, minimizar − y ampliar con triángulos opuestos en diagonal), mostrados con suavidad al posar el cursor.
 
 ## [0.1.18]
 

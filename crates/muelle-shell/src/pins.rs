@@ -321,7 +321,21 @@ pub fn app_exists(id: &str) -> bool {
     const DRIVE_FIXED: u32 = 3;
     // SAFETY: Read-only query on a drive root.
     let fixed = unsafe { GetDriveTypeW(&HSTRING::from(root)) } == DRIVE_FIXED;
-    !fixed || path.exists()
+    if !fixed || !path.exists() {
+        return !fixed;
+    }
+    if (id.ends_with(".lnk") || id.ends_with(".LNK"))
+        && let Some(target) = link_target(path)
+    {
+        let target_path = Path::new(&target);
+        if let Some(target_root) = target.get(..3).filter(|r| r.ends_with(":\\"))
+            && unsafe { GetDriveTypeW(&HSTRING::from(target_root)) } == DRIVE_FIXED
+            && !target_path.exists()
+        {
+            return false;
+        }
+    }
+    true
 }
 
 pub fn link_target(link: &Path) -> Option<String> {

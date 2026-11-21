@@ -1835,14 +1835,15 @@ impl App {
             return;
         }
         let windows = &self.windows;
-        self.calmed
-            .retain(|hwnd| windows.iter().any(|window| window.hwnd == *hwnd));
+        let mut active = std::collections::HashSet::with_capacity(windows.len());
         for window in windows {
+            active.insert(window.hwnd);
             if !self.calmed.contains(&window.hwnd) {
                 set_window_transitions(window.hwnd, false);
                 self.calmed.push(window.hwnd);
             }
         }
+        self.calmed.retain(|hwnd| active.contains(hwnd));
     }
 
     fn restore_transitions(&mut self) {
@@ -3906,17 +3907,8 @@ impl App {
         for id in &missing {
             self.roster.unpin(id);
         }
-        let gone: Vec<String> = self
-            .roster
-            .recent()
-            .iter()
-            .filter(|id| !app_exists(id))
-            .cloned()
-            .collect();
-        for id in &gone {
-            self.roster.forget_recent(id);
-        }
-        !missing.is_empty() || !gone.is_empty()
+        let recent_pruned = self.roster.prune_recent(app_exists);
+        !missing.is_empty() || recent_pruned
     }
 
     fn toggle_hiding(&mut self) -> Result<()> {
@@ -4109,6 +4101,19 @@ impl App {
         );
         let _ = muelle_config::update_preferences(&muelle_config::default_path(), patch);
         menu_bar_refresh();
+    }
+
+    pub fn toggle_control_center(&mut self, anchor_x: f32, anchor_y: f32) -> Result<()> {
+        if self.config.control_center {
+            let scale = self.dock_monitor().map_or(1.0, |m| m.scale);
+            let theme = Theme::for_system(uses_light_theme(), transparency_enabled());
+            crate::control_center::ControlCenterView::toggle(
+                &self.gfx, anchor_x, anchor_y, scale, theme,
+            )
+        } else {
+            launcher::open_quick_settings();
+            Ok(())
+        }
     }
 
     fn sync_attention_visuals(&mut self) -> Result<()> {
@@ -4344,14 +4349,15 @@ impl App {
             bluetooth: self.config.menu_bar_bluetooth,
             battery_percent: self.config.menu_bar_battery_percent,
             island_style: self.config.menu_bar_island_style,
+            island: self.config.menu_bar_island,
         };
         if !self.config.menu_bar {
             self.menubar = None;
         } else if self.menubar.is_none() {
             self.menubar = MenuBar::create(
                 &self.gfx,
-                self.config.ai_usage,
-                self.config.menu_bar_music,
+                self.config.menu_bar_island && self.config.ai_usage,
+                self.config.menu_bar_island && self.config.menu_bar_music,
                 self.config.menu_bar_auto_hide,
                 widgets,
             )
@@ -4361,8 +4367,18 @@ impl App {
         if let Some(bar) = &mut self.menubar {
             let applied = bar
                 .set_auto_hide(self.config.menu_bar_auto_hide)
-                .and_then(|()| bar.set_usage_enabled(&self.gfx, self.config.ai_usage))
-                .and_then(|()| bar.set_media_enabled(&self.gfx, self.config.menu_bar_music))
+                .and_then(|()| {
+                    bar.set_usage_enabled(
+                        &self.gfx,
+                        self.config.menu_bar_island && self.config.ai_usage,
+                    )
+                })
+                .and_then(|()| {
+                    bar.set_media_enabled(
+                        &self.gfx,
+                        self.config.menu_bar_island && self.config.menu_bar_music,
+                    )
+                })
                 .and_then(|()| bar.set_widgets(&self.gfx, widgets))
                 .and_then(|()| {
                     let covered = primary_monitor()

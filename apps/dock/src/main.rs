@@ -14,6 +14,7 @@
 mod accessories;
 mod app;
 mod assets;
+mod control_center;
 mod drop;
 mod edge_watch;
 mod flight;
