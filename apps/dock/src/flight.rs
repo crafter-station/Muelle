@@ -95,11 +95,11 @@ use windows_numerics::{Matrix3x2, Matrix4x4, Vector2};
 use crate::gfx::Gfx;
 
 /// Screen rows per strip: the edge of the funnel steps by at most a few pixels.
-const STRIP_ROWS: u32 = 3;
-const MAX_STRIPS: u32 = 400;
+const STRIP_ROWS: u32 = 6;
+const MAX_STRIPS: u32 = 160;
 /// Samples of the bend and slide curves handed to the compositor, which
 /// interpolates between them at the display's refresh rate.
-const KEYFRAMES: u32 = 30;
+const KEYFRAMES: u32 = 20;
 /// Extra source rows each strip draws below itself. Strips sit at fractional
 /// positions while they fly; overlapping the next one (same pixels) leaves no
 /// seam between their antialiased edges.
@@ -112,7 +112,7 @@ const HANDOVER_FRAMES: u32 = 2;
 const LANDING_START: f32 = 0.8;
 /// How long the last frame of a restore stays up, so the real window has
 /// certainly appeared underneath it.
-const SETTLE: Duration = Duration::from_millis(120);
+const SETTLE: Duration = Duration::from_millis(60);
 /// Abandon a stalled screen copy instead of keeping its overlay and frame loop alive.
 const CAPTURE_TIMEOUT: Duration = Duration::from_millis(750);
 const FLIGHT_TIMEOUT: Duration = Duration::from_secs(2);

@@ -201,4 +201,25 @@ mod tests {
         let strips = frame(0.3);
         assert!(strips[0].source_top == 0.0 && strips[49].source_bottom == 1.0);
     }
+
+    #[test]
+    fn bend_and_slide_are_time_bounded_and_monotonic() {
+        let mut prev_bend = 0.0;
+        let mut prev_slide = 0.0;
+        for step in 0..=100 {
+            let t = step as f32 / 100.0;
+            let bend = Genie::bend(t);
+            let slide = Genie::slide(t);
+            assert!(bend >= prev_bend - 1e-5);
+            assert!(slide >= prev_slide - 1e-5);
+            assert!((0.0..=1.0).contains(&bend));
+            assert!((0.0..=1.0).contains(&slide));
+            prev_bend = bend;
+            prev_slide = slide;
+        }
+        assert_eq!(Genie::bend(0.0), 0.0);
+        assert_eq!(Genie::bend(1.0), 1.0);
+        assert_eq!(Genie::slide(0.0), 0.0);
+        assert_eq!(Genie::slide(1.0), 1.0);
+    }
 }
