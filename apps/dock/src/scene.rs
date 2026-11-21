@@ -77,10 +77,11 @@ impl Theme {
         }
     }
 
-    /// Uses the context menu tint with the same rim and sheen as the window picker.
-    pub(crate) fn for_popup(light: bool, glass: bool) -> Self {
+    /// The context menu tint with the same rim and sheen as the window picker,
+    /// at the menu bar's glass strength (0..=100).
+    pub(crate) fn for_popup_with(light: bool, glass: bool, strength: u8) -> Self {
         Self {
-            tint: crate::menu::popup_tint(!light, glass),
+            tint: crate::menu::popup_tint_with(!light, glass, strength),
             ..Self::for_system(light, glass)
         }
     }

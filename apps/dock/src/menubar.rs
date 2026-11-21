@@ -17,18 +17,22 @@
 //! and volume changes arrive through separate notifications; nothing polls.
 
 use anyhow::Result;
-use muelle_config::{IslandStyle, Language};
+use muelle_config::{IslandStyle, Language, MenuBarItem};
 use muelle_shell::{
     accessories::{Kind as AccessoryKind, Snapshot as AccessorySnapshot},
     appbar::{AppBar, Edge},
-    launcher,
+    brightness, launcher,
+    radio::{self, RadioKind},
     status::{self, AudioWatch, Network, NetworkWatch, Privacy, TaskbarButtons, Volume},
     system::{self, Battery},
+    tray::{TrayButton, TrayHost, TrayIconInfo, TrayKey},
     watch::RegistryWatch,
 };
 use std::{
+    collections::HashMap,
+    rc::Rc,
     sync::{
-        Arc,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering},
     },
     time::{Duration, Instant},
@@ -39,8 +43,9 @@ use windows::{
         Color,
         Composition::{
             CompositionBatchTypes, CompositionBrush, CompositionRoundedRectangleGeometry,
-            CompositionScopedBatch, CompositionSurfaceBrush, Compositor, ContainerVisual,
-            Desktop::DesktopWindowTarget, ShapeVisual, SpriteVisual, VisualCollection,
+            CompositionScopedBatch, CompositionStretch, CompositionSurfaceBrush, Compositor,
+            ContainerVisual, Desktop::DesktopWindowTarget, ShapeVisual, SpriteVisual,
+            VisualCollection,
         },
     },
     Win32::{
@@ -60,7 +65,7 @@ use windows::{
             SWP_SHOWWINDOW, SetCursor, SetTimer, SetWindowPos, SetWindowsHookExW,
             UnhookWindowsHookEx, WH_MOUSE_LL, WM_APP, WM_CAPTURECHANGED, WM_LBUTTONDOWN,
             WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST,
-            WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMECHANGE, WM_TIMER,
+            WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMECHANGE, WM_TIMER,
             WM_XBUTTONDOWN, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
             WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
@@ -92,11 +97,22 @@ const MEDIA_CHANGED: u32 = WM_APP + 28;
 const VOLUME_CAPTURE_LOST: u32 = WM_APP + 31;
 const AUDIO_CHANGED: u32 = WM_APP + 32;
 const AUDIO_TICK: u32 = WM_APP + 33;
+/// A worker thread left new Control Center readings in `PANEL_INBOX`.
+const PANEL_DATA_CHANGED: u32 = WM_APP + 34;
+/// The tray relay saw an icon appear, change or go (coalesced).
+pub(crate) const TRAY_CHANGED: u32 = WM_APP + 35;
 const VOLUME_TIMER: usize = 4;
 const ACCESSORIES_CHANGED: u32 = WM_APP + 30;
 
 const CLOCK_TIMER: usize = 1;
 const POINTER_TIMER: usize = 2;
+/// Reads the tray icons once a burst of changes has settled.
+const TRAY_TIMER: usize = 5;
+const TRAY_SETTLE_MS: u32 = 100;
+/// The apps are asked to announce their icons again at most this often.
+const TRAY_REFRESH_MIN: Duration = Duration::from_secs(30);
+/// A clock showing seconds redraws the whole bar at least this often.
+const CLOCK_FULL_EVERY: Duration = Duration::from_secs(59);
 const POINTER_CHECK_MS: u32 = 100;
 const HIDE_ANIMATION_TIMER: usize = 3;
 const REVEAL_MS: u32 = 180;
@@ -139,6 +155,11 @@ static PANEL_RIGHT: AtomicI32 = AtomicI32::new(0);
 static BAR_TOP: AtomicI32 = AtomicI32::new(0);
 static BAR_BOTTOM: AtomicI32 = AtomicI32::new(0);
 static PANEL_BOTTOM: AtomicI32 = AtomicI32::new(0);
+/// The bar zone a Control Center or Sound popup hangs from.
+static ZONE_LEFT: AtomicI32 = AtomicI32::new(0);
+static ZONE_RIGHT: AtomicI32 = AtomicI32::new(0);
+/// Readings from worker threads, drained on the UI thread.
+static PANEL_INBOX: Mutex<Vec<PanelUpdate>> = Mutex::new(Vec::new());
 /// The hook exists only while the island is expanded.
 static ISLAND_HOOK_WINDOW: AtomicIsize = AtomicIsize::new(0);
 /// Segoe Fluent Icons code points.
@@ -150,23 +171,39 @@ pub(crate) mod glyph {
     pub const SEARCH: char = '\u{E721}';
     pub const TASK_VIEW: char = '\u{E7C4}';
     pub const WIDGETS: char = '\u{F246}';
-    /// The taskbar's "show hidden icons" arrow.
-    pub const HIDDEN_ICONS: char = '\u{E70E}';
+    /// ChevronDown: the arrow that drops the hidden-icons popup, as on a Mac.
+    pub const HIDDEN_ICONS: char = '\u{E70D}';
     pub const MICROPHONE: char = '\u{E720}';
     pub const CAMERA: char = '\u{E722}';
     pub const FOCUS: char = '\u{E708}';
     pub const MOUSE: char = '\u{E962}';
     pub const HEADSET: char = '\u{E95B}';
     pub const BLUETOOTH: char = '\u{E702}';
+    pub const WIFI: char = '\u{E701}';
+    pub const BRIGHTNESS: char = '\u{E706}';
+    pub const CHEVRON_RIGHT: char = '\u{E76C}';
+}
+
+/// The menu-bar items that open a Mac-style dropdown instead of a Windows flyout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dropdown {
+    Input,
+    Network,
+    Battery,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Action {
     AccessoryIndicator,
+    /// Escape hatch to the Windows quick settings flyout.
+    #[allow(dead_code)]
     QuickSettings,
+    ControlCenter,
     Notifications,
     ToggleDnd,
     Sound,
+    Network,
+    Battery,
     Search,
     TaskView,
     Widgets,
@@ -177,7 +214,7 @@ enum Action {
     Bluetooth,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MenuBarWidgets {
     pub search: Option<bool>,
     pub task_view: Option<bool>,
@@ -185,6 +222,34 @@ pub struct MenuBarWidgets {
     pub bluetooth: bool,
     pub battery_percent: Option<bool>,
     pub island_style: IslandStyle,
+    /// Left to right.
+    pub order: Vec<MenuBarItem>,
+    pub hidden: Vec<MenuBarItem>,
+    pub clock: system::ClockFormat,
+    /// 0..=100, see `glass_alpha`.
+    pub glass_strength: u8,
+}
+
+/// Bar items from the right edge inward (the order they are laid out in),
+/// for the `order` given left to right and only those `visible` accepts.
+fn bar_items(order: &[MenuBarItem], visible: impl Fn(MenuBarItem) -> bool) -> Vec<MenuBarItem> {
+    order
+        .iter()
+        .rev()
+        .copied()
+        .filter(|&item| visible(item))
+        .collect()
+}
+
+/// Alpha of the glass tint for a strength of 0..=100.
+fn glass_alpha(light: bool, strength: u8) -> u8 {
+    let s = f32::from(strength.min(100));
+    let alpha = if light {
+        40.0 + s * 1.2
+    } else {
+        50.0 + s * 1.3
+    };
+    alpha.round().clamp(0.0, 255.0) as u8
 }
 
 impl Default for MenuBarWidgets {
@@ -196,6 +261,15 @@ impl Default for MenuBarWidgets {
             bluetooth: true,
             battery_percent: None,
             island_style: IslandStyle::Notch,
+            order: MenuBarItem::DEFAULT_ORDER.to_vec(),
+            hidden: Vec::new(),
+            clock: system::ClockFormat {
+                date: true,
+                weekday: true,
+                seconds: false,
+                h24: None,
+            },
+            glass_strength: 50,
         }
     }
 }
@@ -208,6 +282,49 @@ struct Status {
     buttons: TaskbarButtons,
     privacy: Privacy,
     battery_percentage: bool,
+}
+
+/// The clock label's visual and where it sits, kept to redraw it alone.
+struct ClockSlot {
+    visual: SpriteVisual,
+    /// Right edge of the label, in window pixels.
+    right: f32,
+    /// Width and bar height as drawn.
+    width: f32,
+    bar_height: f32,
+    /// Extra clickable room around the label.
+    slop: f32,
+}
+
+/// What a tick of the clock timer redraws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClockTick {
+    /// The whole bar: status, battery, everything read on each draw.
+    Full,
+    /// Only the clock label.
+    LabelOnly,
+    /// Nothing: the bar is not on screen.
+    Skip,
+}
+
+/// Decides what a clock tick redraws. Without seconds, ticks are the minute
+/// and redraw everything. With seconds, only the minute boundary (or a bar
+/// that went `since_full` without one) does; the other ticks only change the
+/// label, and nothing while the bar is not shown.
+fn clock_tick_plan(seconds: bool, second: u16, shown: bool, since_full: Duration) -> ClockTick {
+    if !seconds || second == 0 || since_full >= CLOCK_FULL_EVERY {
+        ClockTick::Full
+    } else if shown {
+        ClockTick::LabelOnly
+    } else {
+        ClockTick::Skip
+    }
+}
+
+/// Whether a label of `new` width can replace one of `old` without moving
+/// its neighbours (a pixel of drift is not worth a new layout).
+fn label_fits_slot(old: f32, new: f32) -> bool {
+    (new - old).abs() <= 1.0
 }
 
 /// What the bar was last drawn for.
@@ -233,6 +350,171 @@ struct Look {
     panel: Option<Island>,
     usage_refreshing: bool,
     track: Option<Track>,
+    control: ControlData,
+}
+
+/// What the Control Center and Sound popups show beyond the bar's own status.
+/// Radios and brightness are read on worker threads; `None` is "not known yet"
+/// (or, for brightness, "this display has no control").
+#[derive(Clone, Default, PartialEq, Eq)]
+struct ControlData {
+    wifi: Option<bool>,
+    bluetooth: Option<bool>,
+    /// The connected Wi-Fi network.
+    ssid: Option<String>,
+    dnd: bool,
+    brightness: Option<u8>,
+    outputs: Vec<status::AudioOutput>,
+    /// The tray icons the Hidden icons popup lists.
+    tray: Vec<TrayEntry>,
+    /// The tile under the pointer; its name shows under the grid.
+    tray_hover: Option<usize>,
+}
+
+/// One tray icon as the popup shows it.
+#[derive(Clone)]
+struct TrayEntry {
+    key: TrayKey,
+    name: String,
+    width: u32,
+    height: u32,
+    /// Premultiplied BGRA, top-down.
+    bgra: Arc<Vec<u8>>,
+}
+
+impl PartialEq for TrayEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+            && self.name == other.name
+            && self.width == other.width
+            && self.height == other.height
+            && (Arc::ptr_eq(&self.bgra, &other.bgra) || self.bgra == other.bgra)
+    }
+}
+
+impl Eq for TrayEntry {}
+
+impl TrayEntry {
+    /// The label under the icon: the first line of the tooltip, else the
+    /// name of the program that owns the icon.
+    fn from_info(info: TrayIconInfo, names: &mut HashMap<u32, String>) -> Self {
+        let tip = info.tip.lines().next().unwrap_or("").trim();
+        let name = if tip.is_empty() {
+            names
+                .entry(info.pid)
+                .or_insert_with(|| {
+                    muelle_shell::tray::process_exe_name(info.pid).unwrap_or_default()
+                })
+                .clone()
+        } else {
+            tip.to_owned()
+        };
+        Self {
+            key: info.key,
+            name,
+            width: info.width,
+            height: info.height,
+            bgra: info.bgra,
+        }
+    }
+}
+
+// Hidden icons popup layout, in logical pixels.
+const TRAY_MAX_COLUMNS: usize = 4;
+const TRAY_MIN_COLUMNS: usize = 4;
+const TRAY_CELL: f32 = 36.0;
+const TRAY_PAD: f32 = 6.0;
+const TRAY_ICON_SIZE: f32 = 20.0;
+/// Room under the grid for the hovered icon's name, kept even when nothing
+/// is hovered so the popup never resizes.
+const TRAY_TIP_HEIGHT: f32 = 24.0;
+const TRAY_FOOTER_HEIGHT: f32 = 28.0;
+/// The "No icons" line, in place of the grid.
+const TRAY_EMPTY_HEIGHT: f32 = 24.0;
+/// More icons than this would not fit a short screen.
+const TRAY_MAX_ICONS: usize = 48;
+
+fn tray_rows(icons: usize) -> usize {
+    icons.min(TRAY_MAX_ICONS).div_ceil(TRAY_MAX_COLUMNS)
+}
+
+fn tray_columns(icons: usize) -> usize {
+    icons.clamp(TRAY_MIN_COLUMNS, TRAY_MAX_COLUMNS)
+}
+
+fn tray_width(icons: usize) -> f32 {
+    tray_columns(icons) as f32 * TRAY_CELL + 2.0 * TRAY_PAD
+}
+
+/// Top-left of cell `index` inside the popup.
+fn tray_cell(index: usize) -> (f32, f32) {
+    (
+        TRAY_PAD + (index % TRAY_MAX_COLUMNS) as f32 * TRAY_CELL,
+        TRAY_PAD + (index / TRAY_MAX_COLUMNS) as f32 * TRAY_CELL,
+    )
+}
+
+/// Where the grid (or the "No icons" line) ends, which is where the name
+/// strip starts.
+fn tray_grid_bottom(icons: usize) -> f32 {
+    if icons == 0 {
+        TRAY_PAD + TRAY_EMPTY_HEIGHT
+    } else {
+        TRAY_PAD + tray_rows(icons) as f32 * TRAY_CELL
+    }
+}
+
+fn tray_popup_height(icons: usize) -> f32 {
+    let strip = if icons == 0 { 0.0 } else { TRAY_TIP_HEIGHT };
+    tray_grid_bottom(icons) + strip + TRAY_FOOTER_HEIGHT
+}
+
+/// A reading a worker thread hands to the UI thread.
+enum PanelUpdate {
+    Radios {
+        wifi: Option<bool>,
+        bluetooth: Option<bool>,
+        ssid: Option<String>,
+    },
+    Brightness(Option<u8>),
+    Outputs(Vec<status::AudioOutput>),
+}
+
+// Control Center layout, in logical pixels.
+const CC_WIDTH: f32 = 320.0;
+const CC_PAD: f32 = 12.0;
+const CC_GAP: f32 = 12.0;
+const CC_MODULE_HEIGHT: f32 = 144.0;
+const CC_SLIDER_MODULE_HEIGHT: f32 = 60.0;
+const CC_SOUND_MODULE_HEIGHT: f32 = 90.0;
+const CC_MARGIN: f32 = 8.0;
+// Sound popup layout.
+const SOUND_WIDTH: f32 = 280.0;
+const SOUND_HEADER_HEIGHT: f32 = 106.0;
+const SOUND_ROW_HEIGHT: f32 = 28.0;
+const SOUND_FOOTER_HEIGHT: f32 = 48.0;
+
+fn control_center_height(brightness: bool) -> f32 {
+    let sliders = if brightness {
+        CC_SLIDER_MODULE_HEIGHT + CC_GAP
+    } else {
+        0.0
+    };
+    CC_PAD + CC_MODULE_HEIGHT + CC_GAP + sliders + CC_SOUND_MODULE_HEIGHT + CC_PAD
+}
+
+/// More output devices than this would not fit a short screen.
+const SOUND_MAX_OUTPUTS: usize = 8;
+
+fn sound_popup_height(outputs: usize) -> f32 {
+    SOUND_HEADER_HEIGHT
+        + SOUND_ROW_HEIGHT * outputs.min(SOUND_MAX_OUTPUTS) as f32
+        + SOUND_FOOTER_HEIGHT
+}
+
+/// The system accent color, or the macOS blue.
+fn accent_color() -> Color {
+    system::accent_color().map_or(rgba(10, 132, 255, 255), |[r, g, b]| rgba(r, g, b, 255))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -255,6 +537,9 @@ impl Look {
     fn panel_content_height(&self) -> f32 {
         match self.panel {
             Some(Island::Music) => 184.0,
+            Some(Island::ControlCenter) => control_center_height(self.control.brightness.is_some()),
+            Some(Island::Sound) => sound_popup_height(self.control.outputs.len()),
+            Some(Island::Tray) => tray_popup_height(self.control.tray.len()),
             Some(Island::Usage) => {
                 74.0 + Provider::ALL
                     .into_iter()
@@ -284,6 +569,34 @@ impl Look {
 enum Island {
     Music,
     Usage,
+    /// Opened from its bar zone, not from an island trigger.
+    ControlCenter,
+    Sound,
+    /// The hidden tray icons, from the arrow's zone.
+    Tray,
+}
+
+impl Island {
+    /// The bar item a zone popup hangs from.
+    fn zone_action(self) -> Option<Action> {
+        match self {
+            Self::ControlCenter => Some(Action::ControlCenter),
+            Self::Sound => Some(Action::Sound),
+            Self::Tray => Some(Action::HiddenIcons),
+            Self::Music | Self::Usage => None,
+        }
+    }
+
+    /// Whether the popup holds sliders.
+    fn has_sliders(self) -> bool {
+        !matches!(self, Self::Usage | Self::Tray)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Slider {
+    Volume,
+    Brightness,
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -302,10 +615,31 @@ impl Span {
 enum IslandAction {
     Toggle(Island),
     Media(MediaControl),
-    Volume(Span),
+    Slider(Slider, Span),
     Mute,
     Refresh,
     ScrollUsage(i8),
+    ToggleWifi,
+    ToggleBluetooth,
+    ToggleFocus,
+    OpenNetwork,
+    OpenBluetooth,
+    QuickSettings,
+    SetOutput(usize),
+    SoundSettings,
+    /// A tile of the hidden-icons popup, by index.
+    TrayIcon(usize),
+    TraySettings,
+}
+
+/// Work for the app once the bar's click handler has returned: it needs the
+/// app itself or a menu that must open outside the app borrow.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Deferred {
+    ToggleDnd,
+    OpenNetwork(POINT),
+    /// Click a tray icon's app, at the icon's screen centre.
+    TrayClick(TrayKey, TrayButton, POINT),
 }
 
 #[derive(Clone, Copy)]
@@ -337,20 +671,23 @@ struct ExitAnimation {
     completed: i64,
 }
 
-/// Only these retained visuals move during a volume gesture. Album artwork,
+/// Only these retained visuals move during a slider gesture. Album artwork,
 /// track labels and the rest of the menu bar keep their existing visual tree.
-struct VolumeControls {
+struct SliderControls {
     fill: CompositionRoundedRectangleGeometry,
     knob: ShapeVisual,
-    value: SpriteVisual,
+    /// The percentage label, when the slider has one.
+    value: Option<SpriteVisual>,
     geometry: IslandGeometry,
+    /// Logical y of the track's centre line.
+    y: f32,
     left: f32,
     width: f32,
     position_percent: Option<u8>,
     label_percent: u8,
 }
 
-impl VolumeControls {
+impl SliderControls {
     fn move_to(&mut self, percent: u8) -> Result<()> {
         if self.position_percent == Some(percent) {
             return Ok(());
@@ -362,7 +699,7 @@ impl VolumeControls {
             .SetCornerRadius(Vector2::new(px(2.0).min(filled / 2.0), px(2.0)))?;
         self.knob.SetOffset(Vector3::new(
             self.left + filled - px(5.0),
-            px(160.0) - px(5.0),
+            px(self.y) - px(5.0),
             0.0,
         ))?;
         self.position_percent = Some(percent);
@@ -372,17 +709,17 @@ impl VolumeControls {
     fn paint(&mut self, gfx: &Gfx, percent: u8) -> Result<()> {
         self.move_to(percent)?;
         if self.label_percent != percent {
-            let label = gfx.text_brush_sized(
-                &format!("{percent}%"),
-                self.geometry.scale,
-                10.5,
-                false,
-                self.geometry.ink(),
-            )?;
-            self.value
-                .SetBrush(&label.brush.cast::<CompositionBrush>()?)?;
-            self.value
-                .SetSize(Vector2::new(label.width, label.height))?;
+            if let Some(value) = &self.value {
+                let label = gfx.text_brush_sized(
+                    &format!("{percent}%"),
+                    self.geometry.scale,
+                    10.5,
+                    false,
+                    self.geometry.ink(),
+                )?;
+                value.SetBrush(&label.brush.cast::<CompositionBrush>()?)?;
+                value.SetSize(Vector2::new(label.width, label.height))?;
+            }
             self.label_percent = percent;
         }
         Ok(())
@@ -431,10 +768,30 @@ pub struct MenuBar {
         Option<Arc<muelle_shell::icons::IconImage>>,
         CompositionSurfaceBrush,
     )>,
-    volume_drag: Option<Span>,
+    slider_drag: Option<(Slider, Span)>,
     pending_volume: Option<u8>,
     volume_target: Option<u8>,
-    volume_controls: Option<VolumeControls>,
+    volume_controls: Option<SliderControls>,
+    pending_brightness: Option<u8>,
+    brightness_target: Option<u8>,
+    brightness_controls: Option<SliderControls>,
+    /// Readings for the Control Center and Sound popups.
+    control: ControlData,
+    deferred: Option<Deferred>,
+    /// The tray relay, when the hidden-icons popup is on.
+    tray: Option<Rc<TrayHost>>,
+    /// Icon images as composition brushes, by icon; see `tray_brush`.
+    tray_brushes: HashMap<TrayKey, (Arc<Vec<u8>>, CompositionSurfaceBrush)>,
+    /// Program names by process id, for icons without a tooltip.
+    tray_names: HashMap<u32, String>,
+    /// A tray change is waiting for `TRAY_TIMER`.
+    tray_flush_armed: bool,
+    /// The clock label as drawn, for redrawing it alone.
+    clock_slot: Option<ClockSlot>,
+    /// The last redraw of the whole bar from a clock tick.
+    last_full_tick: Instant,
+    /// The bar zone the open Control Center or Sound popup hangs from.
+    zone_span: Span,
     usage_scroll: f32,
     usage_viewport: Option<UsageViewport>,
     suppress_volume_release: bool,
@@ -487,6 +844,8 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         }
         WM_TIMER if w.0 == POINTER_TIMER => app::menu_bar_check_pointer(),
         WM_TIMER if w.0 == VOLUME_TIMER => app::menu_bar_volume_flush(),
+        WM_TIMER if w.0 == CLOCK_TIMER => app::menu_bar_clock_tick(),
+        WM_TIMER if w.0 == TRAY_TIMER => app::menu_bar_tray_flush(),
         WM_CAPTURECHANGED => {
             // Avoid reentering the app borrow inside Set/ReleaseCapture.
             unsafe {
@@ -505,6 +864,13 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         REGISTRY_CHANGED => app::menu_bar_registry_changed(),
         ACCESSORIES_CHANGED => app::menu_bar_accessories_changed(),
         MEDIA_CHANGED => app::menu_bar_media_changed(),
+        PANEL_DATA_CHANGED => app::menu_bar_panel_data_changed(),
+        TRAY_CHANGED => app::menu_bar_tray_changed(),
+        WM_RBUTTONUP => {
+            let x = (l.0 & 0xFFFF) as i16;
+            let y = (l.0 >> 16) as i16;
+            app::menu_bar_right_clicked(f32::from(x), f32::from(y));
+        }
         AUDIO_CHANGED => {
             if !AUDIO_TICK_PENDING.swap(true, Ordering::Relaxed) {
                 unsafe {
@@ -584,8 +950,10 @@ unsafe extern "system" fn outside_click_proc(code: i32, w: WPARAM, l: LPARAM) ->
         let point = unsafe { (*(l.0 as *const MSLLHOOKSTRUCT)).pt };
         let in_triggers = point.y >= BAR_TOP.load(Ordering::Relaxed)
             && point.y < BAR_BOTTOM.load(Ordering::Relaxed)
-            && point.x >= TRIGGERS_LEFT.load(Ordering::Relaxed)
-            && point.x < TRIGGERS_RIGHT.load(Ordering::Relaxed);
+            && ((point.x >= TRIGGERS_LEFT.load(Ordering::Relaxed)
+                && point.x < TRIGGERS_RIGHT.load(Ordering::Relaxed))
+                || (point.x >= ZONE_LEFT.load(Ordering::Relaxed)
+                    && point.x < ZONE_RIGHT.load(Ordering::Relaxed)));
         let in_panel = point.y >= BAR_BOTTOM.load(Ordering::Relaxed)
             && point.y < PANEL_BOTTOM.load(Ordering::Relaxed)
             && point.x >= PANEL_LEFT.load(Ordering::Relaxed)
@@ -1094,10 +1462,22 @@ impl MenuBar {
                 .flatten(),
             media_enabled,
             cover: None,
-            volume_drag: None,
+            slider_drag: None,
             pending_volume: None,
             volume_target: None,
             volume_controls: None,
+            pending_brightness: None,
+            brightness_target: None,
+            brightness_controls: None,
+            control: ControlData::default(),
+            deferred: None,
+            tray: None,
+            tray_brushes: HashMap::new(),
+            tray_names: HashMap::new(),
+            tray_flush_armed: false,
+            clock_slot: None,
+            last_full_tick: Instant::now(),
+            zone_span: Span::default(),
             usage_scroll: 0.0,
             usage_viewport: None,
             suppress_volume_release: false,
@@ -1223,12 +1603,13 @@ impl MenuBar {
             return Ok(());
         }
         self.widgets = widgets;
+        self.schedule_next_minute();
         self.refresh(gfx)
     }
 
     /// The pointer reached the top edge or left the bar.
     pub fn hover(&mut self, gfx: &Gfx, inside: bool) -> Result<()> {
-        if self.volume_drag.is_some() && !inside {
+        if self.slider_drag.is_some() && !inside {
             return Ok(());
         }
         if !inside && self.panel.take().is_some() {
@@ -1400,8 +1781,8 @@ impl MenuBar {
 
     fn pointer_left_at(&mut self, gfx: &Gfx, point: POINT) -> Result<()> {
         let x = (point.x - self.bounds.left) as f32;
-        if let Some(span) = self.volume_drag {
-            self.queue_volume(span, x);
+        if let Some((slider, span)) = self.slider_drag {
+            self.queue_slider(slider, span, x);
             // A nonactivating background window may not receive mouse-up
             // outside its visible bounds. Reuse the existing popup pointer
             // check to finish the gesture without ever stealing app focus.
@@ -1440,27 +1821,56 @@ impl MenuBar {
 
     /// Leaving the island sideways still stays inside the full-width bar window.
     pub fn pointer_moved(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<()> {
-        if let Some(span) = self.volume_drag {
-            self.queue_volume(span, x);
+        if let Some((slider, span)) = self.slider_drag {
+            self.queue_slider(slider, span, x);
             return self.paint_volume_preview(gfx);
         }
         let span = if y < (self.bounds.bottom - self.bounds.top) as f32 {
-            self.triggers_span
+            // A zone popup hangs from its small bar item. Use the popup's own
+            // width on the bar row too, so a diagonal move from the item into
+            // the popup does not close it on the way.
+            if self.zone_span.width() > 0.0 {
+                Span {
+                    left: self.zone_span.left.min(self.panel_span.left),
+                    right: self.zone_span.right.max(self.panel_span.right),
+                }
+            } else {
+                self.triggers_span
+            }
         } else {
             self.panel_span
         };
         if self.panel.is_some() && (x < span.left || x >= span.right) {
             self.dismiss_island(gfx)?;
         }
+        self.track_tray_hover(gfx, x, y)?;
         self.hover(gfx, true)
     }
 
     pub fn dismiss_island(&mut self, gfx: &Gfx) -> Result<()> {
         self.release_volume(None)?;
+        self.control.tray_hover = None;
         if self.panel.take().is_some() {
             self.refresh(gfx)?;
         }
         Ok(())
+    }
+
+    /// Follows the pointer over the hidden-icons tiles; a change redraws.
+    fn track_tray_hover(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<()> {
+        let hover = if self.panel == Some(Island::Tray) {
+            self.island_hits.iter().find_map(|hit| match hit.action {
+                IslandAction::TrayIcon(index) if hit.at(x, y) => Some(index),
+                _ => None,
+            })
+        } else {
+            None
+        };
+        if self.control.tray_hover == hover {
+            return Ok(());
+        }
+        self.control.tray_hover = hover;
+        self.control_changed(gfx)
     }
 
     /// Positions the window and reserves (or frees) its strip of the screen.
@@ -1584,7 +1994,77 @@ impl MenuBar {
         self.tick(gfx)
     }
 
+    /// The clock timer fired. With seconds shown, only the label changes on
+    /// most ticks, so only the label is redrawn.
+    pub fn clock_tick(&mut self, gfx: &Gfx) -> Result<()> {
+        let shown = self.visible && (!self.auto_hide || self.revealed);
+        // SAFETY: Read-only query.
+        let second = unsafe { GetLocalTime() }.wSecond;
+        match clock_tick_plan(
+            self.widgets.clock.seconds,
+            second,
+            shown,
+            self.last_full_tick.elapsed(),
+        ) {
+            ClockTick::Full => self.tick(gfx),
+            ClockTick::Skip => {
+                self.schedule_next_minute();
+                Ok(())
+            }
+            ClockTick::LabelOnly => {
+                if self.redraw_clock_label(gfx)? {
+                    self.schedule_next_minute();
+                    Ok(())
+                } else {
+                    self.tick(gfx)
+                }
+            }
+        }
+    }
+
+    /// Swaps the clock label's brush for the current time. `false` when that
+    /// is not possible (nothing drawn yet, or the new label would shift its
+    /// neighbours): redraw everything then.
+    fn redraw_clock_label(&mut self, gfx: &Gfx) -> Result<bool> {
+        let (Some(look), Some(slot)) = (&mut self.look, &mut self.clock_slot) else {
+            return Ok(false);
+        };
+        // Theme, display and settings changes arrive as their own events and
+        // redraw everything; this only follows the time.
+        let clock = system::clock_text_with(&self.widgets.clock);
+        if clock == look.clock {
+            return Ok(true);
+        }
+        let ink = if look.light { Ink::Dark } else { Ink::Light };
+        let label = gfx.text_brush(&clock, look.scale, false, ink)?;
+        if !label_fits_slot(slot.width, label.width) {
+            return Ok(false);
+        }
+        let left = (slot.right - label.width).round();
+        slot.visual.SetBrush(&label.brush)?;
+        slot.visual.SetSize(Vector2 {
+            X: label.width,
+            Y: label.height,
+        })?;
+        slot.visual.SetOffset(Vector3 {
+            X: left,
+            Y: ((slot.bar_height - label.height) / 2.0).round(),
+            Z: 0.0,
+        })?;
+        slot.width = label.width;
+        if let Some(zone) = self
+            .zones
+            .iter_mut()
+            .find(|(_, _, action)| *action == Action::Notifications)
+        {
+            zone.0 = left - slot.slop;
+        }
+        look.clock = clock;
+        Ok(true)
+    }
+
     pub fn tick(&mut self, gfx: &Gfx) -> Result<()> {
+        self.last_full_tick = Instant::now();
         self.update_status();
         let audio_changed = self
             .audio
@@ -1638,6 +2118,7 @@ impl MenuBar {
             return self.refresh(gfx);
         };
         look.status.volume = volume;
+        look.control = self.control.clone();
         self.apply_look(gfx, look)
     }
 
@@ -1651,17 +2132,25 @@ impl MenuBar {
         };
     }
 
-    /// One wake-up per minute, aligned to the minute, instead of polling.
+    /// One wake-up per minute, aligned to the minute, instead of polling; one
+    /// per second while the clock shows seconds.
     fn schedule_next_minute(&self) {
         // SAFETY: Read-only query, then a timer on our own window (setting an
         // existing timer id replaces it).
         unsafe {
             let now: SYSTEMTIME = GetLocalTime();
-            let elapsed = u32::from(now.wSecond) * 1000 + u32::from(now.wMilliseconds);
+            let (period, elapsed) = if self.widgets.clock.seconds {
+                (1_000_u32, u32::from(now.wMilliseconds))
+            } else {
+                (
+                    60_000_u32,
+                    u32::from(now.wSecond) * 1000 + u32::from(now.wMilliseconds),
+                )
+            };
             SetTimer(
                 Some(self.hwnd),
                 CLOCK_TIMER,
-                60_000 - elapsed.min(59_900) + 50,
+                period - elapsed.min(period - 100) + 50,
                 None,
             );
         }
@@ -1669,18 +2158,21 @@ impl MenuBar {
 
     pub fn click(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<()> {
         if let Some(hit) = self.island_hits.iter().find(|hit| hit.at(x, y)) {
+            let bounds = hit.bounds;
             match hit.action {
+                IslandAction::TrayIcon(index) => {
+                    // Close first, so the app's own menu is not covered.
+                    self.queue_tray_click(index, TrayButton::Left, bounds);
+                    return self.dismiss_island(gfx);
+                }
+                IslandAction::TraySettings => {
+                    open_settings("ms-settings:taskbar");
+                    return self.dismiss_island(gfx);
+                }
                 IslandAction::Toggle(island) => {
                     self.panel = toggle_panel(self.panel, island);
-                    if self.panel.is_some() {
-                        let mut track = TRACKMOUSEEVENT {
-                            cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
-                            dwFlags: TME_LEAVE,
-                            hwndTrack: self.hwnd,
-                            dwHoverTime: 0,
-                        };
-                        // SAFETY: `track` describes our live window.
-                        unsafe { TrackMouseEvent(&mut track)? };
+                    if let Some(open) = self.panel {
+                        self.opened(open)?;
                     }
                 }
                 IslandAction::Refresh => {
@@ -1696,7 +2188,49 @@ impl MenuBar {
                     }
                     return Ok(());
                 }
-                IslandAction::Volume(_) => return Ok(()), // Handled on press/drag.
+                IslandAction::Slider(..) => return Ok(()), // Handled on press/drag.
+                IslandAction::ToggleWifi => {
+                    self.toggle_radio(RadioKind::WiFi);
+                }
+                IslandAction::ToggleBluetooth => {
+                    self.toggle_radio(RadioKind::Bluetooth);
+                }
+                IslandAction::ToggleFocus => {
+                    self.deferred = Some(Deferred::ToggleDnd);
+                    return Ok(());
+                }
+                IslandAction::OpenNetwork => {
+                    let anchor = self
+                        .zone_anchor(Action::Network)
+                        .or_else(|| self.zone_anchor(Action::ControlCenter))
+                        .unwrap_or_default();
+                    self.deferred = Some(Deferred::OpenNetwork(anchor));
+                    return self.dismiss_island(gfx);
+                }
+                IslandAction::OpenBluetooth => {
+                    open_settings("ms-settings:bluetooth");
+                    return self.dismiss_island(gfx);
+                }
+                IslandAction::QuickSettings => {
+                    launcher::open_quick_settings();
+                    return self.dismiss_island(gfx);
+                }
+                IslandAction::SoundSettings => {
+                    open_settings("ms-settings:sound");
+                    return self.dismiss_island(gfx);
+                }
+                IslandAction::SetOutput(index) => {
+                    let Some(output) = self.control.outputs.get(index) else {
+                        return Ok(());
+                    };
+                    if let Err(error) = status::set_default_output(&output.id) {
+                        muelle_shell::log::line(&format!("cambiar salida de audio: {error:#}"));
+                        open_settings("ms-settings:sound");
+                        return self.dismiss_island(gfx);
+                    }
+                    self.control.outputs = status::output_devices();
+                    self.audio_changed(gfx)?;
+                }
                 IslandAction::Mute => {
                     if let Some(audio) = &mut self.audio {
                         audio.toggle_mute()?;
@@ -1713,11 +2247,28 @@ impl MenuBar {
         if y >= (self.bounds.bottom - self.bounds.top) as f32 {
             return Ok(());
         }
-        self.dismiss_island(gfx)?;
+        let open = self.panel;
         let hit = self
             .zones
             .iter()
-            .find(|(left, right, _)| x >= *left && x < *right);
+            .find(|(left, right, _)| x >= *left && x < *right)
+            .copied();
+        // The Control Center and Sound items toggle their own popup.
+        let zone_popup = match hit.map(|(_, _, action)| action) {
+            Some(Action::ControlCenter) => Some(Island::ControlCenter),
+            Some(Action::Sound) => Some(Island::Sound),
+            // Without the tray relay the arrow opens Windows' own flyout.
+            Some(Action::HiddenIcons) if self.tray.is_some() => Some(Island::Tray),
+            _ => None,
+        };
+        if let Some(island) = zone_popup {
+            self.panel = toggle_panel(open, island);
+            if let Some(open) = self.panel {
+                self.opened(open)?;
+            }
+            return self.refresh(gfx);
+        }
+        self.dismiss_island(gfx)?;
         // Where a flyout opened from this item should hang: under its centre.
         let anchor = hit.map_or((0, 0), |(left, right, _)| {
             (
@@ -1725,17 +2276,14 @@ impl MenuBar {
                 self.bounds.bottom,
             )
         });
-        match hit.map(|(_, _, action)| *action) {
+        match hit.map(|(_, _, action)| action) {
             Some(Action::AccessoryIndicator) => {}
             Some(Action::QuickSettings) => launcher::open_quick_settings(),
             Some(Action::Notifications) => launcher::open_notifications(),
-            Some(Action::ToggleDnd) => {
-                crate::app::with_app("toggle dnd", |app| {
-                    app.toggle_dnd();
-                    Ok(())
-                });
-            }
-            Some(Action::Sound) => launcher::open_sound(),
+            // Needs the app, which is borrowed while the bar handles a click.
+            Some(Action::ToggleDnd) => self.deferred = Some(Deferred::ToggleDnd),
+            // Dropdowns open outside the app borrow; the popups opened above.
+            Some(Action::ControlCenter | Action::Sound | Action::Network | Action::Battery) => {}
             Some(Action::Search) => launcher::open_search(),
             Some(Action::TaskView) => launcher::open_task_view(),
             Some(Action::Widgets) => launcher::open_widgets(),
@@ -1754,19 +2302,229 @@ impl MenuBar {
         Ok(())
     }
 
-    pub fn input_switcher_anchor(&self, x: f32, y: f32) -> Option<POINT> {
+    /// The dropdown a click at `(x, y)` opens, with the point it hangs from.
+    pub fn dropdown_at(&self, x: f32, y: f32) -> Option<(Dropdown, POINT)> {
         if y < 0.0 || y >= (self.bounds.bottom - self.bounds.top) as f32 {
             return None;
         }
+        self.zones.iter().find_map(|(left, right, action)| {
+            let kind = match action {
+                Action::InputLanguage => Dropdown::Input,
+                Action::Network => Dropdown::Network,
+                Action::Battery => Dropdown::Battery,
+                _ => return None,
+            };
+            (x >= *left && x < *right).then(|| {
+                (
+                    kind,
+                    POINT {
+                        x: self.bounds.left + ((left + right) * 0.5) as i32,
+                        y: self.bounds.bottom + 6,
+                    },
+                )
+            })
+        })
+    }
+
+    /// Work the last click left for the app to do outside the bar.
+    pub fn take_deferred(&mut self) -> Option<Deferred> {
+        self.deferred.take()
+    }
+
+    /// Hands the bar the tray relay (or takes it away). Without one, the
+    /// hidden-icons arrow opens Windows' flyout.
+    pub fn set_tray(&mut self, tray: Option<Rc<TrayHost>>) {
+        if tray.is_none() {
+            self.control.tray.clear();
+            self.tray_brushes.clear();
+            if self.panel == Some(Island::Tray) {
+                self.panel = None;
+            }
+        }
+        self.tray = tray;
+    }
+
+    /// Asks the app to click the app behind tile `index`, at the tile's centre.
+    fn queue_tray_click(&mut self, index: usize, button: TrayButton, bounds: (f32, f32, f32, f32)) {
+        let Some(entry) = self.control.tray.get(index) else {
+            return;
+        };
+        let (left, top, right, bottom) = bounds;
+        let at = POINT {
+            x: self.bounds.left + ((left + right) * 0.5) as i32,
+            y: self.bounds.top + ((top + bottom) * 0.5) as i32,
+        };
+        self.deferred = Some(Deferred::TrayClick(entry.key.clone(), button, at));
+    }
+
+    /// A right click: only the tiles of the hidden-icons popup answer to it.
+    pub fn right_click(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<()> {
+        let Some((index, bounds)) = self.island_hits.iter().find_map(|hit| match hit.action {
+            IslandAction::TrayIcon(index) if hit.at(x, y) => Some((index, hit.bounds)),
+            _ => None,
+        }) else {
+            return Ok(());
+        };
+        self.queue_tray_click(index, TrayButton::Right, bounds);
+        self.dismiss_island(gfx)
+    }
+
+    /// The relay reported a change: reread the icons while the popup shows them.
+    ///
+    /// Apps re-add their icons in a burst, so the read waits for the burst to
+    /// settle. The relay sends no further notification until icons are read,
+    /// so a burst costs one read per settling period.
+    pub fn tray_changed(&mut self, _gfx: &Gfx) -> Result<()> {
+        if self.panel != Some(Island::Tray) {
+            return Ok(());
+        }
+        if arm_tray_flush(&mut self.tray_flush_armed) {
+            // SAFETY: A timer on our own window.
+            unsafe { SetTimer(Some(self.hwnd), TRAY_TIMER, TRAY_SETTLE_MS, None) };
+        }
+        Ok(())
+    }
+
+    /// The burst of tray changes settled: reads the icons and redraws.
+    pub fn tray_flush(&mut self, gfx: &Gfx) -> Result<()> {
+        // SAFETY: Our own timer.
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TRAY_TIMER);
+        }
+        self.tray_flush_armed = false;
+        if self.panel != Some(Island::Tray) {
+            return Ok(());
+        }
+        self.read_tray();
+        self.control_changed(gfx)
+    }
+
+    /// Takes the relay's current icons (which also re-arms its notification).
+    fn read_tray(&mut self) {
+        let icons = self
+            .tray
+            .as_ref()
+            .map(|tray| tray.icons())
+            .unwrap_or_default();
+        let pids: Vec<u32> = icons.iter().map(|info| info.pid).collect();
+        let entries: Vec<TrayEntry> = icons
+            .into_iter()
+            .take(TRAY_MAX_ICONS)
+            .map(|info| TrayEntry::from_info(info, &mut self.tray_names))
+            .collect();
+        // Names of programs whose icons are gone are looked up again if they
+        // return (a process id may be reused by another program).
+        self.tray_names.retain(|pid, _| pids.contains(pid));
+        self.control.tray = entries;
+    }
+
+    /// Where a flyout hangs from the bar item `action`: under its centre.
+    fn zone_anchor(&self, action: Action) -> Option<POINT> {
         self.zones
             .iter()
-            .find(|(left, right, action)| {
-                x >= *left && x < *right && matches!(action, Action::InputLanguage)
-            })
+            .find(|(_, _, found)| *found == action)
             .map(|(left, right, _)| POINT {
                 x: self.bounds.left + ((left + right) * 0.5) as i32,
                 y: self.bounds.bottom + 6,
             })
+    }
+
+    /// The bar's window, as the relay's notification target.
+    pub fn window(&self) -> isize {
+        self.hwnd.0 as isize
+    }
+
+    /// Focus (do not disturb) changed in the app.
+    pub fn set_dnd(&mut self, gfx: &Gfx, on: bool) -> Result<()> {
+        if self.control.dnd == on {
+            return Ok(());
+        }
+        self.control.dnd = on;
+        self.control_changed(gfx)
+    }
+
+    /// A popup opened: follow the pointer out of it, and read what it shows.
+    fn opened(&mut self, island: Island) -> Result<()> {
+        let mut track = TRACKMOUSEEVENT {
+            cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+            dwFlags: TME_LEAVE,
+            hwndTrack: self.hwnd,
+            dwHoverTime: 0,
+        };
+        // SAFETY: `track` describes our live window.
+        unsafe { TrackMouseEvent(&mut track)? };
+        match island {
+            Island::ControlCenter => {
+                // The popup opens with the devices it knew; the fresh list
+                // arrives from a worker thread.
+                read_outputs(self.hwnd.0 as isize);
+                read_panel_data(self.hwnd.0 as isize, true);
+            }
+            Island::Sound => read_outputs(self.hwnd.0 as isize),
+            Island::Tray => {
+                self.control.tray_hover = None;
+                self.read_tray();
+                // Ask the apps to announce their icons again (not more than
+                // every so often); they arrive through TRAY_CHANGED while the
+                // popup is open.
+                if let Some(tray) = &self.tray {
+                    tray.refresh_if_older_than(TRAY_REFRESH_MIN);
+                }
+            }
+            Island::Music | Island::Usage => {}
+        }
+        Ok(())
+    }
+
+    /// Switches a radio on a worker thread (Windows blocks while it does) and
+    /// reads the result back.
+    fn toggle_radio(&mut self, kind: RadioKind) {
+        let current = match kind {
+            RadioKind::WiFi => &mut self.control.wifi,
+            RadioKind::Bluetooth => &mut self.control.bluetooth,
+        };
+        let Some(on) = *current else {
+            return;
+        };
+        *current = Some(!on);
+        let window = self.hwnd.0 as isize;
+        let started = std::thread::Builder::new()
+            .name("muelle-radio".into())
+            .spawn(move || {
+                if let Err(error) = radio::set_radio(kind, !on) {
+                    muelle_shell::log::line(&format!("cambiar radio {kind:?}: {error}"));
+                }
+                read_panel_data(window, false);
+            });
+        if let Err(error) = started {
+            muelle_shell::log::line(&format!("cambiar radio: {error}"));
+        }
+    }
+
+    /// Takes in what the worker threads read; redraws if the popup shows it.
+    pub fn panel_data_changed(&mut self, gfx: &Gfx) -> Result<()> {
+        let updates = std::mem::take(&mut *PANEL_INBOX.lock().unwrap_or_else(|e| e.into_inner()));
+        for update in updates {
+            match update {
+                PanelUpdate::Radios {
+                    wifi,
+                    bluetooth,
+                    ssid,
+                } => {
+                    self.control.wifi = wifi;
+                    self.control.bluetooth = bluetooth;
+                    self.control.ssid = ssid;
+                }
+                PanelUpdate::Outputs(outputs) => self.control.outputs = outputs,
+                PanelUpdate::Brightness(percent) => {
+                    // A drag in progress owns the slider.
+                    if self.brightness_target.is_none() {
+                        self.control.brightness = percent;
+                    }
+                }
+            }
+        }
+        self.control_changed(gfx)
     }
 
     /// Redraws the bar if anything it shows has changed.
@@ -1799,13 +2557,13 @@ impl MenuBar {
             screen: monitor.screen,
             scale: monitor.scale,
             light: system::uses_light_theme(),
-            glass: system::transparency_enabled(),
+            glass: system::menu_glass(),
             app_name: self.app_name.clone(),
-            clock: system::clock_text(),
+            clock: system::clock_text_with(&self.widgets.clock),
             input: system::input_language(),
             battery: system::battery(),
             status: self.status,
-            widgets: self.widgets,
+            widgets: self.widgets.clone(),
             usage: self
                 .usage
                 .as_ref()
@@ -1815,7 +2573,20 @@ impl MenuBar {
             panel: self.panel,
             usage_refreshing: self.usage.as_ref().is_some_and(UsageMonitor::is_refreshing),
             track,
+            control: self.control.clone(),
         };
+        self.apply_look(gfx, look)
+    }
+
+    /// Only what the popups show (`control`) changed: redraws from the last
+    /// look without reading the system status, the process list, the battery
+    /// or the glass again.
+    fn control_changed(&mut self, gfx: &Gfx) -> Result<()> {
+        let Some(mut look) = self.look.clone() else {
+            return self.refresh(gfx);
+        };
+        look.control = self.control.clone();
+        look.panel = self.panel;
         self.apply_look(gfx, look)
     }
 
@@ -1825,6 +2596,7 @@ impl MenuBar {
             return self.refresh(gfx);
         };
         look.track = self.media.as_ref().and_then(media::Watch::snapshot);
+        look.control = self.control.clone();
         self.panel = available_panel(self.panel, look.track.is_some(), look.usage_enabled);
         look.panel = self.panel;
         self.apply_look(gfx, look)
@@ -1842,7 +2614,7 @@ impl MenuBar {
             .look
             .as_ref()
             .is_some_and(|old| old.screen != look.screen || old.scale != look.scale);
-        if look.panel != Some(Island::Music) || moved {
+        if !look.panel.is_some_and(Island::has_sliders) || moved {
             self.release_volume(None)?;
         }
         if self.look.as_ref() == Some(&look) {
@@ -1905,9 +2677,10 @@ impl MenuBar {
         let layers = root.Children()?;
         // Without transparency the bar is solid, as macOS draws it with
         // "Reduce transparency".
+        let alpha = glass_alpha(look.light, look.widgets.glass_strength);
         let tint = match (look.light, look.glass) {
-            (true, true) => rgba(255, 255, 255, 110),
-            (false, true) => rgba(24, 24, 26, 120),
+            (true, true) => rgba(255, 255, 255, alpha),
+            (false, true) => rgba(24, 24, 26, alpha),
             (true, false) => rgba(236, 236, 238, 255),
             (false, false) => rgba(36, 36, 38, 255),
         };
@@ -1948,6 +2721,7 @@ impl MenuBar {
         };
 
         self.zones.clear();
+        self.clock_slot = None;
         let mut left_end = px(SIDE_MARGIN);
         if !look.app_name.is_empty() {
             let name = gfx.text_brush_fitted(
@@ -1967,25 +2741,13 @@ impl MenuBar {
         let mut right = width - px(SIDE_MARGIN);
         let status = look.status;
         let symbol = |layers: &[(char, f32)]| gfx.glyph_brush(layers, scale, ink);
-        let mut items: Vec<(LabelBrush, Action)> = vec![
-            (
-                gfx.text_brush(&look.clock, scale, false, ink)?,
-                Action::Notifications,
-            ),
-            (gfx.control_center_brush(scale, ink)?, Action::QuickSettings),
-            (symbol(&[(glyph::FOCUS, 1.0)])?, Action::ToggleDnd),
-        ];
+        let mut items: Vec<(LabelBrush, Action)> = vec![(
+            gfx.text_brush(&look.clock, scale, false, ink)?,
+            Action::Notifications,
+        )];
         // Privacy indicators, as the Windows tray shows them: something is
         // using the microphone or camera right now.
         let privacy = status.privacy;
-        for (on, glyph, action) in [
-            (privacy.microphone, glyph::MICROPHONE, Action::Microphone),
-            (privacy.camera, glyph::CAMERA, Action::Camera),
-        ] {
-            if on {
-                items.push((symbol(&[(glyph, 1.0)])?, action));
-            }
-        }
         let show_search = look.widgets.search.unwrap_or(status.buttons.search);
         let show_task_view = look.widgets.task_view.unwrap_or(status.buttons.task_view);
         let show_widgets = look.widgets.widgets.unwrap_or(status.buttons.widgets);
@@ -1993,75 +2755,136 @@ impl MenuBar {
             .widgets
             .battery_percent
             .unwrap_or(status.battery_percentage);
-        let show_bluetooth = look.widgets.bluetooth;
-
-        if show_search {
-            items.push((symbol(&[(glyph::SEARCH, 1.0)])?, Action::Search));
-        }
-        if show_bluetooth {
-            items.push((symbol(&[(glyph::BLUETOOTH, 1.0)])?, Action::Bluetooth));
-        }
-        match status.network {
-            Network::Wifi { bars, has_internet } => {
-                items.push((
-                    gfx.wifi_brush(bars, has_internet, scale, ink)?,
-                    Action::QuickSettings,
-                ));
-            }
-            Network::Ethernet => {
-                items.push((symbol(&[(glyph::ETHERNET, 1.0)])?, Action::QuickSettings));
-            }
-            Network::Offline => {
-                items.push((symbol(&[(glyph::OFFLINE, 1.0)])?, Action::QuickSettings));
-            }
-        }
-        if let Some(volume) = status.volume {
-            let speaker = if volume.muted {
-                glyph::MUTE
-            } else {
-                glyph::VOLUME[usize::from(volume.level.min(3))]
-            };
-            items.push((symbol(&[(speaker, 1.0)])?, Action::Sound));
-        }
+        let hidden = &look.widgets.hidden;
+        let battery_shown = look.battery.is_some() && !hidden.contains(&MenuBarItem::Battery);
+        let has_accessories = look.accessories.iter().any(Option::is_some);
         let mut battery_label = None;
-        if let Some(battery) = look.battery {
-            if show_battery_percentage {
-                battery_label = Some((
-                    items.len(),
-                    gfx.text_brush(&format!("{}%", battery.percent), scale, false, ink)?,
-                ));
-            }
-            items.push((
-                gfx.battery_brush(battery.percent, battery.charging, battery.saver, scale, ink)?,
-                Action::QuickSettings,
-            ));
-        }
         let mut accessory_labels = Vec::new();
-        for device in look.accessories.into_iter().flatten().rev() {
-            let value = device
-                .percent
-                .map_or_else(|| "—".to_owned(), |percent| format!("{percent}%"));
-            accessory_labels.push((items.len(), gfx.text_brush(&value, scale, false, ink)?));
-            let icon = match device.kind {
-                AccessoryKind::Mouse => glyph::MOUSE,
-                AccessoryKind::Headset => glyph::HEADSET,
-            };
-            items.push((symbol(&[(icon, 1.0)])?, Action::AccessoryIndicator));
-        }
-        if let Some(language) = &look.input {
-            items.push((
-                gfx.text_brush(language, scale, false, ink)?,
-                Action::InputLanguage,
-            ));
-        }
-        // The notification area (antivirus, OneDrive, apps in the background)
-        // lives only in the hidden taskbar; this arrow opens its flyout.
-        items.push((symbol(&[(glyph::HIDDEN_ICONS, 1.0)])?, Action::HiddenIcons));
-        if show_task_view {
-            items.push((symbol(&[(glyph::TASK_VIEW, 1.0)])?, Action::TaskView));
-        }
-        if show_widgets {
-            items.push((symbol(&[(glyph::WIDGETS, 1.0)])?, Action::Widgets));
+        let slots = bar_items(&look.widgets.order, |item| match item {
+            MenuBarItem::Bluetooth => look.widgets.bluetooth,
+            MenuBarItem::Search => show_search,
+            MenuBarItem::TaskView => show_task_view,
+            MenuBarItem::Widgets => show_widgets,
+            MenuBarItem::Sound => status.volume.is_some() && !hidden.contains(&item),
+            MenuBarItem::InputLanguage => look.input.is_some() && !hidden.contains(&item),
+            // Accessory readings follow the battery slot even when the
+            // battery itself is hidden.
+            MenuBarItem::Battery => battery_shown || has_accessories,
+            MenuBarItem::Privacy => {
+                (privacy.microphone || privacy.camera) && !hidden.contains(&item)
+            }
+            _ => !hidden.contains(&item),
+        });
+        for slot in slots {
+            match slot {
+                MenuBarItem::Privacy => {
+                    // Pushed right to left: the camera ends up left of the
+                    // microphone, as before.
+                    for (on, glyph, action) in [
+                        (privacy.microphone, glyph::MICROPHONE, Action::Microphone),
+                        (privacy.camera, glyph::CAMERA, Action::Camera),
+                    ] {
+                        if on {
+                            items.push((symbol(&[(glyph, 1.0)])?, action));
+                        }
+                    }
+                }
+                MenuBarItem::ControlCenter => {
+                    items.push((gfx.control_center_brush(scale, ink)?, Action::ControlCenter));
+                }
+                MenuBarItem::Focus => {
+                    items.push((symbol(&[(glyph::FOCUS, 1.0)])?, Action::ToggleDnd));
+                }
+                MenuBarItem::Search => {
+                    items.push((symbol(&[(glyph::SEARCH, 1.0)])?, Action::Search));
+                }
+                MenuBarItem::Bluetooth => {
+                    items.push((symbol(&[(glyph::BLUETOOTH, 1.0)])?, Action::Bluetooth));
+                }
+                MenuBarItem::Wifi => match status.network {
+                    Network::Wifi { bars, has_internet } => {
+                        items.push((
+                            gfx.wifi_brush(bars, has_internet, scale, ink)?,
+                            Action::Network,
+                        ));
+                    }
+                    Network::Ethernet => {
+                        items.push((symbol(&[(glyph::ETHERNET, 1.0)])?, Action::Network));
+                    }
+                    Network::Offline => {
+                        items.push((symbol(&[(glyph::OFFLINE, 1.0)])?, Action::Network));
+                    }
+                },
+                MenuBarItem::Sound => {
+                    if let Some(volume) = status.volume {
+                        let speaker = if volume.muted {
+                            glyph::MUTE
+                        } else {
+                            glyph::VOLUME[usize::from(volume.level.min(3))]
+                        };
+                        items.push((symbol(&[(speaker, 1.0)])?, Action::Sound));
+                    }
+                }
+                MenuBarItem::Battery => {
+                    if let Some(battery) = look.battery
+                        && battery_shown
+                    {
+                        if show_battery_percentage {
+                            battery_label = Some((
+                                items.len(),
+                                gfx.text_brush(
+                                    &format!("{}%", battery.percent),
+                                    scale,
+                                    false,
+                                    ink,
+                                )?,
+                            ));
+                        }
+                        items.push((
+                            gfx.battery_brush(
+                                battery.percent,
+                                battery.charging,
+                                battery.saver,
+                                scale,
+                                ink,
+                            )?,
+                            Action::Battery,
+                        ));
+                    }
+                    for device in look.accessories.into_iter().flatten().rev() {
+                        let value = device
+                            .percent
+                            .map_or_else(|| "—".to_owned(), |percent| format!("{percent}%"));
+                        accessory_labels
+                            .push((items.len(), gfx.text_brush(&value, scale, false, ink)?));
+                        let icon = match device.kind {
+                            AccessoryKind::Mouse => glyph::MOUSE,
+                            AccessoryKind::Headset => glyph::HEADSET,
+                        };
+                        items.push((symbol(&[(icon, 1.0)])?, Action::AccessoryIndicator));
+                    }
+                }
+                MenuBarItem::InputLanguage => {
+                    if let Some(language) = &look.input {
+                        items.push((
+                            gfx.text_brush(language, scale, false, ink)?,
+                            Action::InputLanguage,
+                        ));
+                    }
+                }
+                // The notification area (antivirus, OneDrive, apps in the
+                // background) lives only in the hidden taskbar; this arrow
+                // opens its flyout.
+                MenuBarItem::HiddenIcons => {
+                    items.push((symbol(&[(glyph::HIDDEN_ICONS, 1.0)])?, Action::HiddenIcons));
+                }
+                MenuBarItem::TaskView => {
+                    items.push((symbol(&[(glyph::TASK_VIEW, 1.0)])?, Action::TaskView));
+                }
+                MenuBarItem::Widgets => {
+                    items.push((symbol(&[(glyph::WIDGETS, 1.0)])?, Action::Widgets));
+                }
+            }
         }
         for (index, (item, action)) in items.iter().enumerate() {
             let zone_right = right;
@@ -2075,7 +2898,17 @@ impl MenuBar {
                 right -= px(6.0);
             }
             let left = right - item.width;
-            place(&layers, item, left)?;
+            let visual = place(&layers, item, left)?;
+            if index == 0 {
+                // The clock is the rightmost item, with nothing before it.
+                self.clock_slot = Some(ClockSlot {
+                    visual,
+                    right,
+                    width: item.width,
+                    bar_height: height,
+                    slop,
+                });
+            }
             // The battery icon and its percentage form one control.
             // Accessory readings are passive status indicators, not controls.
             if *action != Action::AccessoryIndicator {
@@ -2086,16 +2919,47 @@ impl MenuBar {
 
         self.island_hits.clear();
         self.volume_controls = None;
+        self.brightness_controls = None;
         self.usage_viewport = None;
         self.triggers_span = Span::default();
         self.panel_span = Span::default();
+        self.zone_span = Span::default();
         self.draw_island(gfx, look, &layers, width, height, left_end, right)?;
-        if let Some(drag) = self.volume_drag {
-            let new_span = self.island_hits.iter().find_map(|hit| match hit.action {
-                IslandAction::Volume(span) => Some(span),
-                _ => None,
+        if let Some(island) = look.panel
+            && let Some(action) = island.zone_action()
+            && let Some(&(zone_left, zone_right, _)) =
+                self.zones.iter().find(|(_, _, found)| *found == action)
+        {
+            self.zone_span = Span {
+                left: zone_left,
+                right: zone_right,
+            };
+            self.panel_span = zone_panel_span(
+                self.zone_span,
+                width,
+                px(match island {
+                    Island::Sound => SOUND_WIDTH,
+                    Island::Tray => tray_width(look.control.tray.len()),
+                    _ => CC_WIDTH,
+                }),
+                px(CC_MARGIN),
+            );
+            let geometry = IslandGeometry::new(self.panel_span, height + px(PANEL_GAP), look);
+            let popup_height = px(look.panel_height());
+            let theme = Theme::for_popup_with(look.light, look.glass, look.widgets.glass_strength);
+            let content = popup_surface(gfx, theme, &layers, geometry, popup_height)?;
+            match island {
+                Island::Sound => self.draw_sound_popup(gfx, &content, geometry, look)?,
+                Island::Tray => self.draw_tray_popup(gfx, &content, geometry, look)?,
+                _ => self.draw_control_center(gfx, &content, geometry, look)?,
+            }
+        }
+        if let Some((slider, span)) = self.slider_drag {
+            let found = self.island_hits.iter().any(|hit| {
+                matches!(hit.action, IslandAction::Slider(kind, found)
+                    if kind == slider && found == span)
             });
-            if new_span != Some(drag) {
+            if !found {
                 self.release_volume(None)?;
             }
         }
@@ -2128,6 +2992,16 @@ impl MenuBar {
             screen.left + self.panel_span.right as i32,
             Ordering::Relaxed,
         );
+        let (zone_left, zone_right) = if self.zone_span.width() > 0.0 {
+            (
+                screen.left + self.zone_span.left as i32,
+                screen.left + self.zone_span.right as i32,
+            )
+        } else {
+            (0, 0)
+        };
+        ZONE_LEFT.store(zone_left, Ordering::Relaxed);
+        ZONE_RIGHT.store(zone_right, Ordering::Relaxed);
         BAR_TOP.store(screen.top, Ordering::Relaxed);
         BAR_BOTTOM.store(screen.top + height as i32, Ordering::Relaxed);
         let clickable_height = if self.panel_span.width() > 0.0 {
@@ -2249,6 +3123,10 @@ impl MenuBar {
             let Some(span) = span else {
                 continue;
             };
+            // Zone popups (Control Center, Sound) have no island trigger.
+            if kind.zone_action().is_some() {
+                continue;
+            }
             let geometry = IslandGeometry::new(span, 0.0, look);
             let segment = c.CreateContainerVisual()?;
             segment.SetSize(Vector2::new(geometry.width, compact_height))?;
@@ -2284,7 +3162,7 @@ impl MenuBar {
                         }
                     }
                 }
-                Island::Usage => {
+                Island::Usage | Island::ControlCenter | Island::Sound | Island::Tray => {
                     let anchors = match style {
                         IslandStyle::Notch => {
                             draw_compact_usage(gfx, &content, geometry, compact_height, &providers)?
@@ -2301,7 +3179,9 @@ impl MenuBar {
             }
             let (left, right) = match kind {
                 Island::Music => (span.left, divider.unwrap_or(span.right)),
-                Island::Usage => (divider.unwrap_or(span.left), span.right),
+                Island::Usage | Island::ControlCenter | Island::Sound | Island::Tray => {
+                    (divider.unwrap_or(span.left), span.right)
+                }
             };
             self.island_hits.push(IslandHit {
                 bounds: (left, 0.0, right, bar_height),
@@ -2312,7 +3192,9 @@ impl MenuBar {
             }
             let desired = px(match kind {
                 Island::Music => 360.0,
-                Island::Usage => ISLAND_EXPANDED_WIDTH,
+                Island::Usage | Island::ControlCenter | Island::Sound | Island::Tray => {
+                    ISLAND_EXPANDED_WIDTH
+                }
             });
             self.panel_span = match style {
                 IslandStyle::Notch => panel_span(span, width, desired),
@@ -2320,7 +3202,7 @@ impl MenuBar {
             };
             let geometry = IslandGeometry::new(self.panel_span, bar_height + px(PANEL_GAP), look);
             let height = px(look.panel_height());
-            let theme = Theme::for_popup(look.light, look.glass);
+            let theme = Theme::for_popup_with(look.light, look.glass, look.widgets.glass_strength);
             let content = popup_surface(gfx, theme, layers, geometry, height)?;
             match kind {
                 Island::Music => {
@@ -2328,7 +3210,7 @@ impl MenuBar {
                         self.draw_player(gfx, &content, geometry, track, cover.as_ref())?;
                     }
                 }
-                Island::Usage => {
+                Island::Usage | Island::ControlCenter | Island::Sound | Island::Tray => {
                     self.draw_usage_panel(gfx, &content, geometry, height, look, &providers)?
                 }
             }
@@ -2673,78 +3555,16 @@ impl MenuBar {
             let left = px(59.0);
             let width = (geometry.width - left - px(66.0)).max(px(1.0));
             let percent = self.volume_target.unwrap_or(volume.percent);
-            add_rounded_box(
-                c,
+            self.add_slider(
+                gfx,
                 layers,
-                left,
-                px(158.0),
-                width,
-                px(4.0),
-                px(2.0),
-                geometry.control_fill(),
-                None,
-            )?;
-            let (_, fill) = retained_rounded_box(
-                c,
-                layers,
-                left,
-                px(158.0),
-                width,
-                px(4.0),
-                px(2.0),
-                if geometry.light {
-                    rgba(40, 48, 58, 220)
-                } else {
-                    rgba(240, 244, 250, 235)
-                },
-                None,
-            )?;
-            let dot = px(10.0);
-            let (knob, _) = retained_rounded_box(
-                c,
-                layers,
-                left - dot / 2.0,
-                px(160.0) - dot / 2.0,
-                dot,
-                dot,
-                dot / 2.0,
-                rgba(245, 247, 250, 255),
-                Some(geometry.border()),
-            )?;
-            let label =
-                gfx.text_brush_sized(&format!("{percent}%"), geometry.scale, 10.5, false, ink)?;
-            let value = add_visual(
-                c,
-                layers,
-                &label.brush.cast()?,
-                geometry.width - px(51.0),
-                px(153.0),
-                label.width,
-                label.height,
-            )?;
-            value.SetOpacity(0.8)?;
-            let mut controls = VolumeControls {
-                fill,
-                knob,
-                value,
                 geometry,
-                left,
-                width,
-                position_percent: None,
-                label_percent: percent,
-            };
-            controls.move_to(percent)?;
-            self.volume_controls = Some(controls);
-            self.island_hits.push(geometry.hit(
-                left - px(6.0),
-                px(147.0),
-                width + px(12.0),
-                px(29.0),
-                IslandAction::Volume(Span {
-                    left: geometry.left + left,
-                    right: geometry.left + left + width,
-                }),
-            ));
+                Slider::Volume,
+                160.0,
+                (left, width),
+                percent,
+                Some(geometry.width - px(51.0)),
+            )?;
         } else {
             add_panel_text(
                 gfx,
@@ -2762,25 +3582,853 @@ impl MenuBar {
         Ok(())
     }
 
+    fn draw_control_center(
+        &mut self,
+        gfx: &Gfx,
+        layers: &VisualCollection,
+        geometry: IslandGeometry,
+        look: &Look,
+    ) -> Result<()> {
+        let c = &gfx.compositor;
+        let px = |v| geometry.px(v);
+        let ink = geometry.ink();
+        let scale = geometry.scale;
+        let text = strings::text();
+        let data = &look.control;
+        let accent = accent_color();
+        let module = |x: f32, y: f32, width: f32, height: f32| {
+            add_rounded_box(
+                c,
+                layers,
+                px(x),
+                px(y),
+                px(width),
+                px(height),
+                px(14.0),
+                geometry.control_fill(),
+                Some(geometry.border()),
+            )
+        };
+        let column = (CC_WIDTH - 2.0 * CC_PAD - CC_GAP) / 2.0;
+        let (left_x, right_x) = (CC_PAD, CC_PAD + column + CC_GAP);
+        let top = CC_PAD;
+
+        // Network, Bluetooth and Focus.
+        module(left_x, top, column, CC_MODULE_HEIGHT)?;
+        let unknown = "…";
+        let on_off = |on: Option<bool>| match on {
+            None => unknown,
+            Some(true) => text.on,
+            Some(false) => text.off,
+        };
+        let wifi_subtitle = match data.wifi {
+            None => unknown.to_owned(),
+            Some(false) => text.off.to_owned(),
+            Some(true) => data
+                .ssid
+                .clone()
+                .unwrap_or_else(|| text.not_connected.to_owned()),
+        };
+        let rows = [
+            (
+                glyph::WIFI,
+                text.wifi,
+                wifi_subtitle,
+                data.wifi == Some(true),
+                IslandAction::ToggleWifi,
+                IslandAction::OpenNetwork,
+            ),
+            (
+                glyph::BLUETOOTH,
+                text.bluetooth,
+                on_off(data.bluetooth).to_owned(),
+                data.bluetooth == Some(true),
+                IslandAction::ToggleBluetooth,
+                IslandAction::OpenBluetooth,
+            ),
+            (
+                glyph::FOCUS,
+                text.focus,
+                on_off(Some(data.dnd)).to_owned(),
+                data.dnd,
+                IslandAction::ToggleFocus,
+                IslandAction::ToggleFocus,
+            ),
+        ];
+        for (index, (symbol, title, subtitle, on, toggle, open)) in rows.into_iter().enumerate() {
+            let row = top + 48.0 * index as f32;
+            let circle = px(26.0);
+            let (circle_x, circle_y) = (px(left_x + 10.0), px(row + 11.0));
+            add_rounded_box(
+                c,
+                layers,
+                circle_x,
+                circle_y,
+                circle,
+                circle,
+                circle / 2.0,
+                if on { accent } else { geometry.control_fill() },
+                (!on).then(|| geometry.border()),
+            )?;
+            let icon =
+                gfx.glyph_brush(&[(symbol, 1.0)], scale, if on { Ink::Light } else { ink })?;
+            add_visual(
+                c,
+                layers,
+                &icon.brush.cast()?,
+                circle_x + (circle - icon.width) / 2.0,
+                circle_y + (circle - icon.height) / 2.0,
+                icon.width,
+                icon.height,
+            )?;
+            let text_width = px(column - 44.0 - 6.0);
+            let label = gfx.text_brush_fitted(title, scale, 13.0, true, ink, text_width)?;
+            add_visual(
+                c,
+                layers,
+                &label.brush.cast()?,
+                px(left_x + 44.0),
+                px(row + 7.0),
+                label.width,
+                label.height,
+            )?;
+            let label = gfx.text_brush_fitted(&subtitle, scale, 11.0, false, ink, text_width)?;
+            add_visual(
+                c,
+                layers,
+                &label.brush.cast()?,
+                px(left_x + 44.0),
+                px(row + 25.0),
+                label.width,
+                label.height,
+            )?
+            .SetOpacity(0.6)?;
+            self.island_hits.push(geometry.hit(
+                px(left_x + 4.0),
+                px(row + 5.0),
+                px(38.0),
+                px(38.0),
+                toggle,
+            ));
+            self.island_hits.push(geometry.hit(
+                px(left_x + 44.0),
+                px(row + 4.0),
+                px(column - 44.0),
+                px(40.0),
+                open,
+            ));
+        }
+
+        // Now Playing, or the way out to the Windows flyout.
+        module(right_x, top, column, CC_MODULE_HEIGHT)?;
+        if let Some(track) = &look.track {
+            if let Some((_, cover)) = &self.cover {
+                add_visual(
+                    c,
+                    layers,
+                    &cover.cast()?,
+                    px(right_x + 10.0),
+                    px(top + 10.0),
+                    px(36.0),
+                    px(36.0),
+                )?;
+            }
+            let available = px(column - 20.0);
+            let title =
+                gfx.text_brush_fitted(track_title(track), scale, 12.5, true, ink, available)?;
+            add_visual(
+                c,
+                layers,
+                &title.brush.cast()?,
+                px(right_x + 10.0),
+                px(top + 54.0),
+                title.width,
+                title.height,
+            )?;
+            if !track.artist.trim().is_empty() {
+                let artist =
+                    gfx.text_brush_fitted(&track.artist, scale, 11.0, false, ink, available)?;
+                add_visual(
+                    c,
+                    layers,
+                    &artist.brush.cast()?,
+                    px(right_x + 10.0),
+                    px(top + 72.0),
+                    artist.width,
+                    artist.height,
+                )?
+                .SetOpacity(0.69)?;
+            }
+            let center = px(right_x + column / 2.0);
+            for (control, symbol, enabled, offset) in [
+                (MediaControl::Previous, '\u{E892}', track.previous, -42.0),
+                (
+                    MediaControl::PlayPause,
+                    if track.playing {
+                        '\u{E769}'
+                    } else {
+                        '\u{E768}'
+                    },
+                    track.toggle,
+                    0.0,
+                ),
+                (MediaControl::Next, '\u{E893}', track.next, 42.0),
+            ] {
+                let size = px(34.0);
+                let x = center + px(offset) - size / 2.0;
+                let y = px(top + 100.0);
+                let icon = gfx.glyph_brush(&[(symbol, 1.0)], scale, ink)?;
+                add_visual(
+                    c,
+                    layers,
+                    &icon.brush.cast()?,
+                    x + (size - icon.width) / 2.0,
+                    y + (size - icon.height) / 2.0,
+                    icon.width,
+                    icon.height,
+                )?
+                .SetOpacity(if enabled { 1.0 } else { 0.30 })?;
+                if enabled {
+                    self.island_hits.push(geometry.hit(
+                        x,
+                        y,
+                        size,
+                        size,
+                        IslandAction::Media(control),
+                    ));
+                }
+            }
+        } else {
+            let icon = gfx.control_center_brush(scale, ink)?;
+            let center = px(right_x + column / 2.0);
+            add_visual(
+                c,
+                layers,
+                &icon.brush.cast()?,
+                center - icon.width / 2.0,
+                px(top + 48.0) - icon.height / 2.0,
+                icon.width,
+                icon.height,
+            )?;
+            let label = gfx.text_brush_fitted(
+                text.quick_settings,
+                scale,
+                11.0,
+                false,
+                ink,
+                px(column - 16.0),
+            )?;
+            add_visual(
+                c,
+                layers,
+                &label.brush.cast()?,
+                center - label.width / 2.0,
+                px(top + 80.0),
+                label.width,
+                label.height,
+            )?
+            .SetOpacity(0.8)?;
+            self.island_hits.push(geometry.hit(
+                px(right_x),
+                px(top),
+                px(column),
+                px(CC_MODULE_HEIGHT),
+                IslandAction::QuickSettings,
+            ));
+        }
+
+        // Display and Sound.
+        let full = CC_WIDTH - 2.0 * CC_PAD;
+        let track_left = 52.0;
+        let track_width = CC_PAD + full - 16.0 - track_left;
+        let mut y = top + CC_MODULE_HEIGHT + CC_GAP;
+        if let Some(stored) = data.brightness {
+            module(CC_PAD, y, full, CC_SLIDER_MODULE_HEIGHT)?;
+            add_panel_text(
+                gfx,
+                layers,
+                text.display,
+                px(CC_PAD + 14.0),
+                px(y + 9.0),
+                scale,
+                12.0,
+                true,
+                ink,
+                0.9,
+            )?;
+            let sun = gfx.glyph_brush(&[(glyph::BRIGHTNESS, 1.0)], scale, ink)?;
+            add_visual(
+                c,
+                layers,
+                &sun.brush.cast()?,
+                px(CC_PAD + 14.0),
+                px(y + 42.0) - sun.height / 2.0,
+                sun.width,
+                sun.height,
+            )?;
+            self.add_slider(
+                gfx,
+                layers,
+                geometry,
+                Slider::Brightness,
+                y + 42.0,
+                (px(track_left), px(track_width)),
+                self.brightness_target.unwrap_or(stored),
+                None,
+            )?;
+            y += CC_SLIDER_MODULE_HEIGHT + CC_GAP;
+        }
+        module(CC_PAD, y, full, CC_SOUND_MODULE_HEIGHT)?;
+        add_panel_text(
+            gfx,
+            layers,
+            text.sound,
+            px(CC_PAD + 14.0),
+            px(y + 9.0),
+            scale,
+            12.0,
+            true,
+            ink,
+            0.9,
+        )?;
+        if let Some(volume) = self.status.volume {
+            self.draw_speaker(gfx, layers, geometry, volume, CC_PAD + 14.0, y + 42.0)?;
+            self.add_slider(
+                gfx,
+                layers,
+                geometry,
+                Slider::Volume,
+                y + 42.0,
+                (px(track_left), px(track_width)),
+                self.volume_target.unwrap_or(volume.percent),
+                None,
+            )?;
+        } else {
+            add_panel_text(
+                gfx,
+                layers,
+                text.media_no_output,
+                px(CC_PAD + 14.0),
+                px(y + 36.0),
+                scale,
+                11.0,
+                false,
+                ink,
+                0.5,
+            )?;
+        }
+        let device = data
+            .outputs
+            .iter()
+            .find(|output| output.default)
+            .map_or(text.media_no_output, |output| output.name.as_str());
+        let name =
+            gfx.text_brush_fitted(device, scale, 11.5, false, ink, px(full - 28.0 - 22.0))?;
+        add_visual(
+            c,
+            layers,
+            &name.brush.cast()?,
+            px(CC_PAD + 14.0),
+            px(y + 66.0),
+            name.width,
+            name.height,
+        )?
+        .SetOpacity(0.7)?;
+        let chevron = gfx.glyph_brush(&[(glyph::CHEVRON_RIGHT, 0.72)], scale * 0.8, ink)?;
+        add_visual(
+            c,
+            layers,
+            &chevron.brush.cast()?,
+            px(CC_PAD + full - 14.0) - chevron.width,
+            px(y + 66.0) + (name.height - chevron.height) / 2.0,
+            chevron.width,
+            chevron.height,
+        )?
+        .SetOpacity(0.7)?;
+        self.island_hits.push(geometry.hit(
+            px(CC_PAD),
+            px(y + 58.0),
+            px(full),
+            px(32.0),
+            IslandAction::Toggle(Island::Sound),
+        ));
+        Ok(())
+    }
+
+    /// The speaker glyph, which mutes and unmutes, centred on logical `y`.
+    fn draw_speaker(
+        &mut self,
+        gfx: &Gfx,
+        layers: &VisualCollection,
+        geometry: IslandGeometry,
+        volume: Volume,
+        x: f32,
+        y: f32,
+    ) -> Result<()> {
+        let px = |v| geometry.px(v);
+        let symbol = if volume.muted {
+            glyph::MUTE
+        } else {
+            glyph::VOLUME[usize::from(volume.level.min(3))]
+        };
+        let label = gfx.glyph_brush(&[(symbol, 1.0)], geometry.scale, geometry.ink())?;
+        add_visual(
+            &gfx.compositor,
+            layers,
+            &label.brush.cast()?,
+            px(x),
+            px(y) - label.height / 2.0,
+            label.width,
+            label.height,
+        )?;
+        self.island_hits.push(geometry.hit(
+            px(x - 8.0),
+            px(y - 13.5),
+            px(32.0),
+            px(27.0),
+            IslandAction::Mute,
+        ));
+        Ok(())
+    }
+
+    fn draw_sound_popup(
+        &mut self,
+        gfx: &Gfx,
+        layers: &VisualCollection,
+        geometry: IslandGeometry,
+        look: &Look,
+    ) -> Result<()> {
+        let c = &gfx.compositor;
+        let px = |v| geometry.px(v);
+        let ink = geometry.ink();
+        let scale = geometry.scale;
+        let text = strings::text();
+        let accent = accent_color();
+        let inset = 12.0;
+        add_panel_text(
+            gfx,
+            layers,
+            text.sound,
+            px(16.0),
+            px(12.0),
+            scale,
+            13.0,
+            true,
+            ink,
+            1.0,
+        )?;
+        if let Some(volume) = self.status.volume {
+            self.draw_speaker(gfx, layers, geometry, volume, 16.0, 52.0)?;
+            self.add_slider(
+                gfx,
+                layers,
+                geometry,
+                Slider::Volume,
+                52.0,
+                (px(46.0), px(SOUND_WIDTH - 46.0 - 54.0)),
+                self.volume_target.unwrap_or(volume.percent),
+                Some(px(SOUND_WIDTH - 44.0)),
+            )?;
+        } else {
+            add_panel_text(
+                gfx,
+                layers,
+                text.media_no_output,
+                px(16.0),
+                px(45.0),
+                scale,
+                11.0,
+                false,
+                ink,
+                0.5,
+            )?;
+        }
+        let separator = |y: f32| -> Result<()> {
+            add_visual(
+                c,
+                layers,
+                &c.CreateColorBrushWithColor(geometry.border())?.cast()?,
+                px(inset),
+                px(y),
+                px(SOUND_WIDTH - 2.0 * inset),
+                px(1.0).max(1.0),
+            )
+            .map(|_| ())
+        };
+        separator(76.0)?;
+        add_panel_text(
+            gfx,
+            layers,
+            text.output,
+            px(16.0),
+            px(86.0),
+            scale,
+            11.0,
+            true,
+            ink,
+            0.6,
+        )?;
+        let shown = look.control.outputs.iter().take(SOUND_MAX_OUTPUTS);
+        for (index, output) in shown.enumerate() {
+            let row = SOUND_HEADER_HEIGHT + SOUND_ROW_HEIGHT * index as f32;
+            if output.default {
+                add_rounded_box(
+                    c,
+                    layers,
+                    px(18.0),
+                    px(row + 10.0),
+                    px(8.0),
+                    px(8.0),
+                    px(4.0),
+                    accent,
+                    None,
+                )?;
+            }
+            let label = gfx.text_brush_fitted(
+                &output.name,
+                scale,
+                12.0,
+                false,
+                ink,
+                px(SOUND_WIDTH - 40.0 - 14.0),
+            )?;
+            add_visual(
+                c,
+                layers,
+                &label.brush.cast()?,
+                px(40.0),
+                px(row + 5.0),
+                label.width,
+                label.height,
+            )?;
+            self.island_hits.push(geometry.hit(
+                px(8.0),
+                px(row),
+                px(SOUND_WIDTH - 16.0),
+                px(SOUND_ROW_HEIGHT),
+                IslandAction::SetOutput(index),
+            ));
+        }
+        let end = sound_popup_height(look.control.outputs.len()) - SOUND_FOOTER_HEIGHT;
+        separator(end + 4.0)?;
+        add_panel_text(
+            gfx,
+            layers,
+            text.sound_settings,
+            px(16.0),
+            px(end + 15.0),
+            scale,
+            12.0,
+            false,
+            ink,
+            1.0,
+        )?;
+        self.island_hits.push(geometry.hit(
+            px(8.0),
+            px(end + 10.0),
+            px(SOUND_WIDTH - 16.0),
+            px(SOUND_ROW_HEIGHT),
+            IslandAction::SoundSettings,
+        ));
+        Ok(())
+    }
+
+    /// The brush for a tray icon's image, kept while the icon's pixels do not
+    /// change so that redraws only re-parent it.
+    fn tray_brush(&mut self, gfx: &Gfx, entry: &TrayEntry) -> Result<CompositionSurfaceBrush> {
+        if let Some((bgra, brush)) = self.tray_brushes.get(&entry.key)
+            && (Arc::ptr_eq(bgra, &entry.bgra) || **bgra == *entry.bgra)
+        {
+            return Ok(brush.clone());
+        }
+        let image = muelle_shell::icons::IconImage {
+            width: entry.width,
+            height: entry.height,
+            bgra: (*entry.bgra).clone(),
+        };
+        let surface = gfx.image_surface(&image)?;
+        let brush = gfx.compositor.CreateSurfaceBrushWithSurface(&surface)?;
+        // Icons are not always square.
+        brush.SetStretch(CompositionStretch::Uniform)?;
+        self.tray_brushes
+            .insert(entry.key.clone(), (Arc::clone(&entry.bgra), brush.clone()));
+        Ok(brush)
+    }
+
+    fn draw_tray_popup(
+        &mut self,
+        gfx: &Gfx,
+        layers: &VisualCollection,
+        geometry: IslandGeometry,
+        look: &Look,
+    ) -> Result<()> {
+        let c = &gfx.compositor;
+        let px = |v| geometry.px(v);
+        let ink = geometry.ink();
+        let scale = geometry.scale;
+        let text = strings::text();
+        let icons = &look.control.tray;
+        let width = tray_width(icons.len());
+        self.tray_brushes
+            .retain(|key, _| icons.iter().any(|entry| &entry.key == key));
+        if icons.is_empty() {
+            add_panel_text(
+                gfx,
+                layers,
+                text.no_icons,
+                px(TRAY_PAD + 6.0),
+                px(TRAY_PAD + 2.0),
+                scale,
+                12.0,
+                false,
+                ink,
+                0.5,
+            )?;
+        }
+        let hover_fill = if geometry.light {
+            rgba(0, 0, 0, 30)
+        } else {
+            rgba(255, 255, 255, 40)
+        };
+        for (index, entry) in icons.iter().enumerate() {
+            let (cell_x, cell_y) = tray_cell(index);
+            if look.control.tray_hover == Some(index) {
+                add_rounded_box(
+                    c,
+                    layers,
+                    px(cell_x),
+                    px(cell_y),
+                    px(TRAY_CELL),
+                    px(TRAY_CELL),
+                    px(6.0),
+                    hover_fill,
+                    None,
+                )?;
+            }
+            let brush = self.tray_brush(gfx, entry)?;
+            add_visual(
+                c,
+                layers,
+                &brush.cast()?,
+                px(cell_x + (TRAY_CELL - TRAY_ICON_SIZE) / 2.0),
+                px(cell_y + (TRAY_CELL - TRAY_ICON_SIZE) / 2.0),
+                px(TRAY_ICON_SIZE),
+                px(TRAY_ICON_SIZE),
+            )?;
+            self.island_hits.push(geometry.hit(
+                px(cell_x),
+                px(cell_y),
+                px(TRAY_CELL),
+                px(TRAY_CELL),
+                IslandAction::TrayIcon(index),
+            ));
+        }
+        // The hovered icon's name, in the strip under the grid.
+        if let Some(index) = look.control.tray_hover
+            && let Some(entry) = icons.get(index)
+            && !entry.name.is_empty()
+        {
+            let (cell_x, _) = tray_cell(index);
+            let label = gfx.text_brush_fitted(
+                &entry.name,
+                scale,
+                11.0,
+                false,
+                ink,
+                px(width - 2.0 * TRAY_PAD) - px(12.0),
+            )?;
+            let bubble_width = label.width + px(12.0);
+            let bubble_height = label.height + px(6.0);
+            let left = (px(cell_x + TRAY_CELL / 2.0) - bubble_width / 2.0)
+                .min(px(width - 4.0) - bubble_width)
+                .max(px(4.0));
+            let top = px(tray_grid_bottom(icons.len()) + 1.0);
+            let fill = if geometry.light {
+                rgba(250, 250, 252, 255)
+            } else {
+                rgba(58, 58, 62, 255)
+            };
+            add_rounded_box(
+                c,
+                layers,
+                left,
+                top,
+                bubble_width,
+                bubble_height,
+                px(5.0),
+                fill,
+                Some(geometry.border()),
+            )?;
+            add_visual(
+                c,
+                layers,
+                &label.brush.cast()?,
+                left + px(6.0),
+                top + px(3.0),
+                label.width,
+                label.height,
+            )?;
+        }
+        let end = tray_popup_height(icons.len()) - TRAY_FOOTER_HEIGHT;
+        add_visual(
+            c,
+            layers,
+            &c.CreateColorBrushWithColor(geometry.border())?.cast()?,
+            px(TRAY_PAD),
+            px(end),
+            px(width - 2.0 * TRAY_PAD),
+            px(1.0).max(1.0),
+        )?;
+        add_panel_text(
+            gfx,
+            layers,
+            text.tray_settings,
+            px(TRAY_PAD + 6.0),
+            px(end + 7.0),
+            scale,
+            11.0,
+            false,
+            ink,
+            0.6,
+        )?;
+        self.island_hits.push(geometry.hit(
+            px(TRAY_PAD / 2.0),
+            px(end + 2.0),
+            px(width - TRAY_PAD),
+            px(TRAY_FOOTER_HEIGHT - 4.0),
+            IslandAction::TraySettings,
+        ));
+        Ok(())
+    }
+
     pub fn press_volume(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<()> {
         self.suppress_volume_release = false;
-        let Some(hit) = self
-            .island_hits
-            .iter()
-            .find(|hit| hit.at(x, y) && matches!(hit.action, IslandAction::Volume(_)))
-        else {
+        let Some((slider, span)) = self.island_hits.iter().find_map(|hit| match hit.action {
+            IslandAction::Slider(slider, span) if hit.at(x, y) => Some((slider, span)),
+            _ => None,
+        }) else {
             return Ok(());
         };
-        let IslandAction::Volume(span) = hit.action else {
-            return Ok(());
-        };
-        self.volume_drag = Some(span);
+        self.slider_drag = Some((slider, span));
         // SAFETY: Capture only for a live slider drag, never to activate the bar.
         unsafe {
             SetCapture(self.hwnd);
         }
-        self.queue_volume(span, x);
+        self.queue_slider(slider, span, x);
         self.paint_volume_preview(gfx)
+    }
+
+    /// One slider of a popup: a track, its fill, a knob, and the hit that
+    /// starts a drag. `track` is its logical `(left, width)` in the popup and
+    /// `y` the logical centre line.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "A slider is placed by its popup, kind, line, track, value and label together"
+    )]
+    fn add_slider(
+        &mut self,
+        gfx: &Gfx,
+        layers: &VisualCollection,
+        geometry: IslandGeometry,
+        kind: Slider,
+        y: f32,
+        (left, width): (f32, f32),
+        percent: u8,
+        label_x: Option<f32>,
+    ) -> Result<()> {
+        let c = &gfx.compositor;
+        let px = |v| geometry.px(v);
+        add_rounded_box(
+            c,
+            layers,
+            left,
+            px(y - 2.0),
+            width,
+            px(4.0),
+            px(2.0),
+            geometry.control_fill(),
+            None,
+        )?;
+        let (_, fill) = retained_rounded_box(
+            c,
+            layers,
+            left,
+            px(y - 2.0),
+            width,
+            px(4.0),
+            px(2.0),
+            if geometry.light {
+                rgba(40, 48, 58, 220)
+            } else {
+                rgba(240, 244, 250, 235)
+            },
+            None,
+        )?;
+        let dot = px(10.0);
+        let (knob, _) = retained_rounded_box(
+            c,
+            layers,
+            left - dot / 2.0,
+            px(y) - dot / 2.0,
+            dot,
+            dot,
+            dot / 2.0,
+            rgba(245, 247, 250, 255),
+            Some(geometry.border()),
+        )?;
+        let value = match label_x {
+            Some(x) => {
+                let label = gfx.text_brush_sized(
+                    &format!("{percent}%"),
+                    geometry.scale,
+                    10.5,
+                    false,
+                    geometry.ink(),
+                )?;
+                let value = add_visual(
+                    c,
+                    layers,
+                    &label.brush.cast()?,
+                    x,
+                    px(y - 7.0),
+                    label.width,
+                    label.height,
+                )?;
+                value.SetOpacity(0.8)?;
+                Some(value)
+            }
+            None => None,
+        };
+        let mut controls = SliderControls {
+            fill,
+            knob,
+            value,
+            geometry,
+            y,
+            left,
+            width,
+            position_percent: None,
+            label_percent: percent,
+        };
+        controls.move_to(percent)?;
+        match kind {
+            Slider::Volume => self.volume_controls = Some(controls),
+            Slider::Brightness => self.brightness_controls = Some(controls),
+        }
+        self.island_hits.push(geometry.hit(
+            left - px(6.0),
+            px(y - 13.0),
+            width + px(12.0),
+            px(29.0),
+            IslandAction::Slider(
+                kind,
+                Span {
+                    left: geometry.left + left,
+                    right: geometry.left + left + width,
+                },
+            ),
+        ));
+        Ok(())
     }
 
     pub fn scroll_usage_at(&mut self, point: POINT, delta: i16) -> Result<bool> {
@@ -2840,29 +4488,51 @@ impl MenuBar {
         {
             controls.paint(gfx, percent)?;
         }
+        if let Some(percent) = self.brightness_target
+            && let Some(controls) = &mut self.brightness_controls
+        {
+            controls.paint(gfx, percent)?;
+        }
         Ok(())
     }
 
-    fn queue_volume(&mut self, span: Span, x: f32) {
+    fn queue_slider(&mut self, slider: Slider, span: Span, x: f32) {
         let percent = volume_percent(span, x);
-        self.volume_target = Some(percent);
-        if let Some(controls) = &mut self.volume_controls {
-            // Optimistic GPU-only feedback is independent of endpoint latency.
-            // Audio writes still proceed if device loss interrupts this paint;
-            // the existing graphics heartbeat owns recovery.
-            let _ = controls.move_to(percent);
+        let arm = self.pending_volume.is_none() && self.pending_brightness.is_none();
+        match slider {
+            Slider::Volume => {
+                self.volume_target = Some(percent);
+                if let Some(controls) = &mut self.volume_controls {
+                    // Optimistic GPU-only feedback is independent of endpoint latency.
+                    // Audio writes still proceed if device loss interrupts this paint;
+                    // the existing graphics heartbeat owns recovery.
+                    let _ = controls.move_to(percent);
+                }
+                if self.pending_volume == Some(percent)
+                    || (self.pending_volume.is_none()
+                        && self
+                            .status
+                            .volume
+                            .is_some_and(|v| v.percent == percent && !v.muted))
+                {
+                    return;
+                }
+                self.pending_volume = Some(percent);
+            }
+            Slider::Brightness => {
+                self.brightness_target = Some(percent);
+                if let Some(controls) = &mut self.brightness_controls {
+                    let _ = controls.move_to(percent);
+                }
+                if self.pending_brightness == Some(percent)
+                    || (self.pending_brightness.is_none()
+                        && self.control.brightness == Some(percent))
+                {
+                    return;
+                }
+                self.pending_brightness = Some(percent);
+            }
         }
-        if self.pending_volume == Some(percent)
-            || (self.pending_volume.is_none()
-                && self
-                    .status
-                    .volume
-                    .is_some_and(|v| v.percent == percent && !v.muted))
-        {
-            return;
-        }
-        let arm = self.pending_volume.is_none();
-        self.pending_volume = Some(percent);
         if arm {
             // At most 30 endpoint writes/second during dragging; no idle timer.
             unsafe {
@@ -2876,6 +4546,9 @@ impl MenuBar {
         unsafe {
             let _ = KillTimer(Some(self.hwnd), VOLUME_TIMER);
         }
+        if let Some(percent) = self.pending_brightness.take() {
+            write_brightness(percent);
+        }
         if let Some(percent) = self.pending_volume.take()
             && let Some(audio) = &mut self.audio
         {
@@ -2885,12 +4558,12 @@ impl MenuBar {
     }
 
     pub fn release_volume(&mut self, x: Option<f32>) -> Result<bool> {
-        let Some(span) = self.volume_drag.take() else {
+        let Some((slider, span)) = self.slider_drag.take() else {
             return Ok(x.is_some() && std::mem::take(&mut self.suppress_volume_release));
         };
         self.suppress_volume_release = true;
         if let Some(x) = x {
-            self.queue_volume(span, x);
+            self.queue_slider(slider, span, x);
         }
         // Clear state first: ReleaseCapture posts a capture-lost notification.
         unsafe {
@@ -2902,7 +4575,113 @@ impl MenuBar {
             muelle_shell::log::line(&format!("ajustar volumen: {error:#}"));
         }
         self.volume_target = None;
+        // The display keeps what the drag set.
+        if let Some(percent) = self.brightness_target.take() {
+            self.control.brightness = Some(percent);
+        }
         Ok(true)
+    }
+}
+
+fn open_settings(page: &str) {
+    if let Err(error) = launcher::open(page) {
+        muelle_shell::log::line(&format!("abrir {page}: {error}"));
+    }
+}
+
+fn post_panel_updates(window: isize, updates: Vec<PanelUpdate>) {
+    PANEL_INBOX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .extend(updates);
+    // SAFETY: Posting to the bar window; a destroyed window just fails.
+    unsafe {
+        let _ = PostMessageW(
+            Some(HWND(window as *mut _)),
+            PANEL_DATA_CHANGED,
+            WPARAM(0),
+            LPARAM(0),
+        );
+    }
+}
+
+/// Lists the audio output devices on a worker thread. The result comes back
+/// as `PANEL_DATA_CHANGED`.
+fn read_outputs(window: isize) {
+    let started = std::thread::Builder::new()
+        .name("muelle-outputs".into())
+        .spawn(move || {
+            post_panel_updates(
+                window,
+                vec![PanelUpdate::Outputs(status::output_devices_on_worker())],
+            );
+        });
+    if let Err(error) = started {
+        muelle_shell::log::line(&format!("leer salidas de audio: {error}"));
+    }
+}
+
+/// Whether the caller must start the timer that reads a burst of tray
+/// changes: only the first change of a burst does.
+fn arm_tray_flush(armed: &mut bool) -> bool {
+    !std::mem::replace(armed, true)
+}
+
+/// Reads the radios (and the brightness) on a worker thread: Windows blocks
+/// while it lists them. The result comes back as `PANEL_DATA_CHANGED`.
+fn read_panel_data(window: isize, with_brightness: bool) {
+    let started = std::thread::Builder::new()
+        .name("muelle-control-center".into())
+        .spawn(move || {
+            let (wifi, bluetooth) = radio::wifi_and_bluetooth_on();
+            let ssid = if wifi == Some(true) {
+                muelle_shell::wifi::networks()
+                    .into_iter()
+                    .find(|network| network.connected)
+                    .map(|network| network.ssid)
+            } else {
+                None
+            };
+            let mut updates = vec![PanelUpdate::Radios {
+                wifi,
+                bluetooth,
+                ssid,
+            }];
+            if with_brightness {
+                updates.push(PanelUpdate::Brightness(brightness::get()));
+            }
+            post_panel_updates(window, updates);
+        });
+    if let Err(error) = started {
+        muelle_shell::log::line(&format!("leer centro de control: {error}"));
+    }
+}
+
+/// Writes the brightness on one worker thread (WMI blocks). Writes that pile
+/// up while it works are dropped in favour of the latest.
+fn write_brightness(percent: u8) {
+    static WRITER: OnceLock<Option<std::sync::mpsc::Sender<u8>>> = OnceLock::new();
+    let writer = WRITER.get_or_init(|| {
+        let (sender, receiver) = std::sync::mpsc::channel::<u8>();
+        std::thread::Builder::new()
+            .name("muelle-brightness".into())
+            .spawn(move || {
+                // One connection serves every write of the drag.
+                let mut writer = brightness::Writer::new();
+                while let Ok(mut percent) = receiver.recv() {
+                    while let Ok(newer) = receiver.try_recv() {
+                        percent = newer;
+                    }
+                    if let Err(error) = writer.set(percent) {
+                        muelle_shell::log::line(&format!("ajustar brillo: {error}"));
+                    }
+                }
+            })
+            .ok()
+            .map(|_| sender)
+    });
+    if let Some(writer) = writer {
+        let _ = writer.send(percent);
     }
 }
 
@@ -2976,6 +4755,7 @@ fn available_panel(open: Option<Island>, music: bool, usage: bool) -> Option<Isl
     open.filter(|island| match island {
         Island::Music => music,
         Island::Usage => usage,
+        Island::ControlCenter | Island::Sound | Island::Tray => true,
     })
 }
 
@@ -3082,6 +4862,19 @@ fn panel_span(trigger: Span, screen_width: f32, desired: f32) -> Span {
     let width = desired.max(trigger.width()).min(screen_width);
     let left = ((trigger.left + trigger.right - width) / 2.0)
         .clamp(0.0, screen_width - width)
+        .round();
+    Span {
+        left,
+        right: left + width,
+    }
+}
+
+/// A popup of up to `desired` width centred under its bar `zone`, kept
+/// `margin` away from both screen edges.
+fn zone_panel_span(zone: Span, screen_width: f32, desired: f32, margin: f32) -> Span {
+    let width = desired.min((screen_width - 2.0 * margin).max(0.0));
+    let left = ((zone.left + zone.right - width) / 2.0)
+        .clamp(margin, (screen_width - margin - width).max(margin))
         .round();
     Span {
         left,
@@ -3865,16 +5658,16 @@ mod island_tests {
             .island_hits
             .iter()
             .find_map(|hit| match hit.action {
-                IslandAction::Volume(span) => Some(span),
+                IslandAction::Slider(Slider::Volume, span) => Some(span),
                 _ => None,
             })
             .context("slider")?;
-        bar.volume_drag = Some(span); // Never capture the user's mouse in a test.
-        bar.queue_volume(span, span.left);
+        bar.slider_drag = Some((Slider::Volume, span)); // Never capture the user's mouse in a test.
+        bar.queue_slider(Slider::Volume, span, span.left);
         look.scale = 1.5;
         bar.apply_look(&gfx, look.clone())?;
         assert!(
-            bar.volume_drag.is_none()
+            bar.slider_drag.is_none()
                 && bar.pending_volume.is_none()
                 && bar.volume_target.is_none()
         );
@@ -3883,15 +5676,15 @@ mod island_tests {
             .island_hits
             .iter()
             .find_map(|hit| match hit.action {
-                IslandAction::Volume(span) => Some(span),
+                IslandAction::Slider(Slider::Volume, span) => Some(span),
                 _ => None,
             })
             .context("new slider")?;
-        bar.volume_drag = Some(span);
-        bar.queue_volume(span, span.right);
+        bar.slider_drag = Some((Slider::Volume, span));
+        bar.queue_slider(Slider::Volume, span, span.right);
         look.active_providers.0.fill(true); // Changes popup placement without changing monitor/DPI.
         bar.apply_look(&gfx, look.clone())?;
-        assert!(bar.volume_drag.is_none() && bar.pending_volume.is_none());
+        assert!(bar.slider_drag.is_none() && bar.pending_volume.is_none());
 
         // A trigger that cannot fit must not leave a latent open popup.
         look.screen.right = look.screen.left + 160;
@@ -3901,6 +5694,296 @@ mod island_tests {
         wide.screen.right = wide.screen.left + 1920;
         bar.apply_look(&gfx, wide)?;
         assert!(bar.panel_span.width() <= 0.0 && bar.usage_viewport.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn zone_popups_center_under_their_item_and_stay_on_screen() {
+        let zone = Span {
+            left: 1000.0,
+            right: 1030.0,
+        };
+        let centered = zone_panel_span(zone, 1920.0, 320.0, 8.0);
+        assert_eq!(centered.width(), 320.0);
+        assert_eq!((centered.left + centered.right) / 2.0, 1015.0);
+        let edge = zone_panel_span(
+            Span {
+                left: 1890.0,
+                right: 1910.0,
+            },
+            1920.0,
+            320.0,
+            8.0,
+        );
+        assert_eq!(edge.right, 1912.0);
+        let start = zone_panel_span(Span::default(), 1920.0, 320.0, 8.0);
+        assert_eq!(start.left, 8.0);
+        let narrow = zone_panel_span(zone, 200.0, 320.0, 8.0);
+        assert!(narrow.left >= 8.0 && narrow.right <= 192.0);
+    }
+
+    #[test]
+    fn zone_popups_are_always_available_and_size_to_their_content() {
+        assert_eq!(
+            available_panel(Some(Island::ControlCenter), false, false),
+            Some(Island::ControlCenter)
+        );
+        assert_eq!(
+            available_panel(Some(Island::Sound), false, false),
+            Some(Island::Sound)
+        );
+        assert_eq!(
+            toggle_panel(Some(Island::Sound), Island::ControlCenter),
+            Some(Island::ControlCenter)
+        );
+        assert!(control_center_height(true) > control_center_height(false));
+        assert!(sound_popup_height(3) > sound_popup_height(1));
+        assert_eq!(
+            sound_popup_height(100),
+            sound_popup_height(SOUND_MAX_OUTPUTS)
+        );
+    }
+
+    #[test]
+    #[ignore = "Requires Windows desktop composition; hidden window, no audio or display writes"]
+    fn native_control_center_and_sound_popups_build_in_both_themes() -> Result<()> {
+        use anyhow::Context;
+        use windows::Win32::System::WinRT::{
+            CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+            DispatcherQueueOptions,
+        };
+        // SAFETY: All composition objects stay on this test's STA thread.
+        let _queue = unsafe {
+            CreateDispatcherQueueController(DispatcherQueueOptions {
+                dwSize: size_of::<DispatcherQueueOptions>() as u32,
+                threadType: DQTYPE_THREAD_CURRENT,
+                apartmentType: DQTAT_COM_STA,
+            })?
+        };
+        let gfx = Gfx::new()?;
+        let mut bar = MenuBar::create(&gfx, false, false, true, MenuBarWidgets::default())?;
+        bar.set_visible(false)?;
+        bar.audio = None;
+        bar.status.volume = Some(Volume {
+            level: 2,
+            muted: false,
+            percent: 35,
+        });
+        bar.control = ControlData {
+            wifi: Some(true),
+            bluetooth: Some(false),
+            ssid: Some("Home".into()),
+            dnd: true,
+            brightness: Some(60),
+            outputs: vec![
+                status::AudioOutput {
+                    id: "a".into(),
+                    name: "Speakers".into(),
+                    default: true,
+                },
+                status::AudioOutput {
+                    id: "b".into(),
+                    name: "Headphones".into(),
+                    default: false,
+                },
+            ],
+            ..ControlData::default()
+        };
+        // The Sound zone only exists with a volume reading, and both zones
+        // need the default bar items.
+        let mut look = bar.look.clone().context("initial look")?;
+        look.status = bar.status;
+        look.control = bar.control.clone();
+        bar.apply_look(&gfx, look.clone())?;
+        assert!(bar.zones.iter().any(|zone| zone.2 == Action::ControlCenter));
+        for island in [Island::ControlCenter, Island::Sound] {
+            for track in [None, Some(Track::test_fixture())] {
+                for (light, glass) in [(true, true), (false, true), (true, false), (false, false)] {
+                    for scale in [1.0, 1.5] {
+                        look.panel = Some(island);
+                        look.track = track.clone();
+                        look.light = light;
+                        look.glass = glass;
+                        look.scale = scale;
+                        bar.panel = look.panel;
+                        bar.build(&gfx, &look)?;
+                        if !bar
+                            .zones
+                            .iter()
+                            .any(|zone| Some(zone.2) == island.zone_action())
+                        {
+                            continue; // Hidden item, hence no popup.
+                        }
+                        assert!(bar.panel_span.width() > 0.0, "{island:?} must open");
+                        assert!(bar.zone_span.width() > 0.0);
+                        assert!(
+                            bar.panel_span.right <= (look.screen.right - look.screen.left) as f32
+                        );
+                        assert!(bar.island_hits.iter().any(|hit| matches!(
+                            hit.action,
+                            IslandAction::Slider(Slider::Volume, _)
+                        )));
+                        assert_eq!(
+                            bar.island_hits.iter().any(|hit| matches!(
+                                hit.action,
+                                IslandAction::Slider(Slider::Brightness, _)
+                            )),
+                            island == Island::ControlCenter
+                        );
+                        let wanted = if island == Island::Sound {
+                            IslandAction::SoundSettings
+                        } else {
+                            IslandAction::OpenNetwork
+                        };
+                        assert!(bar.island_hits.iter().any(|hit| std::mem::discriminant(
+                            &hit.action
+                        ) == std::mem::discriminant(
+                            &wanted
+                        )));
+                    }
+                }
+            }
+        }
+        // Without brightness there is no display slider and the popup shrinks.
+        look.panel = Some(Island::ControlCenter);
+        look.control.brightness = None;
+        bar.build(&gfx, &look)?;
+        assert!(
+            !bar.island_hits
+                .iter()
+                .any(|hit| matches!(hit.action, IslandAction::Slider(Slider::Brightness, _)))
+        );
+        // Closing leaves no stale zone for the outside-click hook.
+        look.panel = None;
+        bar.panel = None;
+        bar.build(&gfx, &look)?;
+        assert!(bar.zone_span.width() <= 0.0 && bar.panel_span.width() <= 0.0);
+        Ok(())
+    }
+
+    #[test]
+    fn tray_grid_has_four_columns_and_grows_by_rows() {
+        assert_eq!(tray_rows(0), 0);
+        assert_eq!(tray_rows(1), 1);
+        assert_eq!(tray_rows(4), 1);
+        assert_eq!(tray_rows(5), 2);
+        assert_eq!(tray_rows(1000), TRAY_MAX_ICONS / TRAY_MAX_COLUMNS);
+        assert_eq!(tray_cell(0), (TRAY_PAD, TRAY_PAD));
+        assert_eq!(tray_cell(3), (TRAY_PAD + 3.0 * TRAY_CELL, TRAY_PAD));
+        assert_eq!(tray_cell(4), (TRAY_PAD, TRAY_PAD + TRAY_CELL));
+        assert_eq!(
+            tray_cell(9),
+            (TRAY_PAD + TRAY_CELL, TRAY_PAD + 2.0 * TRAY_CELL)
+        );
+        assert_eq!(tray_columns(0), 4);
+        assert_eq!(tray_columns(1), 4);
+        assert_eq!(tray_columns(100), 4);
+        assert_eq!(tray_width(0), 4.0 * TRAY_CELL + 2.0 * TRAY_PAD);
+        assert_eq!(tray_width(8), 4.0 * TRAY_CELL + 2.0 * TRAY_PAD);
+        assert_eq!(
+            tray_popup_height(5),
+            TRAY_PAD + 2.0 * TRAY_CELL + TRAY_TIP_HEIGHT + TRAY_FOOTER_HEIGHT
+        );
+        assert!(tray_popup_height(0) < tray_popup_height(1));
+        assert_eq!(tray_popup_height(4), tray_popup_height(1));
+        assert_eq!(tray_popup_height(100), tray_popup_height(TRAY_MAX_ICONS));
+        // The last cell of a full row stays inside the popup.
+        assert!(tray_cell(3).0 + TRAY_CELL + TRAY_PAD <= tray_width(4));
+    }
+
+    #[test]
+    fn the_tray_popup_is_a_zone_popup_on_the_hidden_icons_arrow() {
+        assert!(Island::Tray.zone_action() == Some(Action::HiddenIcons));
+        assert_eq!(
+            available_panel(Some(Island::Tray), false, false),
+            Some(Island::Tray)
+        );
+        assert!(!Island::Tray.has_sliders());
+    }
+
+    #[test]
+    #[ignore = "Requires Windows desktop composition; hidden window, no tray relay"]
+    fn native_tray_popup_builds_with_no_icons_and_with_many() -> Result<()> {
+        use anyhow::Context;
+        use windows::Win32::System::WinRT::{
+            CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+            DispatcherQueueOptions,
+        };
+        // SAFETY: All composition objects stay on this test's STA thread.
+        let _queue = unsafe {
+            CreateDispatcherQueueController(DispatcherQueueOptions {
+                dwSize: size_of::<DispatcherQueueOptions>() as u32,
+                threadType: DQTYPE_THREAD_CURRENT,
+                apartmentType: DQTAT_COM_STA,
+            })?
+        };
+        let gfx = Gfx::new()?;
+        let mut bar = MenuBar::create(&gfx, false, false, true, MenuBarWidgets::default())?;
+        bar.set_visible(false)?;
+        bar.audio = None;
+        let fake = |index: u32| {
+            let side = 16 + index % 3 * 8;
+            TrayEntry {
+                key: TrayKey::for_test(index),
+                name: if index % 4 == 3 {
+                    String::new()
+                } else {
+                    format!("Application number {index}")
+                },
+                width: side,
+                height: side,
+                bgra: Arc::new(vec![
+                    (index as u8).wrapping_mul(30);
+                    (side * side * 4) as usize
+                ]),
+            }
+        };
+        let mut look = bar.look.clone().context("initial look")?;
+        for count in [0_u32, 8, 20] {
+            for (light, glass, hover) in [
+                (true, true, Some(0)),
+                (false, true, None),
+                (true, false, Some(0)),
+                (false, false, None),
+            ] {
+                for scale in [1.0, 1.5] {
+                    look.control.tray = (0..count).map(fake).collect();
+                    look.control.tray_hover = hover.filter(|_| count > 0);
+                    look.panel = Some(Island::Tray);
+                    look.light = light;
+                    look.glass = glass;
+                    look.scale = scale;
+                    bar.control = look.control.clone();
+                    bar.panel = look.panel;
+                    bar.build(&gfx, &look)?;
+                    if !bar.zones.iter().any(|zone| zone.2 == Action::HiddenIcons) {
+                        continue; // The item is hidden, hence no popup.
+                    }
+                    assert!(bar.panel_span.width() > 0.0, "the tray popup must open");
+                    assert!(bar.panel_span.right <= (look.screen.right - look.screen.left) as f32);
+                    let tiles: Vec<usize> = bar
+                        .island_hits
+                        .iter()
+                        .filter_map(|hit| match hit.action {
+                            IslandAction::TrayIcon(index) => Some(index),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(tiles, (0..count as usize).collect::<Vec<_>>());
+                    assert!(
+                        bar.island_hits
+                            .iter()
+                            .any(|hit| matches!(hit.action, IslandAction::TraySettings))
+                    );
+                    assert_eq!(bar.tray_brushes.len(), count as usize);
+                }
+            }
+        }
+        // Closing leaves no stale zone for the outside-click hook.
+        look.panel = None;
+        bar.panel = None;
+        bar.build(&gfx, &look)?;
+        assert!(bar.zone_span.width() <= 0.0 && bar.panel_span.width() <= 0.0);
         Ok(())
     }
 
@@ -3995,7 +6078,7 @@ mod island_tests {
                     let volume = bar
                         .island_hits
                         .iter()
-                        .find(|hit| matches!(hit.action, IslandAction::Volume(_)))
+                        .find(|hit| matches!(hit.action, IslandAction::Slider(Slider::Volume, _)))
                         .context("missing volume hit")?;
                     let (left, top, right, bottom) = volume.bounds;
                     assert!(left >= bar.panel_span.left && right <= bar.panel_span.right);
@@ -4068,8 +6151,8 @@ mod island_tests {
             left: 100.0,
             right: 300.0,
         };
-        bar.volume_drag = Some(span); // No SetCapture in a test.
-        bar.queue_volume(span, 140.0);
+        bar.slider_drag = Some((Slider::Volume, span)); // No SetCapture in a test.
+        bar.queue_slider(Slider::Volume, span, 140.0);
         bar.pointer_moved(&gfx, 260.0, 0.0)?;
         assert_eq!(bar.pending_volume, Some(80));
         assert_eq!(
@@ -4105,17 +6188,16 @@ mod island_tests {
         );
         assert_eq!(bar.surface.Children()?.First()?.Current()?, root);
         assert!(bar.release_volume(Some(300.0))?);
-        assert!(bar.pending_volume.is_none() && bar.volume_drag.is_none());
+        assert!(bar.pending_volume.is_none() && bar.slider_drag.is_none());
         assert!(!bar.release_volume(None)?);
         assert!(bar.release_volume(Some(200.0))?); // Late up after capture loss/timer.
         assert!(!bar.release_volume(Some(200.0))?);
         bar.status.volume = None;
         bar.build(&gfx, &look)?;
-        assert!(
-            !bar.island_hits
-                .iter()
-                .any(|hit| matches!(hit.action, IslandAction::Volume(_) | IslandAction::Mute))
-        );
+        assert!(!bar.island_hits.iter().any(|hit| matches!(
+            hit.action,
+            IslandAction::Slider(Slider::Volume, _) | IslandAction::Mute
+        )));
         Ok(())
     }
 
@@ -4667,7 +6749,7 @@ mod island_tests {
         let gfx = Gfx::new()?;
         for (light, glass) in [(true, true), (false, true), (true, false), (false, false)] {
             let root = gfx.compositor.CreateContainerVisual()?;
-            let theme = Theme::for_popup(light, glass);
+            let theme = Theme::for_popup_with(light, glass, crate::menu::DEFAULT_GLASS_STRENGTH);
             let geometry = IslandGeometry {
                 left: 90.0,
                 top: HEIGHT + PANEL_GAP,
@@ -4678,6 +6760,56 @@ mod island_tests {
             popup_surface(&gfx, theme, &root.Children()?, geometry, 136.0)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+
+    const SOON: Duration = Duration::from_secs(10);
+
+    #[test]
+    fn without_seconds_every_tick_is_a_full_redraw() {
+        for shown in [true, false] {
+            assert_eq!(clock_tick_plan(false, 17, shown, SOON), ClockTick::Full);
+        }
+    }
+
+    #[test]
+    fn seconds_redraw_only_the_label_while_the_bar_is_shown() {
+        assert_eq!(clock_tick_plan(true, 17, true, SOON), ClockTick::LabelOnly);
+        assert_eq!(clock_tick_plan(true, 17, false, SOON), ClockTick::Skip);
+    }
+
+    #[test]
+    fn the_minute_boundary_and_a_missed_one_redraw_everything() {
+        for shown in [true, false] {
+            assert_eq!(clock_tick_plan(true, 0, shown, SOON), ClockTick::Full);
+            assert_eq!(
+                clock_tick_plan(true, 33, shown, CLOCK_FULL_EVERY),
+                ClockTick::Full
+            );
+        }
+    }
+
+    #[test]
+    fn a_label_a_pixel_off_still_fits() {
+        assert!(label_fits_slot(50.0, 50.0));
+        assert!(label_fits_slot(50.0, 51.0));
+        assert!(label_fits_slot(50.0, 49.0));
+        assert!(!label_fits_slot(50.0, 52.0));
+        assert!(!label_fits_slot(50.0, 48.5));
+    }
+
+    #[test]
+    fn a_burst_of_tray_changes_arms_the_timer_once() {
+        let mut armed = false;
+        assert!(arm_tray_flush(&mut armed));
+        assert!(!arm_tray_flush(&mut armed));
+        assert!(!arm_tray_flush(&mut armed));
+        armed = false;
+        assert!(arm_tray_flush(&mut armed));
     }
 }
 
@@ -4747,5 +6879,36 @@ mod mascot_tests {
         after.providers[Provider::Claude as usize].fetched_at =
             now.checked_sub(std::time::Duration::from_secs(60));
         assert!(usage_moment(&before, &after, &active).is_none());
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn bar_items_run_right_to_left_and_skip_invisible() {
+        let order = [
+            MenuBarItem::Widgets,
+            MenuBarItem::Battery,
+            MenuBarItem::Wifi,
+            MenuBarItem::ControlCenter,
+        ];
+        assert_eq!(
+            bar_items(&order, |item| item != MenuBarItem::Wifi),
+            [
+                MenuBarItem::ControlCenter,
+                MenuBarItem::Battery,
+                MenuBarItem::Widgets
+            ]
+        );
+    }
+
+    #[test]
+    fn glass_alpha_follows_strength() {
+        assert_eq!(glass_alpha(true, 50), 100);
+        assert_eq!(glass_alpha(false, 50), 115);
+        assert_eq!(glass_alpha(false, 100), 180);
+        assert_eq!(glass_alpha(true, 0), 40);
     }
 }
