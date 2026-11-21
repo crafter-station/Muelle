@@ -92,6 +92,8 @@ pub struct Config {
     pub menu_bar_bluetooth: bool,
     /// Show battery percentage in the menu bar (`None` follows Windows setting).
     pub menu_bar_battery_percent: Option<bool>,
+    /// Show Muelle's macOS-style Control Center panel instead of Windows Quick Settings.
+    pub control_center: bool,
     /// The dot under apps that have windows open.
     pub show_indicators: bool,
     /// The section of recently used apps that are not pinned.
@@ -270,6 +272,7 @@ impl Default for Config {
             menu_bar_widgets: None,
             menu_bar_bluetooth: false,
             menu_bar_battery_percent: None,
+            control_center: true,
             show_indicators: true,
             show_recents: true,
             bounce_on_open: true,

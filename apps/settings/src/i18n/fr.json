@@ -48,6 +48,8 @@
   "menuBarBluetoothHint": "Affiche le statut Bluetooth et ouvre ses paramètres à côté du Wi-Fi.",
   "menuBarBatteryPercent": "Afficher le pourcentage de batterie",
   "menuBarBatteryPercentHint": "Affiche le pourcentage à côté de l'icône de batterie.",
+  "controlCenter": "Afficher le Centre de contrôle dans la barre de menus",
+  "controlCenterHint": "Ouvre le panneau de verre de Muelle pour la luminosité, le son et les raccourcis.",
   "menuBarSearch": "Bouton de recherche",
   "menuBarSearchHint": "Affiche le bouton de recherche Windows.",
   "menuBarTaskView": "Bouton Vue des tâches",

@@ -32,6 +32,7 @@ export interface Config {
   menuBarWidgets: boolean | null;
   menuBarBluetooth: boolean;
   menuBarBatteryPercent: boolean | null;
+  controlCenter: boolean;
   showIndicators: boolean;
   showRecents: boolean;
   bounceOnOpen: boolean;

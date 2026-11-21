@@ -2,6 +2,7 @@
 
 pub mod attention;
 pub mod bounce;
+pub mod control_center;
 pub mod frame;
 pub mod genie;
 pub mod layout;

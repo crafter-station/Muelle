@@ -4103,6 +4103,19 @@ impl App {
         menu_bar_refresh();
     }
 
+    pub fn toggle_control_center(&mut self, anchor_x: f32, anchor_y: f32) -> Result<()> {
+        if self.config.control_center {
+            let scale = self.dock_monitor().map_or(1.0, |m| m.scale);
+            let theme = Theme::for_system(uses_light_theme(), transparency_enabled());
+            crate::control_center::ControlCenterView::toggle(
+                &self.gfx, anchor_x, anchor_y, scale, theme,
+            )
+        } else {
+            launcher::open_quick_settings();
+            Ok(())
+        }
+    }
+
     fn sync_attention_visuals(&mut self) -> Result<()> {
         if let Some(stage) = &mut self.stage {
             stage.scene.set_attention(

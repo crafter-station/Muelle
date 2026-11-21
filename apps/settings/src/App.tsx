@@ -505,6 +505,13 @@ export function App() {
               </Card>
               {config.menuBar && (
                 <Card title={t.menuBarItems}>
+                  <Row icon={<SettingIcon name="sliders" />} label={t.controlCenter} hint={t.controlCenterHint}>
+                    <Toggle
+                      label={t.controlCenter}
+                      checked={config.controlCenter}
+                      onChange={(controlCenter) => update({ controlCenter })}
+                    />
+                  </Row>
                   <Row icon={<SettingIcon name="bluetooth" />} label={t.menuBarBluetooth} hint={t.menuBarBluetoothHint}>
                     <Toggle
                       label={t.menuBarBluetooth}

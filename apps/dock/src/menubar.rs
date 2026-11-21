@@ -1729,7 +1729,11 @@ impl MenuBar {
         });
         match hit.map(|(_, _, action)| *action) {
             Some(Action::AccessoryIndicator) => {}
-            Some(Action::QuickSettings) => launcher::open_quick_settings(),
+            Some(Action::QuickSettings) => {
+                crate::app::with_app("toggle control center", |app| {
+                    app.toggle_control_center(anchor.0 as f32, anchor.1 as f32)
+                });
+            }
             Some(Action::Notifications) => launcher::open_notifications(),
             Some(Action::ToggleDnd) => {
                 crate::app::with_app("toggle dnd", |app| {

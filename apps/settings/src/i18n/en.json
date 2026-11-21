@@ -48,6 +48,8 @@
   "menuBarBluetoothHint": "Show Bluetooth status and open settings beside Wi-Fi.",
   "menuBarBatteryPercent": "Show battery percentage",
   "menuBarBatteryPercentHint": "Display the charge percentage next to the battery icon.",
+  "controlCenter": "Show Control Center in menu bar",
+  "controlCenterHint": "Open Muelle's glass Control Center panel for brightness, sound and quick toggles.",
   "menuBarSearch": "Search button",
   "menuBarSearchHint": "Show the Windows search button.",
   "menuBarTaskView": "Task View button",
