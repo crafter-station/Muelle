@@ -185,6 +185,7 @@ pub struct MenuBarWidgets {
     pub bluetooth: bool,
     pub battery_percent: Option<bool>,
     pub island_style: IslandStyle,
+    pub island: bool,
 }
 
 impl Default for MenuBarWidgets {
@@ -196,6 +197,7 @@ impl Default for MenuBarWidgets {
             bluetooth: true,
             battery_percent: None,
             island_style: IslandStyle::Notch,
+            island: true,
         }
     }
 }
@@ -2153,6 +2155,10 @@ impl MenuBar {
         left_end: f32,
         right_start: f32,
     ) -> Result<()> {
+        if !look.widgets.island {
+            self.cover = None;
+            return Ok(());
+        }
         let px = |logical: f32| (logical * look.scale).round();
         let style = look.widgets.island_style;
         let cover = if let Some(track) = &look.track {

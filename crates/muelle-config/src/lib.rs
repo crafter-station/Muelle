@@ -76,6 +76,8 @@ pub struct Config {
     /// Show what is playing (title, controls) in the menu bar. With this and
     /// `ai_usage` off there is no island at all (issue #28).
     pub menu_bar_music: bool,
+    /// Show the curved notch / dynamic island in the menu bar (issue #28).
+    pub menu_bar_island: bool,
     /// Visual style and placement of the music and AI usage island in the menu bar.
     pub menu_bar_island_style: IslandStyle,
     /// Opt-in peripheral monitoring. Off means no accessory reader or queries.
@@ -260,6 +262,7 @@ impl Default for Config {
             menu_bar_auto_hide: false,
             ai_usage: true,
             menu_bar_music: true,
+            menu_bar_island: true,
             menu_bar_island_style: IslandStyle::Notch,
             accessory_battery: false,
             menu_bar_search: None,
@@ -539,6 +542,7 @@ mod tests {
         assert!(config.auto_update);
         assert!(config.ai_usage);
         assert!(config.menu_bar_music);
+        assert!(config.menu_bar_island);
         assert!(!config.accessory_battery);
         assert!(!config.show_minimized);
     }
@@ -695,6 +699,16 @@ mod tests {
         assert_eq!(fast.genie_speed, GenieSpeed::Faster);
         assert!(GenieSpeed::Faster.seconds() < GenieSpeed::Fast.seconds());
         assert!(GenieSpeed::Fast.seconds() < GenieSpeed::Normal.seconds());
+    }
+
+    #[test]
+    fn menu_bar_island_deserializes_from_json() {
+        let legacy: Config = serde_json::from_str("{}").unwrap_or_default();
+        assert!(legacy.menu_bar_island);
+
+        let disabled: Config =
+            serde_json::from_str(r#"{"menuBarIsland":false}"#).unwrap_or_default();
+        assert!(!disabled.menu_bar_island);
     }
 
     #[test]

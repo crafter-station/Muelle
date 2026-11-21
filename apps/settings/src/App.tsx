@@ -475,14 +475,21 @@ export function App() {
                     onChange={(menuBarAutoHide) => update({ menuBarAutoHide })}
                   />
                 </SubRow>
-                <SubRow label={t.menuBarMusic} hint={t.menuBarMusicHint} open={config.menuBar}>
+                <SubRow label={t.menuBarIsland} hint={t.menuBarIslandHint} open={config.menuBar}>
+                  <Toggle
+                    label={t.menuBarIsland}
+                    checked={config.menuBarIsland}
+                    onChange={(menuBarIsland) => update({ menuBarIsland })}
+                  />
+                </SubRow>
+                <SubRow label={t.menuBarMusic} hint={t.menuBarMusicHint} open={config.menuBar && config.menuBarIsland}>
                   <Toggle
                     label={t.menuBarMusic}
                     checked={config.menuBarMusic}
                     onChange={(menuBarMusic) => update({ menuBarMusic })}
                   />
                 </SubRow>
-                <SubRow label={t.aiUsage} hint={t.aiUsageHint} open={config.menuBar}>
+                <SubRow label={t.aiUsage} hint={t.aiUsageHint} open={config.menuBar && config.menuBarIsland}>
                   <Toggle
                     label={t.aiUsage}
                     checked={config.aiUsage}
@@ -492,7 +499,7 @@ export function App() {
                 <SubRow
                   label={t.islandStyle}
                   stacked
-                  open={config.menuBar && (config.menuBarMusic || config.aiUsage)}
+                  open={config.menuBar && config.menuBarIsland && (config.menuBarMusic || config.aiUsage)}
                 >
                   <VisualChoices<IslandStyle>
                     label={t.islandStyle}
