@@ -218,7 +218,7 @@ const MASCOT_TIMER: usize = 14;
 const MASCOT_POLL_MS: u32 = 50;
 const EDGE_TIMER: usize = 15;
 /// The charger act at most this often, however many times it is plugged.
-const CHARGING_AGAIN: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+const CHARGING_AGAIN: std::time::Duration = std::time::Duration::from_secs(10);
 const PREVIEW_DWELL_MS: u32 = 420;
 const UPDATE_EVERY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 /// After the dock starts, the look waits this long, so it never slows signing in.
@@ -2645,23 +2645,33 @@ impl App {
     /// The charger plugged in or out, or energy saver turned on: the crab walks
     /// along the dock. Only on the change itself, never at startup.
     fn power_moment(&mut self) {
-        let now = (
-            muelle_shell::system::battery().map(|battery| battery.charging),
-            muelle_shell::system::energy_saver_on(),
-        );
+        let battery_charging = muelle_shell::system::battery().map(|battery| battery.charging);
+        let saver = muelle_shell::system::energy_saver_on();
+        // If battery state is temporarily unavailable (e.g. transient read during AC transition),
+        // retain the last known charging state so we don't drop the transition.
+        let charging = battery_charging.or_else(|| self.power_seen.and_then(|(c, _)| c));
+        let now = (charging, saver);
         let before = self.power_seen.replace(now);
+        // When on battery (unplugged), reset the charging cooldown so plugging in
+        // always triggers the mascot reaction immediately.
+        if now.0 == Some(false) {
+            self.charging_shown = None;
+        }
         let charging_allowed = self
             .charging_shown
             .is_none_or(|shown| shown.elapsed() >= CHARGING_AGAIN);
         let act = power_act(before, now, charging_allowed);
         if let Some(act) = act {
+            if act == mascot::Act::Unplugged {
+                self.charging_shown = None;
+            }
             if matches!(act, mascot::Act::Charging | mascot::Act::Unplugged)
                 && self.config.mascot
                 && !self.fullscreen
                 && animations_enabled()
             {
-                // A disconnect must still show if it happens during the
-                // charging reaction; keep only one scene and cleanup timer.
+                // A disconnect or reconnect must still show if it happens during
+                // an ongoing reaction; keep only one scene and cleanup timer.
                 self.stop_mascot();
             }
             if self.can_perform()
@@ -6330,6 +6340,18 @@ mod mascot_power_tests {
         ] {
             assert_eq!(power_act(Some((before, false)), (now, false), true), None);
         }
+    }
+
+    #[test]
+    fn reconnecting_after_unplugging_plays_charging() {
+        assert_eq!(
+            power_act(Some((Some(true), false)), (Some(false), false), false),
+            Some(Act::Unplugged)
+        );
+        assert_eq!(
+            power_act(Some((Some(false), false)), (Some(true), false), true),
+            Some(Act::Charging)
+        );
     }
 }
 

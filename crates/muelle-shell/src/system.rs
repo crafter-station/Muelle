@@ -321,12 +321,12 @@ pub fn battery() -> Option<Battery> {
     // SAFETY: `status` is a valid structure the call fills in.
     unsafe { GetSystemPowerStatus(&mut status) }.ok()?;
     let saver = energy_saver_on();
+    let charging = crate::power::notified_ac_online().unwrap_or(status.ACLineStatus == 1);
     (status.BatteryFlag & NO_BATTERY == 0
-        && status.BatteryFlag != UNKNOWN
-        && status.BatteryLifePercent <= 100)
+        && (status.BatteryLifePercent <= 100 || status.BatteryFlag != UNKNOWN))
         .then_some(Battery {
-            percent: status.BatteryLifePercent,
-            charging: status.ACLineStatus == 1,
+            percent: status.BatteryLifePercent.min(100),
+            charging,
             saver,
         })
 }

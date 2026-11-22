@@ -30,12 +30,30 @@ use windows::core::GUID;
 
 /// The newer notification distinguishes standard and high-savings modes.
 const GUID_ENERGY_SAVER_STATUS: GUID = GUID::from_u128(0x550e8400_e29b_41d4_a716_446655440000);
+/// Notifies when the power source switches between AC and DC (battery).
+pub const GUID_ACDC_POWER_SOURCE: GUID = GUID::from_u128(0x5d3e9a59_e9ae_4600_9eef_a33423c12132);
+
 const UNKNOWN: u8 = 0;
 const BATTERY_OFF: u8 = 1;
 const BATTERY_ON: u8 = 2;
 const ENERGY_OFF: u8 = 3;
 const ENERGY_ON: u8 = 4;
 static SAVER: SaverState = SaverState(AtomicU8::new(UNKNOWN));
+
+const AC_UNKNOWN: u8 = 0;
+const AC_OFFLINE: u8 = 1;
+const AC_ONLINE: u8 = 2;
+static AC_LINE: AtomicU8 = AtomicU8::new(AC_UNKNOWN);
+
+/// The last AC line power source supplied by Windows, or None if unknown.
+#[must_use]
+pub fn notified_ac_online() -> Option<bool> {
+    match AC_LINE.load(Ordering::Relaxed) {
+        AC_OFFLINE => Some(false),
+        AC_ONLINE => Some(true),
+        _ => None,
+    }
+}
 
 struct SaverState(AtomicU8);
 
@@ -81,7 +99,13 @@ pub(crate) fn notified_saver_state() -> Option<bool> {
 pub unsafe fn power_setting_changed(data: windows::Win32::Foundation::LPARAM) {
     // SAFETY: This function's caller guarantees the notification's lifetime.
     if let Some((setting, value)) = unsafe { saver_notification(data) } {
-        SAVER.update(setting, value);
+        if setting == GUID_ACDC_POWER_SOURCE {
+            // 0: AC power, 1: DC (battery), 2: short term / UPS.
+            let next = if value == 0 { AC_ONLINE } else { AC_OFFLINE };
+            AC_LINE.store(next, Ordering::Relaxed);
+        } else {
+            SAVER.update(setting, value);
+        }
     }
 }
 
@@ -184,21 +208,25 @@ impl SaverWatch {
             Foundation::HANDLE, System::Power::RegisterPowerSettingNotification,
             UI::WindowsAndMessaging::DEVICE_NOTIFY_WINDOW_HANDLE,
         };
-        let handles = [GUID_ENERGY_SAVER_STATUS, GUID_POWER_SAVING_STATUS]
-            .iter()
-            .filter_map(|setting| {
-                // SAFETY: `hwnd` is the caller's live window; an unknown
-                // setting on an older Windows just fails.
-                unsafe {
-                    RegisterPowerSettingNotification(
-                        HANDLE(hwnd as *mut c_void),
-                        setting,
-                        DEVICE_NOTIFY_WINDOW_HANDLE,
-                    )
-                }
-                .ok()
-            })
-            .collect();
+        let handles = [
+            GUID_ENERGY_SAVER_STATUS,
+            GUID_POWER_SAVING_STATUS,
+            GUID_ACDC_POWER_SOURCE,
+        ]
+        .iter()
+        .filter_map(|setting| {
+            // SAFETY: `hwnd` is the caller's live window; an unknown
+            // setting on an older Windows just fails.
+            unsafe {
+                RegisterPowerSettingNotification(
+                    HANDLE(hwnd as *mut c_void),
+                    setting,
+                    DEVICE_NOTIFY_WINDOW_HANDLE,
+                )
+            }
+            .ok()
+        })
+        .collect();
         Self(handles)
     }
 }
