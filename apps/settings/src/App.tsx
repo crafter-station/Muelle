@@ -10,6 +10,7 @@ import {
   type GenieSpeed,
   type IslandStyle,
   type Language,
+  type MascotKind,
   type UpdateInfo,
   type WindowsPreferences,
   ICON_SIZE,
@@ -432,6 +433,19 @@ export function App() {
                     onChange={(mascot) => update({ mascot })}
                   />
                 </Row>
+                <SubRow label={t.mascotPet} open={config.mascot}>
+                  <Segmented<MascotKind>
+                    label={t.mascotPet}
+                    value={config.mascotKind ?? "crab"}
+                    options={[
+                      { value: "crab", label: t.petCrab },
+                      { value: "whale", label: t.petWhale },
+                      { value: "spark", label: t.petSpark },
+                      { value: "bot", label: t.petBot },
+                    ]}
+                    onChange={(mascotKind) => update({ mascotKind })}
+                  />
+                </SubRow>
                 <Row icon={<SettingIcon name="indicators" />} label={t.showIndicators}>
                   <Toggle
                     label={t.showIndicators}

@@ -33,6 +33,7 @@ const base = {
   showDownloads: true,
   menuBarIslandStyle: "notch", menuBarSearch: null, menuBarTaskView: null,
   menuBarWidgets: null, menuBarBatteryPercent: null, checkUpdates: false,
+  mascot: true, mascotKind: "crab",
   pinned: [], recent: [], mutedApps: [], shortcutsFolder: null,
 };
 const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
