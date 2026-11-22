@@ -110,6 +110,8 @@ pub struct Config {
     /// The crab comes out for moments worth it (an AI plan resetting or
     /// running out, the charger, energy saver).
     pub mascot: bool,
+    /// Which pet mascot appears for special moments.
+    pub mascot_kind: MascotKind,
     /// Settings asks GitHub Releases for a newer version when it opens. The
     /// only network access in Muelle, so it can be turned off.
     pub check_updates: bool,
@@ -242,6 +244,22 @@ impl GenieSpeed {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+pub enum MascotKind {
+    /// DeepSeek blue whale mascot.
+    Whale,
+    /// Gemini celestial star/spark.
+    Spark,
+    /// Codex retro green robot.
+    Bot,
+    /// The classic crab (Ferris/Claude). Also what an unknown value from a
+    /// newer version reads as (serde needs this fallback last).
+    #[default]
+    #[serde(other)]
+    Crab,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum IslandStyle {
     /// Compact rounded bubble placed next to the right-side status indicators.
     Bubble,
@@ -333,6 +351,7 @@ impl Default for Config {
             show_recents: true,
             bounce_on_open: true,
             mascot: true,
+            mascot_kind: MascotKind::Crab,
             check_updates: true,
             auto_update: true,
             language: Language::Auto,
@@ -478,6 +497,25 @@ fn write_config(path: &Path, config: &Config) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mascot_kind_defaults_to_crab_and_unknown_falls_back() -> Result<(), serde_json::Error> {
+        let default_config: Config = serde_json::from_str(r#"{}"#)?;
+        assert_eq!(default_config.mascot_kind, MascotKind::Crab);
+
+        let whale_config: Config = serde_json::from_str(r#"{"mascotKind":"whale"}"#)?;
+        assert_eq!(whale_config.mascot_kind, MascotKind::Whale);
+
+        let spark_config: Config = serde_json::from_str(r#"{"mascotKind":"spark"}"#)?;
+        assert_eq!(spark_config.mascot_kind, MascotKind::Spark);
+
+        let bot_config: Config = serde_json::from_str(r#"{"mascotKind":"bot"}"#)?;
+        assert_eq!(bot_config.mascot_kind, MascotKind::Bot);
+
+        let unknown_config: Config = serde_json::from_str(r#"{"mascotKind":"dragon"}"#)?;
+        assert_eq!(unknown_config.mascot_kind, MascotKind::Crab);
+        Ok(())
+    }
 
     #[test]
     fn older_configs_keep_the_original_dock_defaults() -> Result<(), serde_json::Error> {
