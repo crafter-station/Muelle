@@ -10,6 +10,7 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Added customizable pet mascots (Crab, DeepSeek Whale, Gemini Spark, and Codex Robot) for special moments (charging, energy saver, AI quota thresholds) with a pet selector in Settings.
 - Dock unread counts now take precedence over generic attention dots, avoiding
   overlapping badges. Counts update and clear without rebuilding the dock.
 - Fixed the music popup's mute hit target and removed the stray volume-slider
@@ -21,6 +22,7 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
+- Añadidas mascotas interactivas personalizables (Cangrejo, Ballena de DeepSeek, Destello de Gemini y Robot de Codex) para momentos especiales (carga, ahorro de batería y cuotas de IA) con selector en Ajustes.
 - El contador del Dock tiene prioridad sobre el punto de atención, evitando
   insignias superpuestas. Se actualiza y se borra sin reconstruir el dock.
 - Corregida la zona de clic de silencio en música y retirado el punto suelto
