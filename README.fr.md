@@ -63,7 +63,7 @@ Agrandissement fluide, aperçus des fenêtres en direct et effet génie facultat
   Claude Code, Codex, OpenCode Go, Z.ai GLM Coding Plan, Gemini CLI et
   Antigravity. Z.ai affiche ses quotas sur 5 heures et sur une semaine ; les
   quotas Gemini Pro et Flash s'affichent séparément quand ils sont disponibles.
-- Animaux de compagnie interactifs (Crabe, Baleine DeepSeek, Étincelle Gemini et Robot Codex) qui réagissent à la charge, à l'économiseur d'énergie et aux quotas d'IA, configurables dans Réglages.
+- Animaux de compagnie interactifs (Clawd le crabe, Chat calico, Baleine DeepSeek et Cloudling) qui réagissent à la charge, à l'économiseur d'énergie et aux quotas d'IA, configurables dans Réglages.
 - Une app Réglages séparée, aux changements appliqués en direct, en espagnol,
   anglais et français, avec une animation de réduction façon génie
   configurable.

@@ -45,7 +45,7 @@ en desarrollo activo.
   OpenCode Go, Z.ai GLM Coding Plan, Gemini CLI y Antigravity. Z.ai muestra
   sus límites de 5 horas y de la semana; las cuotas de Gemini Pro y Flash
   aparecen por separado cuando están disponibles.
-- Mascotas interactivas (Cangrejo, Ballena de DeepSeek, Destello de Gemini y Robot de Codex) que reaccionan a la carga, ahorro de batería y cuotas de IA, configurables en Ajustes.
+- Mascotas interactivas (Cangrejo Clawd, Gato Calicó, Ballena de DeepSeek y Nubecita Cloudling) que reaccionan a la carga, ahorro de batería y cuotas de IA, configurables en Ajustes.
 - App de Ajustes aparte, con cambios en vivo, en español, inglés y francés, y efecto genio configurable.
 - Un proceso guardián devuelve la barra de tareas de Windows si el dock se cierra de forma inesperada.
 

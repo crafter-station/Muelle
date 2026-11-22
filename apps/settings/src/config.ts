@@ -7,7 +7,7 @@ export type GenieSpeed = "normal" | "fast" | "faster";
 export type DockPosition = "left" | "bottom" | "right";
 export type DockDensity = "compact" | "normal" | "spacious";
 export type DockAutoHideSpeed = "smooth" | "normal" | "fast";
-export type MascotKind = "crab" | "whale" | "spark" | "bot";
+export type MascotKind = "crab" | "cat" | "whale" | "cloud" | "spark" | "bot";
 
 /** Mirrors `muelle_config::Config`. */
 export interface Config {

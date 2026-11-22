@@ -439,9 +439,9 @@ export function App() {
                     value={config.mascotKind ?? "crab"}
                     options={[
                       { value: "crab", label: t.petCrab },
+                      { value: "cat", label: t.petCat },
                       { value: "whale", label: t.petWhale },
-                      { value: "spark", label: t.petSpark },
-                      { value: "bot", label: t.petBot },
+                      { value: "cloud", label: t.petCloud },
                     ]}
                     onChange={(mascotKind) => update({ mascotKind })}
                   />

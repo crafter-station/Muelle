@@ -49,7 +49,7 @@
   OpenCode Go, Z.ai GLM Coding Plan, Gemini CLI, and Antigravity. Z.ai shows
   its 5-hour and weekly limits; Gemini Pro and Flash quotas appear separately
   when available.
-- Interactive pet mascots (Crab, DeepSeek Whale, Gemini Spark, and Codex Robot) that react to charging, battery saver, and AI plan changes, configurable in Settings.
+- Interactive pet mascots (Clawd the Crab, Calico Cat, DeepSeek Whale, and Cloudling) that react to charging, battery saver, and AI plan changes, configurable in Settings.
 - Separate Settings app with live changes, Spanish, English and French, and a
   configurable Genie-style minimize animation.
 - A watchdog restores the Windows taskbar if the dock exits unexpectedly.

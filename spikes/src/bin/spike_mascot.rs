@@ -37,7 +37,9 @@ fn main() {
         _ => mascot::Act::Fresh,
     };
     let pet = match std::env::var("PET").ok().as_deref() {
+        Some("cat") | Some("calico") => muelle_config::MascotKind::Cat,
         Some("whale") => muelle_config::MascotKind::Whale,
+        Some("cloud") | Some("cloudling") => muelle_config::MascotKind::Cloud,
         Some("spark") => muelle_config::MascotKind::Spark,
         Some("bot") => muelle_config::MascotKind::Bot,
         _ => muelle_config::MascotKind::Crab,

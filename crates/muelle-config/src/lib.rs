@@ -245,8 +245,12 @@ impl GenieSpeed {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MascotKind {
+    /// Calico cat companion (三花猫).
+    Cat,
     /// DeepSeek blue whale mascot.
     Whale,
+    /// Cloudling cloud companion (云宝).
+    Cloud,
     /// Gemini celestial star/spark.
     Spark,
     /// Codex retro green robot.
@@ -503,8 +507,14 @@ mod tests {
         let default_config: Config = serde_json::from_str(r#"{}"#)?;
         assert_eq!(default_config.mascot_kind, MascotKind::Crab);
 
+        let cat_config: Config = serde_json::from_str(r#"{"mascotKind":"cat"}"#)?;
+        assert_eq!(cat_config.mascot_kind, MascotKind::Cat);
+
         let whale_config: Config = serde_json::from_str(r#"{"mascotKind":"whale"}"#)?;
         assert_eq!(whale_config.mascot_kind, MascotKind::Whale);
+
+        let cloud_config: Config = serde_json::from_str(r#"{"mascotKind":"cloud"}"#)?;
+        assert_eq!(cloud_config.mascot_kind, MascotKind::Cloud);
 
         let spark_config: Config = serde_json::from_str(r#"{"mascotKind":"spark"}"#)?;
         assert_eq!(spark_config.mascot_kind, MascotKind::Spark);
