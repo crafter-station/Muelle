@@ -2538,7 +2538,9 @@ impl App {
             return;
         }
         let scale = self.stage.as_ref().map_or(1.0, |stage| stage.scale);
-        let Some(mascot) = mascot::Mascot::play(&self.gfx, act, place, scale) else {
+        let Some(mascot) =
+            mascot::Mascot::play(&self.gfx, self.config.mascot_kind, act, place, scale)
+        else {
             return;
         };
         self.mascot = Some(mascot);

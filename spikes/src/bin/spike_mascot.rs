@@ -36,6 +36,12 @@ fn main() {
         Some("sleepy") => mascot::Act::Sleepy,
         _ => mascot::Act::Fresh,
     };
+    let pet = match std::env::var("PET").ok().as_deref() {
+        Some("whale") => muelle_config::MascotKind::Whale,
+        Some("spark") => muelle_config::MascotKind::Spark,
+        Some("bot") => muelle_config::MascotKind::Bot,
+        _ => muelle_config::MascotKind::Crab,
+    };
     let out = std::path::PathBuf::from(std::env::args().nth(2).expect("out folder"));
     std::fs::create_dir_all(&out).unwrap();
     unsafe {
@@ -71,7 +77,7 @@ fn main() {
             _ => None,
         };
         if let Some(place) = exact {
-            let mut crab = mascot::Mascot::play(&gfx, act, place, 1.25).expect("play");
+            let mut crab = mascot::Mascot::play(&gfx, pet, act, place, 1.25).expect("play");
             let mut msg = MSG::default();
             while !crab.finished() {
                 while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
@@ -107,7 +113,7 @@ fn main() {
                 },
             ),
         };
-        let mut crab = mascot::Mascot::play(&gfx, act, place, 1.25).expect("play");
+        let mut crab = mascot::Mascot::play(&gfx, pet, act, place, 1.25).expect("play");
         let start = Instant::now();
         let marks = [0.15, 0.35, 0.7, 1.2, 1.8, 2.4, 3.1, 4.2];
         let mut next = 0;

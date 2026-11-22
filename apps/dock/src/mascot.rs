@@ -12,6 +12,7 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use muelle_config::MascotKind;
 use muelle_core::frame::DockEdge;
 use muelle_shell::icons::IconImage;
 use windows::{
@@ -41,9 +42,30 @@ use crate::gfx::Gfx;
 fn color(cell: u8) -> Option<[u8; 3]> {
     Some(match cell {
         b'k' | b'e' => [43, 20, 18],
+        // Crab (Ferris/Claude)
         b'o' => [232, 116, 64],
         b'h' => [255, 214, 160],
         b'd' => [204, 84, 44],
+        // Whale (DeepSeek)
+        b'w' => [30, 115, 220],
+        b'W' => [90, 175, 255],
+        b'D' => [18, 80, 165],
+        b't' => [245, 248, 255],
+        b'T' => [205, 218, 235],
+        b's' => [120, 210, 255],
+        // Spark (Gemini)
+        b'g' => [111, 146, 255],
+        b'G' => [195, 218, 255],
+        b'j' => [70, 95, 210],
+        b'y' => [255, 215, 80],
+        b'Y' => [255, 245, 175],
+        // Bot (Codex)
+        b'c' => [78, 186, 135],
+        b'C' => [140, 225, 185],
+        b'x' => [45, 125, 90],
+        b'v' => [22, 36, 32],
+        b'l' => [110, 255, 200],
+        // Emotes & details
         b'p' => [244, 140, 140],
         b'm' => [226, 70, 60],
         b'b' => [70, 160, 235],
@@ -57,8 +79,8 @@ fn color(cell: u8) -> Option<[u8; 3]> {
 
 const WIDTH: usize = 22;
 
-/// The body, 22 cells wide, without a face.
-const BODY: [&str; 12] = [
+/// The crab body, 22 cells wide.
+const CRAB_BODY: [&str; 12] = [
     "....kkkkkkkkkkkkkk....",
     "...khhooooooooooook...",
     "...khoooooooooooook...",
@@ -73,8 +95,8 @@ const BODY: [&str; 12] = [
     "...kddddddddddddddk...",
 ];
 
-/// The legs standing, and mid-step (the first and third lifted).
-const LEGS: [[&str; 3]; 2] = [
+/// The crab legs: standing, and mid-step.
+const CRAB_LEGS: [[&str; 3]; 2] = [
     [
         "...kddkkddkkddkkddk...",
         "...kddkkddkkddkkddk...",
@@ -86,6 +108,115 @@ const LEGS: [[&str; 3]; 2] = [
         ".......kkkk....kkkk...",
     ],
 ];
+
+/// DeepSeek whale body, 22 cells wide.
+const WHALE_BODY: [&str; 12] = [
+    ".........kkskk........",
+    ".......kkwWwwkk.......",
+    ".....kkwWWwwwwwwkk....",
+    "...kkwWWwwwwwwwwwwkk..",
+    "..kkwWwwwwwwwwwwwwwwk.",
+    ".kkwWwwwwwwwwwwwwwwwkk",
+    "kkwwwwwwwwwwwwwwwwwkkk",
+    "kwwwwwwwwwwwwwwwwwwkkk",
+    "kkwwwwwwwwwwwwwwwwwkk.",
+    ".kkwtttttttttttttwwkk.",
+    "..kktttttTTttttttwkk..",
+    "...kkttttTTttttkkk....",
+];
+
+/// Whale fins: resting, and swimming/waddling.
+const WHALE_LEGS: [[&str; 3]; 2] = [
+    [
+        "..kwwkk..kkttkk..kkwwk",
+        "...kkk...kkkkkk...kkk.",
+        "..........kkkk........",
+    ],
+    [
+        ".kkwwk...kkttkk...kwwk",
+        "..kkk....kkkkkk....kkk",
+        "..........kkkk........",
+    ],
+];
+
+/// Gemini spark star body, 22 cells wide.
+const SPARK_BODY: [&str; 12] = [
+    "..........kk..........",
+    ".........kGGk.........",
+    "........kGGggk........",
+    ".......kGGggggk.......",
+    "....kkkGGgyygggkkk....",
+    "..kkGGGGggyyygggGGkk..",
+    "kkGGGGGGgyyyyggggGkkkk",
+    "..kkGGGGggyyygggGGkk..",
+    "....kkkjggyyjjjkkk....",
+    ".......kjgjjjjk.......",
+    "........kjjjjk........",
+    ".........kjjk.........",
+];
+
+/// Spark celestial feet: standing, and sparkle step.
+const SPARK_LEGS: [[&str; 3]; 2] = [
+    [
+        "........kkggkk........",
+        ".......kGkkkkGk.......",
+        ".......kkk..kkk.......",
+    ],
+    [
+        ".......kggkkkgk.......",
+        "........kk...kkGk.....",
+        "..............kkk.....",
+    ],
+];
+
+/// Codex retro robot body, 22 cells wide.
+const BOT_BODY: [&str; 12] = [
+    "..........ll..........",
+    "..........kk..........",
+    ".....kkkkkkkkkkkk.....",
+    "....kCCCCcccccccxk....",
+    "...kCCvvvvvvvvvvxxk...",
+    "...kCCvvvvvvvvvvxxk...",
+    "...kCCvvvvvvvvvvxxk...",
+    "...kCCvvvvvvvvvvxxk...",
+    "....kCccccccccccxk....",
+    "...kkkCccccccccxkkk...",
+    "..kxxkCccccccccxkxxk..",
+    "..kkkkxxxxxxxxxxkkkk..",
+];
+
+/// Bot mechanical legs: standing, and marching.
+const BOT_LEGS: [[&str; 3]; 2] = [
+    [
+        "....kkkk......kkkk....",
+        "....kxxk......kxxk....",
+        "...kkkkkk....kkkkkk...",
+    ],
+    [
+        "....kkkk.......kkk....",
+        "...kkkkkk.....kxxk....",
+        ".............kkkkkk...",
+    ],
+];
+
+fn pet_body(kind: MascotKind) -> [&'static str; 12] {
+    match kind {
+        MascotKind::Crab => CRAB_BODY,
+        MascotKind::Whale => WHALE_BODY,
+        MascotKind::Spark => SPARK_BODY,
+        MascotKind::Bot => BOT_BODY,
+    }
+}
+
+fn pet_legs(kind: MascotKind, step: bool) -> [&'static str; 3] {
+    let frame = usize::from(step);
+    match kind {
+        MascotKind::Crab => CRAB_LEGS[frame],
+        MascotKind::Whale => WHALE_LEGS[frame],
+        MascotKind::Spark => SPARK_LEGS[frame],
+        MascotKind::Bot => BOT_LEGS[frame],
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Face {
@@ -106,61 +237,185 @@ impl Face {
         Self::Sleep,
     ];
 
-    /// (row, column, cell) drawn over the body.
-    fn marks(self) -> &'static [(usize, usize, u8)] {
-        match self {
-            Self::Neutral => &[
-                (5, 7, b'e'),
-                (6, 7, b'e'),
-                (7, 7, b'e'),
-                (5, 14, b'e'),
-                (6, 14, b'e'),
-                (7, 14, b'e'),
-            ],
-            Self::Happy => &[
-                (6, 6, b'e'),
-                (5, 7, b'e'),
-                (6, 8, b'e'),
-                (6, 13, b'e'),
-                (5, 14, b'e'),
-                (6, 15, b'e'),
-                (7, 10, b'e'),
-                (7, 11, b'e'),
-                (8, 10, b'm'),
-                (8, 11, b'm'),
-            ],
-            Self::Love => &[
-                (5, 6, b'e'),
-                (6, 7, b'e'),
-                (7, 6, b'e'),
-                (5, 15, b'e'),
-                (6, 14, b'e'),
-                (7, 15, b'e'),
-                (7, 4, b'p'),
-                (7, 5, b'p'),
-                (7, 16, b'p'),
-                (7, 17, b'p'),
-            ],
-            Self::Sad => &[
-                (6, 6, b'e'),
-                (7, 7, b'e'),
-                (6, 8, b'e'),
-                (6, 13, b'e'),
-                (7, 14, b'e'),
-                (6, 15, b'e'),
-                (8, 15, b'b'),
-                (9, 15, b'b'),
-            ],
-            Self::Sleep => &[
-                (6, 6, b'e'),
-                (6, 7, b'e'),
-                (6, 8, b'e'),
-                (6, 13, b'e'),
-                (6, 14, b'e'),
-                (6, 15, b'e'),
-                (8, 10, b'm'),
-                (8, 11, b'm'),
-            ],
+    /// (row, column, cell) drawn over the body for `kind`.
+    fn marks(self, kind: MascotKind) -> &'static [(usize, usize, u8)] {
+        match kind {
+            MascotKind::Crab => match self {
+                Self::Neutral => &[
+                    (5, 7, b'e'),
+                    (6, 7, b'e'),
+                    (7, 7, b'e'),
+                    (5, 14, b'e'),
+                    (6, 14, b'e'),
+                    (7, 14, b'e'),
+                ],
+                Self::Happy => &[
+                    (6, 6, b'e'),
+                    (5, 7, b'e'),
+                    (6, 8, b'e'),
+                    (6, 13, b'e'),
+                    (5, 14, b'e'),
+                    (6, 15, b'e'),
+                    (7, 10, b'e'),
+                    (7, 11, b'e'),
+                    (8, 10, b'm'),
+                    (8, 11, b'm'),
+                ],
+                Self::Love => &[
+                    (5, 6, b'e'),
+                    (6, 7, b'e'),
+                    (7, 6, b'e'),
+                    (5, 15, b'e'),
+                    (6, 14, b'e'),
+                    (7, 15, b'e'),
+                    (7, 4, b'p'),
+                    (7, 5, b'p'),
+                    (7, 16, b'p'),
+                    (7, 17, b'p'),
+                ],
+                Self::Sad => &[
+                    (6, 6, b'e'),
+                    (7, 7, b'e'),
+                    (6, 8, b'e'),
+                    (6, 13, b'e'),
+                    (7, 14, b'e'),
+                    (6, 15, b'e'),
+                    (8, 15, b'b'),
+                    (9, 15, b'b'),
+                ],
+                Self::Sleep => &[
+                    (6, 6, b'e'),
+                    (6, 7, b'e'),
+                    (6, 8, b'e'),
+                    (6, 13, b'e'),
+                    (6, 14, b'e'),
+                    (6, 15, b'e'),
+                    (8, 10, b'm'),
+                    (8, 11, b'm'),
+                ],
+            },
+            MascotKind::Whale => match self {
+                Self::Neutral => &[(6, 6, b'e'), (7, 6, b'e'), (6, 15, b'e'), (7, 15, b'e')],
+                Self::Happy => &[
+                    (6, 5, b'e'),
+                    (5, 6, b'e'),
+                    (6, 7, b'e'),
+                    (6, 14, b'e'),
+                    (5, 15, b'e'),
+                    (6, 16, b'e'),
+                    (8, 10, b'm'),
+                    (8, 11, b'm'),
+                    (7, 4, b'p'),
+                    (7, 17, b'p'),
+                ],
+                Self::Love => &[
+                    (5, 5, b'e'),
+                    (6, 6, b'e'),
+                    (7, 5, b'e'),
+                    (5, 16, b'e'),
+                    (6, 15, b'e'),
+                    (7, 16, b'e'),
+                    (7, 4, b'p'),
+                    (7, 17, b'p'),
+                ],
+                Self::Sad => &[
+                    (6, 6, b'e'),
+                    (5, 7, b'e'),
+                    (6, 15, b'e'),
+                    (5, 14, b'e'),
+                    (8, 16, b'b'),
+                    (9, 16, b'b'),
+                ],
+                Self::Sleep => &[
+                    (6, 5, b'e'),
+                    (6, 6, b'e'),
+                    (6, 7, b'e'),
+                    (6, 14, b'e'),
+                    (6, 15, b'e'),
+                    (6, 16, b'e'),
+                    (8, 10, b'm'),
+                    (8, 11, b'm'),
+                ],
+            },
+            MascotKind::Spark => match self {
+                Self::Neutral => &[(5, 8, b'e'), (6, 8, b'e'), (5, 13, b'e'), (6, 13, b'e')],
+                Self::Happy => &[
+                    (5, 7, b'e'),
+                    (4, 8, b'e'),
+                    (5, 9, b'e'),
+                    (5, 12, b'e'),
+                    (4, 13, b'e'),
+                    (5, 14, b'e'),
+                    (7, 10, b'm'),
+                    (7, 11, b'm'),
+                    (6, 6, b'p'),
+                    (6, 15, b'p'),
+                ],
+                Self::Love => &[
+                    (5, 7, b'r'),
+                    (6, 8, b'r'),
+                    (5, 9, b'r'),
+                    (5, 12, b'r'),
+                    (6, 13, b'r'),
+                    (5, 14, b'r'),
+                    (6, 6, b'p'),
+                    (6, 15, b'p'),
+                ],
+                Self::Sad => &[
+                    (5, 8, b'e'),
+                    (6, 8, b'e'),
+                    (5, 13, b'e'),
+                    (6, 13, b'e'),
+                    (7, 14, b'b'),
+                    (8, 14, b'b'),
+                ],
+                Self::Sleep => &[
+                    (5, 7, b'e'),
+                    (5, 8, b'e'),
+                    (5, 9, b'e'),
+                    (5, 12, b'e'),
+                    (5, 13, b'e'),
+                    (5, 14, b'e'),
+                    (7, 10, b'm'),
+                    (7, 11, b'm'),
+                ],
+            },
+            MascotKind::Bot => match self {
+                Self::Neutral => &[(5, 7, b'l'), (6, 7, b'l'), (5, 12, b'l'), (6, 12, b'l')],
+                Self::Happy => &[
+                    (5, 6, b'l'),
+                    (4, 7, b'l'),
+                    (5, 8, b'l'),
+                    (5, 11, b'l'),
+                    (4, 12, b'l'),
+                    (5, 13, b'l'),
+                    (7, 9, b'l'),
+                    (7, 10, b'l'),
+                ],
+                Self::Love => &[
+                    (5, 6, b'r'),
+                    (5, 8, b'r'),
+                    (6, 7, b'r'),
+                    (5, 11, b'r'),
+                    (5, 13, b'r'),
+                    (6, 12, b'r'),
+                ],
+                Self::Sad => &[
+                    (5, 6, b'l'),
+                    (6, 7, b'l'),
+                    (5, 13, b'l'),
+                    (6, 12, b'l'),
+                    (7, 13, b'b'),
+                ],
+                Self::Sleep => &[
+                    (6, 6, b'l'),
+                    (6, 7, b'l'),
+                    (6, 8, b'l'),
+                    (6, 11, b'l'),
+                    (6, 12, b'l'),
+                    (6, 13, b'l'),
+                ],
+            },
         }
     }
 }
@@ -187,18 +442,20 @@ impl Emote {
     }
 }
 
-/// The crab with `face`, legs standing or mid-step, `cell` pixels a cell.
-fn crab_image(face: Face, step: bool, cell: u32) -> IconImage {
-    let mut grid: Vec<Vec<u8>> = BODY
+/// The mascot `kind` with `face`, legs standing or mid-step, `cell` pixels a cell.
+fn pet_image(kind: MascotKind, face: Face, step: bool, cell: u32) -> IconImage {
+    let body = pet_body(kind);
+    let legs = pet_legs(kind, step);
+    let mut grid: Vec<Vec<u8>> = body
         .iter()
-        .chain(LEGS[usize::from(step)].iter())
+        .chain(legs.iter())
         .map(|row| {
             let mut row = row.as_bytes().to_vec();
             row.resize(WIDTH, b'.');
             row
         })
         .collect();
-    for &(row, column, cell) in face.marks() {
+    for &(row, column, cell) in face.marks(kind) {
         grid[row][column] = cell;
     }
     paint(&grid, cell)
@@ -504,22 +761,22 @@ pub struct Mascot {
 
 impl Mascot {
     /// Plays `act` at `place`. `scale` is the monitor's (1.0 at 100 %).
-    pub fn play(gfx: &Gfx, act: Act, place: Place, scale: f32) -> Option<Self> {
-        match Self::build(gfx, act, place, scale) {
+    pub fn play(gfx: &Gfx, kind: MascotKind, act: Act, place: Place, scale: f32) -> Option<Self> {
+        match Self::build(gfx, kind, act, place, scale) {
             Ok(mascot) => Some(mascot),
             Err(error) => {
-                muelle_shell::log::line(&format!("cangrejo: {error:#}"));
+                muelle_shell::log::line(&format!("mascota: {error:#}"));
                 None
             }
         }
     }
 
-    fn build(gfx: &Gfx, act: Act, place: Place, scale: f32) -> Result<Self> {
+    fn build(gfx: &Gfx, kind: MascotKind, act: Act, place: Place, scale: f32) -> Result<Self> {
         let cell_px = (scale * 1.6).round().max(2.0) as u32;
         let cell = cell_px as f32;
         let crab = (
             (WIDTH as u32 * cell_px) as f32,
-            ((BODY.len() + 3) as u32 * cell_px) as f32,
+            ((pet_body(kind).len() + 3) as u32 * cell_px) as f32,
         );
         // Room above the crab for hops and the emote.
         let headroom = 14.0 * cell;
@@ -602,7 +859,8 @@ impl Mascot {
                     .cast::<ICompositorDesktopInterop>()?
                     .CreateDesktopWindowTarget(hwnd, true)?
             };
-            let (root, reaction, poke_heart) = choreograph(gfx, &script, crab, crab_top, cell)?;
+            let (root, reaction, poke_heart) =
+                choreograph(gfx, kind, &script, crab, crab_top, cell)?;
             if let Some(matrix) = turn.matrix() {
                 root.SetTransformMatrix(matrix)?;
             }
@@ -704,6 +962,7 @@ impl Drop for Mascot {
 ///          └ poke heart (only on a poke)
 fn choreograph(
     gfx: &Gfx,
+    kind: MascotKind,
     script: &Script,
     crab: (f32, f32),
     crab_top: f32,
@@ -811,7 +1070,7 @@ fn choreograph(
     hop.Children()?.InsertAtTop(&reaction)?;
     let poses_layer = reaction.Children()?;
     for pose in &poses {
-        let sprite = sprite(gfx, &crab_image(pose.0, pose.1, cell_px))?;
+        let sprite = sprite(gfx, &pet_image(kind, pose.0, pose.1, cell_px))?;
         poses_layer.InsertAtTop(&sprite)?;
         let shown = c.CreateScalarKeyFrameAnimation()?;
         shown.SetDuration(duration)?;
@@ -980,14 +1239,44 @@ mod tests {
 
     #[test]
     fn sprites_should_be_rectangular_and_faces_inside_the_body() {
-        for row in BODY.iter().chain(LEGS.iter().flatten()) {
-            assert!(row.len() <= WIDTH + 1, "{row}");
-        }
-        for face in Face::ALL {
-            for &(row, column, _) in face.marks() {
-                assert!(row < BODY.len() && column < WIDTH, "{face:?}");
-                assert_ne!(BODY[row].as_bytes()[column], b'.', "{face:?} off the body");
+        for kind in [
+            MascotKind::Crab,
+            MascotKind::Whale,
+            MascotKind::Spark,
+            MascotKind::Bot,
+        ] {
+            let body = pet_body(kind);
+            let standing = pet_legs(kind, false);
+            let stepping = pet_legs(kind, true);
+            for row in body.iter().chain(standing.iter()).chain(stepping.iter()) {
+                assert_eq!(row.len(), WIDTH, "{kind:?} row {row}");
+                for &cell in row.as_bytes() {
+                    if cell != b'.' {
+                        assert!(
+                            color(cell).is_some(),
+                            "{kind:?} unknown cell: {}",
+                            cell as char
+                        );
+                    }
+                }
             }
+            for face in Face::ALL {
+                for &(row, column, mark) in face.marks(kind) {
+                    assert!(row < body.len() && column < WIDTH, "{kind:?} {face:?}");
+                    assert_ne!(
+                        body[row].as_bytes()[column],
+                        b'.',
+                        "{kind:?} {face:?} off the body"
+                    );
+                    assert!(
+                        color(mark).is_some(),
+                        "{kind:?} {face:?} unknown mark: {}",
+                        mark as char
+                    );
+                }
+            }
+            let img = pet_image(kind, Face::Neutral, false, 2);
+            assert!(img.width > 0 && img.height > 0);
         }
     }
 
@@ -1025,7 +1314,8 @@ mod tests {
             Act::Sleepy,
         ] {
             let script = Script::new(act, 800.0, 44.0);
-            let (_root, reaction, heart) = choreograph(&gfx, &script, (44.0, 30.0), 28.0, 2.0)?;
+            let (_root, reaction, heart) =
+                choreograph(&gfx, MascotKind::Crab, &script, (44.0, 30.0), 28.0, 2.0)?;
             react(&gfx, &reaction, &heart, 2.0, 28.0)?;
         }
         Ok(())

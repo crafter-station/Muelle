@@ -3768,6 +3768,7 @@ name = "spikes"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "muelle-config",
  "muelle-core",
  "muelle-shell",
  "serde",
