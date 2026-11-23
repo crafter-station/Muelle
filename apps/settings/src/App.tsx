@@ -442,6 +442,9 @@ export function App() {
                       { value: "cat", label: t.petCat },
                       { value: "whale", label: t.petWhale },
                       { value: "cloud", label: t.petCloud },
+                      { value: "fox", label: t.petFox },
+                      { value: "octo", label: t.petOcto },
+                      { value: "star", label: t.petStar },
                     ]}
                     onChange={(mascotKind) => update({ mascotKind })}
                   />

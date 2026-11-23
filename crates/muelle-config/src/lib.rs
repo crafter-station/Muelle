@@ -251,6 +251,12 @@ pub enum MascotKind {
     Whale,
     /// Cloudling cloud companion (云宝).
     Cloud,
+    /// Fennec fox companion.
+    Fox,
+    /// Jelly octo companion.
+    Octo,
+    /// Luma star spirit companion.
+    Star,
     /// Gemini celestial star/spark.
     Spark,
     /// Codex retro green robot.
@@ -521,6 +527,15 @@ mod tests {
 
         let bot_config: Config = serde_json::from_str(r#"{"mascotKind":"bot"}"#)?;
         assert_eq!(bot_config.mascot_kind, MascotKind::Bot);
+
+        let fox_config: Config = serde_json::from_str(r#"{"mascotKind":"fox"}"#)?;
+        assert_eq!(fox_config.mascot_kind, MascotKind::Fox);
+
+        let octo_config: Config = serde_json::from_str(r#"{"mascotKind":"octo"}"#)?;
+        assert_eq!(octo_config.mascot_kind, MascotKind::Octo);
+
+        let star_config: Config = serde_json::from_str(r#"{"mascotKind":"star"}"#)?;
+        assert_eq!(star_config.mascot_kind, MascotKind::Star);
 
         let unknown_config: Config = serde_json::from_str(r#"{"mascotKind":"dragon"}"#)?;
         assert_eq!(unknown_config.mascot_kind, MascotKind::Crab);

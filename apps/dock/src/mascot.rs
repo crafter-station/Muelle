@@ -64,12 +64,17 @@ fn color(cell: u8) -> Option<[u8; 3]> {
         b'u' => [255, 255, 255],
         b'U' => [215, 235, 250],
         b'q' => [175, 210, 240],
-        // Spark (Gemini)
+        // Spark (Gemini) & Star (Luma)
         b'g' => [111, 146, 255],
         b'G' => [195, 218, 255],
         b'j' => [70, 95, 210],
         b'y' => [255, 215, 80],
         b'Y' => [255, 245, 175],
+        b'J' => [230, 170, 30],
+        // Jelly (Octo)
+        b'a' => [175, 140, 245],
+        b'A' => [220, 200, 255],
+        b'L' => [125, 90, 200],
         // Bot (Codex)
         b'v' => [22, 36, 32],
         b'l' => [110, 255, 200],
@@ -205,6 +210,96 @@ const CLOUD_LEGS: [[&str; 3]; 2] = [
     ],
 ];
 
+/// Fennec fox body, 22 cells wide.
+const FOX_BODY: [&str; 12] = [
+    "..kk.............kk...",
+    ".khhk...........khhk..",
+    ".khppk.........kpphk..",
+    "kkhppk.kkkkkkk.kpphkk.",
+    "khhppkkhhhhhhhkpphhkk.",
+    "khhhhohhhhhhhhhhhohhkk",
+    ".khhooooooooooooooohk.",
+    "kkooooooooooooooooooow",
+    "kwwkoooooooooooooooww.",
+    "kwwkkooooooooooooowwk.",
+    ".kwwkkoooooooooookwwk.",
+    "..kkkWWWWWWWWWWWWkkk..",
+];
+
+/// Fennec fox paws: sitting, and stepping.
+const FOX_LEGS: [[&str; 3]; 2] = [
+    [
+        "....kwwk...kwwk.......",
+        "....kwwk...kwwk.......",
+        "....kkkk...kkkk.......",
+    ],
+    [
+        "....kwwk..............",
+        "....kkkk...kwwk.......",
+        "...........kkkk.......",
+    ],
+];
+
+/// Jelly octo body, 22 cells wide.
+const JELLY_BODY: [&str; 12] = [
+    ".......kkkkkk.........",
+    "....kkkaaaaaakkk......",
+    "...kaAAaaaaaaaaakkk...",
+    "..kaAwAAaaaaaaaaaaak..",
+    ".kaAAAaaaaaaaaaaaaaak.",
+    "kkaaAaaaaaaaaaaaaaaakk",
+    "kaaaaaaaaaaaaaaaaaaaak",
+    "kaaaaaaaaaaaaaaaaaaaak",
+    "kkaaaaaaaaaaaaaaaaaakk",
+    ".kkaaaaaaaaaaaaaaaakk.",
+    "..kLLLLaaaaaaaaLLLLk..",
+    "...kkkkkkkkkkkkkkkk...",
+];
+
+/// Jelly octo tentacles: resting, and swimming wiggle.
+const JELLY_LEGS: [[&str; 3]; 2] = [
+    [
+        "..kaakk.kaak.kaak.kaak",
+        "..kaak...kaakka...kaak",
+        "...kk.....kk..kk....kk",
+    ],
+    [
+        "...kaakk.kaak.kaak.kak",
+        "..kaak...kaak..kaakkk.",
+        "...kk.....kk....kk....",
+    ],
+];
+
+/// Luma star spirit body, 22 cells wide.
+const STAR_BODY: [&str; 12] = [
+    "..........kk..........",
+    ".........kYYk.........",
+    "........kYYyyk........",
+    ".......kYYyyyyk.......",
+    "....kkkYYyyyyyykkk....",
+    "..kkYYYYyyyyyyyyYYkk..",
+    "kkYYYYYYyyyyyyyyyyYkkk",
+    "..kkYYYYyyyyyyyyYYkk..",
+    "....kkkJyyyyyyJkkk....",
+    ".......kJyJJJJk.......",
+    "........kJJJJk........",
+    ".........kJJk.........",
+];
+
+/// Luma star points/feet: standing, and celestial step.
+const STAR_LEGS: [[&str; 3]; 2] = [
+    [
+        "......kk......kk......",
+        ".....kyyk....kyyk.....",
+        "......kk......kk......",
+    ],
+    [
+        ".....kyyk.............",
+        "......kk.....kyyk.....",
+        "..............kk......",
+    ],
+];
+
 /// Gemini spark star body, 22 cells wide.
 const SPARK_BODY: [&str; 12] = [
     "..........kk..........",
@@ -271,6 +366,9 @@ fn pet_body(kind: MascotKind) -> [&'static str; 12] {
         MascotKind::Cat => CAT_BODY,
         MascotKind::Whale => WHALE_BODY,
         MascotKind::Cloud => CLOUD_BODY,
+        MascotKind::Fox => FOX_BODY,
+        MascotKind::Octo => JELLY_BODY,
+        MascotKind::Star => STAR_BODY,
         MascotKind::Spark => SPARK_BODY,
         MascotKind::Bot => BOT_BODY,
     }
@@ -283,6 +381,9 @@ fn pet_legs(kind: MascotKind, step: bool) -> [&'static str; 3] {
         MascotKind::Cat => CAT_LEGS[frame],
         MascotKind::Whale => WHALE_LEGS[frame],
         MascotKind::Cloud => CLOUD_LEGS[frame],
+        MascotKind::Fox => FOX_LEGS[frame],
+        MascotKind::Octo => JELLY_LEGS[frame],
+        MascotKind::Star => STAR_LEGS[frame],
         MascotKind::Spark => SPARK_LEGS[frame],
         MascotKind::Bot => BOT_LEGS[frame],
     }
@@ -644,6 +745,186 @@ impl Face {
                     (6, 11, b'l'),
                     (6, 12, b'l'),
                     (6, 13, b'l'),
+                ],
+            },
+            MascotKind::Fox => match self {
+                Self::Neutral => &[
+                    (6, 6, b'e'),
+                    (7, 6, b'e'),
+                    (6, 14, b'e'),
+                    (7, 14, b'e'),
+                    (7, 10, b'e'),
+                    (7, 4, b'p'),
+                    (7, 16, b'p'),
+                ],
+                Self::Happy => &[
+                    (6, 5, b'e'),
+                    (5, 6, b'e'),
+                    (6, 7, b'e'),
+                    (6, 13, b'e'),
+                    (5, 14, b'e'),
+                    (6, 15, b'e'),
+                    (7, 10, b'm'),
+                    (8, 10, b'm'),
+                    (7, 4, b'p'),
+                    (7, 16, b'p'),
+                ],
+                Self::Love => &[
+                    (5, 6, b'r'),
+                    (5, 7, b'r'),
+                    (6, 6, b'r'),
+                    (6, 7, b'r'),
+                    (5, 13, b'r'),
+                    (5, 14, b'r'),
+                    (6, 13, b'r'),
+                    (6, 14, b'r'),
+                    (7, 10, b'e'),
+                    (7, 4, b'p'),
+                    (7, 16, b'p'),
+                ],
+                Self::Sad => &[
+                    (5, 6, b'e'),
+                    (6, 7, b'e'),
+                    (5, 14, b'e'),
+                    (6, 13, b'e'),
+                    (7, 10, b'e'),
+                    (8, 15, b'z'),
+                    (9, 15, b'z'),
+                ],
+                Self::Sleep => &[
+                    (6, 6, b'e'),
+                    (6, 7, b'e'),
+                    (6, 8, b'e'),
+                    (6, 12, b'e'),
+                    (6, 13, b'e'),
+                    (6, 14, b'e'),
+                    (7, 10, b'e'),
+                    (7, 4, b'p'),
+                    (7, 16, b'p'),
+                ],
+            },
+            MascotKind::Octo => match self {
+                Self::Neutral => &[
+                    (6, 7, b'e'),
+                    (7, 7, b'e'),
+                    (6, 14, b'e'),
+                    (7, 14, b'e'),
+                    (7, 4, b'p'),
+                    (7, 5, b'p'),
+                    (7, 16, b'p'),
+                    (7, 17, b'p'),
+                    (7, 10, b'm'),
+                    (7, 11, b'm'),
+                ],
+                Self::Happy => &[
+                    (6, 6, b'e'),
+                    (5, 7, b'e'),
+                    (6, 8, b'e'),
+                    (6, 13, b'e'),
+                    (5, 14, b'e'),
+                    (6, 15, b'e'),
+                    (7, 10, b'm'),
+                    (7, 11, b'm'),
+                    (6, 4, b'p'),
+                    (6, 17, b'p'),
+                ],
+                Self::Love => &[
+                    (5, 6, b'r'),
+                    (5, 7, b'r'),
+                    (6, 6, b'r'),
+                    (6, 7, b'r'),
+                    (5, 14, b'r'),
+                    (5, 15, b'r'),
+                    (6, 14, b'r'),
+                    (6, 15, b'r'),
+                    (7, 10, b'm'),
+                    (7, 11, b'm'),
+                    (7, 4, b'p'),
+                    (7, 17, b'p'),
+                ],
+                Self::Sad => &[
+                    (5, 7, b'e'),
+                    (6, 6, b'e'),
+                    (5, 14, b'e'),
+                    (6, 15, b'e'),
+                    (7, 10, b'e'),
+                    (7, 11, b'e'),
+                    (8, 15, b'z'),
+                    (9, 15, b'z'),
+                ],
+                Self::Sleep => &[
+                    (6, 6, b'e'),
+                    (6, 7, b'e'),
+                    (6, 8, b'e'),
+                    (6, 13, b'e'),
+                    (6, 14, b'e'),
+                    (6, 15, b'e'),
+                    (7, 10, b'm'),
+                    (7, 11, b'm'),
+                    (6, 4, b'p'),
+                    (6, 17, b'p'),
+                ],
+            },
+            MascotKind::Star => match self {
+                Self::Neutral => &[
+                    (5, 7, b'e'),
+                    (6, 7, b'e'),
+                    (7, 7, b'e'),
+                    (5, 14, b'e'),
+                    (6, 14, b'e'),
+                    (7, 14, b'e'),
+                    (7, 5, b'p'),
+                    (7, 16, b'p'),
+                    (7, 10, b'm'),
+                    (7, 11, b'm'),
+                ],
+                Self::Happy => &[
+                    (6, 6, b'e'),
+                    (5, 7, b'e'),
+                    (6, 8, b'e'),
+                    (6, 13, b'e'),
+                    (5, 14, b'e'),
+                    (6, 15, b'e'),
+                    (7, 10, b'm'),
+                    (7, 11, b'm'),
+                    (6, 5, b'p'),
+                    (6, 16, b'p'),
+                ],
+                Self::Love => &[
+                    (5, 6, b'r'),
+                    (5, 7, b'r'),
+                    (6, 6, b'r'),
+                    (6, 7, b'r'),
+                    (5, 14, b'r'),
+                    (5, 15, b'r'),
+                    (6, 14, b'r'),
+                    (6, 15, b'r'),
+                    (7, 10, b'm'),
+                    (7, 11, b'm'),
+                    (7, 5, b'p'),
+                    (7, 16, b'p'),
+                ],
+                Self::Sad => &[
+                    (5, 7, b'e'),
+                    (6, 6, b'e'),
+                    (5, 14, b'e'),
+                    (6, 15, b'e'),
+                    (7, 10, b'e'),
+                    (7, 11, b'e'),
+                    (8, 14, b'z'),
+                    (9, 14, b'z'),
+                ],
+                Self::Sleep => &[
+                    (6, 6, b'e'),
+                    (6, 7, b'e'),
+                    (6, 8, b'e'),
+                    (6, 13, b'e'),
+                    (6, 14, b'e'),
+                    (6, 15, b'e'),
+                    (7, 10, b'm'),
+                    (7, 11, b'm'),
+                    (6, 5, b'p'),
+                    (6, 16, b'p'),
                 ],
             },
         }
@@ -1474,6 +1755,9 @@ mod tests {
             MascotKind::Cat,
             MascotKind::Whale,
             MascotKind::Cloud,
+            MascotKind::Fox,
+            MascotKind::Octo,
+            MascotKind::Star,
             MascotKind::Spark,
             MascotKind::Bot,
         ] {
