@@ -35,6 +35,8 @@ impl Drop for Subscription {
 
 struct Device {
     on: AtomicBool,
+    /// The radio turned out to be Bluetooth (the watcher lists every kind).
+    bluetooth: AtomicBool,
     pending: Mutex<Option<IAsyncOperation<Radio>>>,
     subscription: Mutex<Option<Subscription>>,
     owner: Weak<Shared>,
@@ -59,6 +61,7 @@ impl Device {
         if radio.Kind()? != RadioKind::Bluetooth {
             return Ok(());
         }
+        self.bluetooth.store(true, Ordering::Release);
         let weak = Arc::downgrade(self);
         let token = radio.StateChanged(&TypedEventHandler::new(move |radio: Ref<Radio>, _| {
             if let (Some(device), Some(radio)) = (weak.upgrade(), radio.as_ref()) {
@@ -95,6 +98,8 @@ struct Shared {
     window: AtomicIsize,
     message: u32,
     on: AtomicBool,
+    /// A Bluetooth radio exists, on or off.
+    present: AtomicBool,
     devices: Mutex<HashMap<String, Arc<Device>>>,
 }
 
@@ -106,9 +111,13 @@ impl Shared {
         let on = devices
             .values()
             .any(|device| device.on.load(Ordering::Acquire));
+        let present = devices
+            .values()
+            .any(|device| device.bluetooth.load(Ordering::Acquire));
         // Compare under the same lock as hotplug aggregation; two callbacks
         // cannot publish their snapshots in reverse order.
-        if self.on.swap(on, Ordering::AcqRel) != on {
+        let present_changed = self.present.swap(present, Ordering::AcqRel) != present;
+        if self.on.swap(on, Ordering::AcqRel) != on || present_changed {
             let window = self.window.load(Ordering::Acquire);
             if window != 0 {
                 unsafe {
@@ -127,6 +136,7 @@ impl Shared {
         let id = info.Id()?;
         let device = Arc::new(Device {
             on: AtomicBool::new(false),
+            bluetooth: AtomicBool::new(false),
             pending: Mutex::new(None),
             subscription: Mutex::new(None),
             owner: Arc::downgrade(self),
@@ -195,6 +205,7 @@ impl Monitor {
                 window: AtomicIsize::new(window),
                 message,
                 on: AtomicBool::new(false),
+                present: AtomicBool::new(false),
                 devices: Mutex::new(HashMap::new()),
             }),
             watcher: DeviceInformation::CreateWatcherAqsFilter(&Radio::GetDeviceSelector()?)?,
@@ -228,6 +239,11 @@ impl Monitor {
     pub fn is_on(&self) -> bool {
         self.shared.on.load(Ordering::Acquire)
     }
+
+    /// Whether the computer has a Bluetooth radio, on or off.
+    pub fn is_present(&self) -> bool {
+        self.shared.present.load(Ordering::Acquire)
+    }
 }
 
 impl Drop for Monitor {
@@ -237,6 +253,7 @@ impl Drop for Monitor {
         let devices = self.shared.devices.lock().ok().map(|mut devices| {
             self.shared.window.store(0, Ordering::Release);
             self.shared.on.store(false, Ordering::Release);
+            self.shared.present.store(false, Ordering::Release);
             std::mem::take(&mut *devices)
         });
         self.shared.window.store(0, Ordering::Release);
@@ -261,6 +278,7 @@ mod tests {
             window: AtomicIsize::new(0),
             message: 0,
             on: AtomicBool::new(false),
+            present: AtomicBool::new(false),
             devices: Mutex::new(HashMap::new()),
         })
     }
@@ -268,10 +286,28 @@ mod tests {
     fn device(owner: &Arc<Shared>, on: bool) -> Arc<Device> {
         Arc::new(Device {
             on: AtomicBool::new(on),
+            bluetooth: AtomicBool::new(true),
             pending: Mutex::new(None),
             subscription: Mutex::new(None),
             owner: Arc::downgrade(owner),
         })
+    }
+
+    #[test]
+    fn a_bluetooth_radio_that_is_off_still_counts_as_present() {
+        let shared = shared();
+        let radio = device(&shared, false);
+        if let Ok(mut devices) = shared.devices.lock() {
+            devices.insert("radio".into(), radio);
+        }
+        shared.publish();
+        assert!(!shared.on.load(Ordering::Acquire));
+        assert!(shared.present.load(Ordering::Acquire));
+        if let Ok(mut devices) = shared.devices.lock() {
+            devices.clear();
+        }
+        shared.publish();
+        assert!(!shared.present.load(Ordering::Acquire));
     }
 
     #[test]

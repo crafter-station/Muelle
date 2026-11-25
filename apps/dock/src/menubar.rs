@@ -159,6 +159,8 @@ static BAR_BOTTOM: AtomicI32 = AtomicI32::new(0);
 static PANEL_BOTTOM: AtomicI32 = AtomicI32::new(0);
 /// The hook exists only while the island is expanded.
 static ISLAND_HOOK_WINDOW: AtomicIsize = AtomicIsize::new(0);
+/// How strongly the Bluetooth icon is drawn while the radio is off.
+const BLUETOOTH_OFF_OPACITY: f32 = 0.38;
 /// Segoe Fluent Icons code points.
 pub(crate) mod glyph {
     pub const ETHERNET: char = '\u{E839}';
@@ -210,6 +212,9 @@ pub struct MenuBarWidgets {
     pub notifications: bool,
     /// CPU, memory and network speed (`Config::menu_bar_system_monitor`).
     pub system_monitor: bool,
+    /// A dimmed Bluetooth icon while the radio is off
+    /// (`Config::menu_bar_bluetooth_when_off`).
+    pub bluetooth_when_off: bool,
 }
 
 impl Default for MenuBarWidgets {
@@ -218,6 +223,7 @@ impl Default for MenuBarWidgets {
             island_style: IslandStyle::Notch,
             notifications: false,
             system_monitor: false,
+            bluetooth_when_off: false,
         }
     }
 }
@@ -226,6 +232,8 @@ impl Default for MenuBarWidgets {
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Status {
     bluetooth_on: bool,
+    /// A Bluetooth radio exists, on or off.
+    bluetooth_present: bool,
     network: Network,
     volume: Option<Volume>,
     buttons: TaskbarButtons,
@@ -534,6 +542,9 @@ pub struct MenuBar {
     /// What the clock opens (`Config::menu_bar_clock_target`). Not drawn, so
     /// it lives outside `widgets` and changing it redraws nothing.
     clock_target: Option<String>,
+    /// What the search icon opens (`Config::menu_bar_search_target`); not
+    /// drawn either.
+    search_target: Option<String>,
     usage: Option<UsageMonitor>,
     /// Where each provider sits in the closed island, as screen x.
     usage_anchors: Vec<(Provider, i32)>,
@@ -1214,6 +1225,7 @@ impl MenuBar {
             bounds: RECT::default(),
             status: Status {
                 bluetooth_on: false,
+                bluetooth_present: false,
                 network: Network::Offline,
                 volume: None,
                 buttons: TaskbarButtons::default(),
@@ -1222,6 +1234,7 @@ impl MenuBar {
             },
             widgets,
             clock_target: None,
+            search_target: None,
             usage: usage_enabled.then(|| UsageMonitor::new(hwnd.0 as isize, USAGE_CHANGED)),
             usage_anchors: Vec::new(),
             cue: None,
@@ -1451,6 +1464,13 @@ impl MenuBar {
     pub fn set_clock_target(&mut self, target: Option<&str>) {
         if self.clock_target.as_deref() != target {
             self.clock_target = target.map(str::to_owned);
+        }
+    }
+
+    /// What clicking the search icon opens; `None` for Windows Search.
+    pub fn set_search_target(&mut self, target: Option<&str>) {
+        if self.search_target.as_deref() != target {
+            self.search_target = target.map(str::to_owned);
         }
     }
 
@@ -1892,18 +1912,19 @@ impl MenuBar {
     }
 
     pub fn bluetooth_changed(&mut self, gfx: &Gfx) -> Result<()> {
-        let on = self
-            .bluetooth
-            .as_ref()
-            .is_some_and(bluetooth::Monitor::is_on);
+        let monitor = self.bluetooth.as_ref();
+        let on = monitor.is_some_and(bluetooth::Monitor::is_on);
+        let present = monitor.is_some_and(bluetooth::Monitor::is_present);
         self.status.bluetooth_on = on;
+        self.status.bluetooth_present = present;
         let Some(mut look) = self.look.clone() else {
             return self.refresh(gfx);
         };
-        if look.status.bluetooth_on == on {
+        if look.status.bluetooth_on == on && look.status.bluetooth_present == present {
             return Ok(());
         }
         look.status.bluetooth_on = on;
+        look.status.bluetooth_present = present;
         self.apply_look(gfx, look)
     }
 
@@ -1913,6 +1934,10 @@ impl MenuBar {
                 .bluetooth
                 .as_ref()
                 .is_some_and(bluetooth::Monitor::is_on),
+            bluetooth_present: self
+                .bluetooth
+                .as_ref()
+                .is_some_and(bluetooth::Monitor::is_present),
             network: status::network(),
             volume: self.audio.as_mut().and_then(AudioWatch::volume),
             buttons: status::taskbar_buttons(),
@@ -1999,16 +2024,15 @@ impl MenuBar {
             Some(Action::AccessoryIndicator) => {}
             Some(Action::QuickSettings) => launcher::open_quick_settings(),
             Some(Action::Notifications) => launcher::open_notifications(),
-            Some(Action::Clock) => match &self.clock_target {
-                // A target that no longer opens (an uninstalled app) falls
-                // back to what the clock always opened.
-                Some(target) if launcher::open(target).is_ok() => {}
-                _ => launcher::open_notifications(),
-            },
+            // A chosen target that no longer opens (an uninstalled app)
+            // falls back to what the item always opened.
+            Some(Action::Clock) => {
+                open_or(self.clock_target.as_deref(), launcher::open_notifications);
+            }
             Some(Action::Power) => launcher::open_power_settings(),
             Some(Action::Network) => launcher::open_network_list(),
             Some(Action::Sound) => launcher::open_sound(),
-            Some(Action::Search) => launcher::open_search(),
+            Some(Action::Search) => open_or(self.search_target.as_deref(), launcher::open_search),
             Some(Action::TaskView) => launcher::open_task_view(),
             Some(Action::Widgets) => launcher::open_widgets(),
             Some(Action::Bluetooth) => launcher::open_bluetooth(),
@@ -2442,6 +2466,13 @@ impl MenuBar {
         }
         if status.bluetooth_on {
             items.push((symbol(&[(glyph::BLUETOOTH, 1.0)])?, Action::Bluetooth));
+        } else if status.bluetooth_present && look.widgets.bluetooth_when_off {
+            // Off, but kept on request: dimmed, as macOS draws it, and still
+            // a way to Bluetooth settings to turn it on.
+            items.push((
+                symbol(&[(glyph::BLUETOOTH, BLUETOOTH_OFF_OPACITY)])?,
+                Action::Bluetooth,
+            ));
         }
         // The control center already opens all of quick settings: the network
         // icon goes straight to the list of networks (issue #55).
@@ -3638,6 +3669,14 @@ impl IslandGeometry {
     }
 }
 
+/// Opens the user's `target` for a menu bar item, or does what the item
+/// does by default when there is none or it fails to open.
+fn open_or(target: Option<&str>, default: fn()) {
+    if !target.is_some_and(|target| launcher::open(target).is_ok()) {
+        default();
+    }
+}
+
 fn toggle_panel(open: Option<Island>, clicked: Island) -> Option<Island> {
     (open != Some(clicked)).then_some(clicked)
 }
@@ -4524,6 +4563,9 @@ mod island_tests {
         assert!(bar.look == drawn);
         bar.set_clock_target(None);
         assert_eq!(bar.clock_target, None);
+        bar.set_search_target(Some("everything:"));
+        assert_eq!(bar.search_target.as_deref(), Some("everything:"));
+        assert!(bar.look == drawn);
         Ok(())
     }
 
@@ -4716,18 +4758,29 @@ mod island_tests {
             right: 1920,
             bottom: 1080,
         };
-        for on in [false, true, false] {
-            look.status.bluetooth_on = on;
-            bar.status.bluetooth_on = on;
-            bar.apply_look(&gfx, look.clone())?;
-            assert_eq!(
-                bar.zones
-                    .iter()
-                    .filter(|(_, _, action)| *action == Action::Bluetooth)
-                    .count(),
-                usize::from(on)
-            );
+        let bluetooth_zones = |bar: &MenuBar| {
+            bar.zones
+                .iter()
+                .filter(|(_, _, action)| *action == Action::Bluetooth)
+                .count()
+        };
+        // A radio exists throughout: while it is off, the icon stays only when
+        // chosen (issue #55), dimmed but still clickable.
+        look.status.bluetooth_present = true;
+        for when_off in [false, true] {
+            look.widgets.bluetooth_when_off = when_off;
+            for on in [false, true, false] {
+                look.status.bluetooth_on = on;
+                bar.status.bluetooth_on = on;
+                bar.apply_look(&gfx, look.clone())?;
+                assert_eq!(bluetooth_zones(&bar), usize::from(on || when_off));
+            }
         }
+        // Without a Bluetooth radio there is nothing to turn on.
+        look.status.bluetooth_present = false;
+        bar.apply_look(&gfx, look.clone())?;
+        assert_eq!(bluetooth_zones(&bar), 0);
+        look.widgets.bluetooth_when_off = false;
         // The native event handler updates the cached Look instead of running
         // provider/process scans or re-reading unrelated Windows preferences.
         look.status.bluetooth_on = true;

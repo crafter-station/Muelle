@@ -94,10 +94,10 @@ async fn pick_folder(
     .map_err(|error| error.to_string())
 }
 
-/// An app, shortcut or file for the menu bar clock to open. `apps` and `all`
+/// An app, shortcut or file for a menu bar item (the clock, search) to open. `apps` and `all`
 /// name the dialog's file types in the language Settings shows.
 #[tauri::command]
-async fn pick_clock_target(
+async fn pick_open_target(
     window: tauri::WebviewWindow,
     current: Option<String>,
     apps: String,
@@ -362,7 +362,7 @@ fn main() {
             windows_preferences,
             open_animation_settings,
             pick_folder,
-            pick_clock_target,
+            pick_open_target,
             check_update,
             install_update,
             open_release_notes,

@@ -27,7 +27,7 @@ import {
   loadWallpaperPreview,
   openReleaseNotes,
   openRepository,
-  pickClockTarget,
+  pickOpenTarget,
   pickFolder,
   saveConfig,
   setAutostart,
@@ -263,8 +263,13 @@ export function App() {
       .catch(() => setFailed(true));
   };
   const chooseClockTarget = () => {
-    pickClockTarget(config.menuBarClockTarget ?? null, t.clockTargetApps, t.clockTargetAllFiles)
+    pickOpenTarget(config.menuBarClockTarget ?? null, t.clockTargetApps, t.clockTargetAllFiles)
       .then((target) => target && update({ menuBarClockTarget: target }))
+      .catch(() => setFailed(true));
+  };
+  const chooseSearchTarget = () => {
+    pickOpenTarget(config.menuBarSearchTarget ?? null, t.clockTargetApps, t.clockTargetAllFiles)
+      .then((target) => target && update({ menuBarSearchTarget: target }))
       .catch(() => setFailed(true));
   };
   const ownMenuBarTheme = config.menuBarAppearance != null;
@@ -674,6 +679,13 @@ export function App() {
                     onChange={(accessoryBattery) => update({ accessoryBattery })}
                   />
                 </SubRow>
+                <SubRow label={t.menuBarBluetoothWhenOff} hint={t.menuBarBluetoothWhenOffHint} open={config.menuBar}>
+                  <Toggle
+                    label={t.menuBarBluetoothWhenOff}
+                    checked={config.menuBarBluetoothWhenOff ?? false}
+                    onChange={(menuBarBluetoothWhenOff) => update({ menuBarBluetoothWhenOff })}
+                  />
+                </SubRow>
                 <SubRow label={t.menuBarSystemMonitor} hint={t.menuBarSystemMonitorHint} open={config.menuBar}>
                   <Toggle
                     label={t.menuBarSystemMonitor}
@@ -696,6 +708,18 @@ export function App() {
                       </button>
                     ) : null}
                     <button type="button" className="push" onClick={chooseClockTarget}>
+                      {t.clockTargetChoose}
+                    </button>
+                  </div>
+                </SubRow>
+                <SubRow label={t.searchTarget} hint={config.menuBarSearchTarget ?? t.searchTargetDefault} open={config.menuBar}>
+                  <div className="push-group">
+                    {config.menuBarSearchTarget ? (
+                      <button type="button" className="push" onClick={() => update({ menuBarSearchTarget: null })}>
+                        {t.clockTargetReset}
+                      </button>
+                    ) : null}
+                    <button type="button" className="push" onClick={chooseSearchTarget}>
                       {t.clockTargetChoose}
                     </button>
                   </div>

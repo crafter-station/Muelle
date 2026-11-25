@@ -83,7 +83,7 @@ function fixture(section = "menubar", config = {}, save = async () => {}, galler
         case "wallpaper_preview": return null;
         case "wallpaper_selection": return typeof galleryNative.selection === "function" ? galleryNative.selection() : galleryNative.selection ?? null;
         case "apply_wallpaper": wallpaperCalls.push({ ...args }); return galleryNative.apply?.(args.id);
-        case "pick_clock_target": clockPicks.push({ ...args }); return galleryNative.clockTarget ?? null;
+        case "pick_open_target": clockPicks.push({ ...args }); return galleryNative.clockTarget ?? null;
         case "default_config": return { ...base, autoHide: false, smartHide: true };
         case "set_config": calls.push({ ...args.patch }); return save(args.patch);
         default: throw new Error(`Unexpected native call: ${command}`);
@@ -215,9 +215,16 @@ test("a late initial wallpaper read cannot overwrite an explicit successful choi
 });
 
 test("Bluetooth has no duplicate setting even with an old saved visibility override", () => {
+  // The icon follows Windows while Bluetooth is on. The only Bluetooth
+  // control is the opt-in to keep it while off, which the retired
+  // `menuBarBluetooth` override never turns on.
   for (const language of Object.keys(texts)) for (const menuBarBluetooth of [false, true]) {
     const view = fixture("menubar", { language, menuBar: true, menuBarBluetooth });
-    assert.doesNotMatch(renderToStaticMarkup(view.body()), /Bluetooth/i);
+    const controls = [...elements(view.body())].filter((node) =>
+      "checked" in node.props
+        && (node.props.label === texts[language].menuBarBluetoothWhenOff || /Bluetooth/i.test(node.props.label)));
+    assert.deepEqual(controls.map((node) => [node.props.label, node.props.checked]),
+      [[texts[language].menuBarBluetoothWhenOff, false]]);
   }
 });
 
@@ -230,7 +237,7 @@ test("retired Windows status-item overrides expose no controls and create no sav
       const controls = [...elements(view.body())].filter((node) => "checked" in node.props);
       assert.deepEqual(controls.map((node) => node.props.label), [texts[language].menuBarShow,
         texts[language].menuBarMusic, texts[language].aiUsage,
-        texts[language].accessoryBattery, texts[language].menuBarSystemMonitor,
+        texts[language].accessoryBattery, texts[language].menuBarBluetoothWhenOff, texts[language].menuBarSystemMonitor,
         texts[language].menuBarNotifications]);
       view.fire(60);
       await settle();
@@ -280,6 +287,31 @@ test("the notifications button is opt-in and the clock target can be chosen and 
     await settle();
     assert.deepEqual(view.calls.at(-1), { menuBarClockTarget: null });
     assert.match(markup(), new RegExp(texts.en.clockTargetDefault));
+  } finally { unmount(); }
+});
+
+test("the search icon opens Windows Search until given its own target", async () => {
+  const picked = "C:\\Apps\\Everything.lnk";
+  const native = { clockTarget: picked };
+  const view = fixture("menubar", { menuBarSearchTarget: undefined }, async () => {}, native);
+  const row = () => [...elements(view.body())].find((node) => node.props.label === texts.en.searchTarget && "open" in node.props);
+  const button = (text) => [...elements(row().props.children)].find((node) => node.type === "button" && node.props.children === text);
+  const unmount = await view.mount();
+  try {
+    assert.equal(row().props.hint, texts.en.searchTargetDefault);
+    assert.equal(button(texts.en.clockTargetReset), undefined);
+    button(texts.en.clockTargetChoose).props.onClick();
+    await settle();
+    view.fire(60);
+    await settle();
+    assert.deepEqual(view.clockPicks, [{ current: null, apps: texts.en.clockTargetApps, all: texts.en.clockTargetAllFiles }]);
+    assert.deepEqual(view.calls, [{ menuBarSearchTarget: picked }]);
+    assert.equal(row().props.hint, picked);
+    button(texts.en.clockTargetReset).props.onClick();
+    view.fire(60);
+    await settle();
+    assert.deepEqual(view.calls.at(-1), { menuBarSearchTarget: null });
+    assert.equal(row().props.hint, texts.en.searchTargetDefault);
   } finally { unmount(); }
 });
 

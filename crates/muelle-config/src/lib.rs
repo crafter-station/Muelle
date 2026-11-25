@@ -110,10 +110,20 @@ pub struct Config {
     /// (e.g. the Clock app or a calendar). `None` keeps the notification
     /// center and calendar, as on the Windows taskbar.
     pub menu_bar_clock_target: Option<String>,
+    /// What clicking the search icon opens: an app, a shortcut or a URI
+    /// (e.g. a launcher such as Everything or Flow Launcher). `None` keeps
+    /// Windows Search. The icon itself still follows the taskbar's search
+    /// setting.
+    pub menu_bar_search_target: Option<String>,
     /// CPU, memory and network speed in the menu bar (issue #64). Off by
     /// default: off, nothing is sampled; on, every 2 s only while the bar
     /// is on screen.
     pub menu_bar_system_monitor: bool,
+    /// Keep the Bluetooth icon in the menu bar while the radio is off, drawn
+    /// dimmed, so Bluetooth can be turned on from there (issue #55). Off by
+    /// default: the icon then follows Windows and shows only while it is on.
+    /// Not the retired `menuBarBluetooth` override, which is still ignored.
+    pub menu_bar_bluetooth_when_off: bool,
     /// Opt-in peripheral monitoring. Off means no accessory reader or queries.
     pub accessory_battery: bool,
     /// The dot under apps that have windows open.
@@ -338,6 +348,10 @@ impl Config {
             .menu_bar_clock_target
             .map(|target| target.trim().to_owned())
             .filter(|target| !target.is_empty());
+        self.menu_bar_search_target = self
+            .menu_bar_search_target
+            .map(|target| target.trim().to_owned())
+            .filter(|target| !target.is_empty());
         self
     }
 
@@ -385,7 +399,9 @@ impl Default for Config {
             menu_bar_island_style: IslandStyle::Notch,
             menu_bar_notifications: false,
             menu_bar_system_monitor: false,
+            menu_bar_bluetooth_when_off: false,
             menu_bar_clock_target: None,
+            menu_bar_search_target: None,
             accessory_battery: false,
             show_indicators: true,
             show_recents: true,
@@ -1016,6 +1032,41 @@ mod tests {
             uri.sanitized().menu_bar_clock_target.as_deref(),
             Some("outlookcal:")
         );
+    }
+
+    #[test]
+    fn the_search_icon_opens_windows_search_unless_given_a_target() -> Result<(), serde_json::Error>
+    {
+        let older: Config = serde_json::from_str(r#"{"iconSize":56}"#)?;
+        assert_eq!(older.menu_bar_search_target, None);
+        let chosen: Config =
+            serde_json::from_str(r#"{"menuBarSearchTarget":"C:\\Apps\\Everything.lnk"}"#)?;
+        assert_eq!(
+            chosen.menu_bar_search_target.as_deref(),
+            Some(r"C:\Apps\Everything.lnk")
+        );
+        assert_eq!(
+            serde_json::from_str::<Config>(&serde_json::to_string(&chosen)?)?,
+            chosen
+        );
+        let blank = Config {
+            menu_bar_search_target: Some("  ".into()),
+            ..Config::default()
+        };
+        assert_eq!(blank.sanitized().menu_bar_search_target, None);
+        Ok(())
+    }
+
+    #[test]
+    fn the_bluetooth_icon_shows_while_off_only_when_chosen() -> Result<(), serde_json::Error> {
+        // The retired visibility override does not turn it on.
+        for json in [r#"{}"#, r#"{"menuBarBluetooth":true}"#] {
+            let config: Config = serde_json::from_str(json)?;
+            assert!(!config.menu_bar_bluetooth_when_off);
+        }
+        let chosen: Config = serde_json::from_str(r#"{"menuBarBluetoothWhenOff":true}"#)?;
+        assert!(chosen.menu_bar_bluetooth_when_off);
+        Ok(())
     }
 
     #[test]

@@ -317,6 +317,7 @@ impl App {
             island_style: self.config.menu_bar_island_style,
             notifications: self.config.menu_bar_notifications,
             system_monitor: self.config.menu_bar_system_monitor,
+            bluetooth_when_off: self.config.menu_bar_bluetooth_when_off,
         };
         if !self.config.menu_bar {
             self.menubar = None;
@@ -333,6 +334,7 @@ impl App {
         }
         if let Some(bar) = &mut self.menubar {
             bar.set_clock_target(self.config.menu_bar_clock_target.as_deref());
+            bar.set_search_target(self.config.menu_bar_search_target.as_deref());
             let applied = bar
                 .set_auto_hide(self.config.menu_bar_auto_hide)
                 .and_then(|()| bar.set_smart_hide(self.config.menu_bar_smart_hide))

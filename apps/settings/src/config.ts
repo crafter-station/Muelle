@@ -44,6 +44,10 @@ export interface Config {
   menuBarNotifications: boolean;
   /** What the clock opens (an app, shortcut or URI); null for the notification center. */
   menuBarClockTarget: string | null;
+  /** What the search icon opens (an app, shortcut or URI); null for Windows Search. */
+  menuBarSearchTarget: string | null;
+  /** Keep a dimmed Bluetooth icon while the radio is off. */
+  menuBarBluetoothWhenOff: boolean;
   accessoryBattery: boolean;
   menuBarSystemMonitor?: boolean;
   showIndicators: boolean;
@@ -85,8 +89,8 @@ export const setAutostart = (enabled: boolean) => invoke<void>("set_autostart", 
 export const pickFolder = (current: string | null) =>
   invoke<string | null>("pick_folder", { current });
 /** An app or shortcut for the clock to open, or null if the user cancels. */
-export const pickClockTarget = (current: string | null, apps: string, all: string) =>
-  invoke<string | null>("pick_clock_target", { current, apps, all });
+export const pickOpenTarget = (current: string | null, apps: string, all: string) =>
+  invoke<string | null>("pick_open_target", { current, apps, all });
 export interface UpdateInfo {
   version: string;
   /** Release page with the notes, if the manifest has one. */
