@@ -343,12 +343,16 @@ test("a link can be typed for the search icon and the clock, as for PowerToys Co
       assert.equal(field(label).props.value, null);
       assert.ok(field(label).props.placeholder);
     }
-    assert.match(field(texts.en.searchTarget).props.placeholder, /x-cmdpal:\/\//);
+    assert.match(field(texts.en.searchTarget).props.placeholder, /Win\+Alt\+Space/);
     field(texts.en.searchTarget).props.onCommit("x-cmdpal://");
     view.fire(60);
     await settle();
     assert.deepEqual(view.calls, [{ menuBarSearchTarget: "x-cmdpal://" }]);
     assert.equal(field(texts.en.searchTarget).props.value, "x-cmdpal://");
+    field(texts.en.searchTarget).props.onCommit("Win+Shift+F23");
+    view.fire(60);
+    await settle();
+    assert.deepEqual(view.calls.at(-1), { menuBarSearchTarget: "Win+Shift+F23" });
     field(texts.en.clockTarget).props.onCommit("outlookcal:");
     view.fire(60);
     await settle();

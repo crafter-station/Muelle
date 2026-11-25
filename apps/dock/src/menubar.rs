@@ -3877,8 +3877,13 @@ impl IslandGeometry {
 
 /// Opens the user's `target` for a menu bar item, or does what the item
 /// does by default when there is none or it fails to open. `true` when it
-/// did the default.
+/// did the default. A key combination (`Win+Alt+Space`) is pressed instead,
+/// so a launcher's own hotkey shows it and, on a second click, hides it.
 fn open_or(target: Option<&str>, default: fn()) -> bool {
+    if let Some(keys) = target.and_then(launcher::parse_keys) {
+        launcher::press_keys(&keys);
+        return false;
+    }
     if target.is_some_and(|target| launcher::open(target).is_ok()) {
         return false;
     }

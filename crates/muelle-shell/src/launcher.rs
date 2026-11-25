@@ -15,8 +15,8 @@ use windows::{
         UI::{
             Input::KeyboardAndMouse::{
                 INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP,
-                SendInput, VIRTUAL_KEY, VK_A, VK_B, VK_D, VK_ESCAPE, VK_LCONTROL, VK_LWIN, VK_N,
-                VK_S, VK_SPACE, VK_TAB, VK_V, VK_W,
+                SendInput, VIRTUAL_KEY, VK_A, VK_B, VK_D, VK_ESCAPE, VK_F1, VK_LCONTROL, VK_LMENU,
+                VK_LSHIFT, VK_LWIN, VK_N, VK_RETURN, VK_S, VK_SPACE, VK_TAB, VK_V, VK_W,
             },
             Shell::{SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW},
             WindowsAndMessaging::{
@@ -174,6 +174,63 @@ fn tap(keys: &[VIRTUAL_KEY]) {
     unsafe {
         SendInput(&inputs, size_of::<INPUT>() as i32);
     }
+}
+
+/// A key combination written as a menu bar item's target, such as
+/// `Win+Alt+Space`: its keys in order, or `None` when `text` is not one (an
+/// app, a shortcut, a link). It presses an app's own hotkey, which most
+/// launchers also use to hide again, so a second click closes what the
+/// first opened (PowerToys Command Palette, PowerToys Run, Flow Launcher).
+///
+/// Every part must be a known key: modifiers (Win, Ctrl, Alt, Shift) and one
+/// last key (a letter, a digit, F1–F24, Space, Tab, Enter or Esc). At least
+/// two parts, so a single word is never mistaken for one.
+#[must_use]
+pub fn parse_keys(text: &str) -> Option<Vec<VIRTUAL_KEY>> {
+    let parts: Vec<&str> = text.split('+').map(str::trim).collect();
+    let (last, modifiers) = parts.split_last()?;
+    if modifiers.is_empty() {
+        return None;
+    }
+    let mut keys = modifiers
+        .iter()
+        .map(|part| match part.to_ascii_lowercase().as_str() {
+            "win" | "windows" | "meta" => Some(VK_LWIN),
+            "ctrl" | "control" => Some(VK_LCONTROL),
+            "alt" => Some(VK_LMENU),
+            "shift" => Some(VK_LSHIFT),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    keys.push(key_of(last)?);
+    Some(keys)
+}
+
+/// The non-modifier key a combination ends with.
+fn key_of(name: &str) -> Option<VIRTUAL_KEY> {
+    let lower = name.to_ascii_lowercase();
+    let mut chars = lower.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c @ ('a'..='z' | '0'..='9')), None) => {
+            Some(VIRTUAL_KEY(c.to_ascii_uppercase() as u16))
+        }
+        _ => match lower.as_str() {
+            "space" => Some(VK_SPACE),
+            "tab" => Some(VK_TAB),
+            "enter" | "return" => Some(VK_RETURN),
+            "esc" | "escape" => Some(VK_ESCAPE),
+            _ => lower
+                .strip_prefix('f')
+                .and_then(|number| number.parse::<u16>().ok())
+                .filter(|number| (1..=24).contains(number))
+                .map(|number| VIRTUAL_KEY(VK_F1.0 + number - 1)),
+        },
+    }
+}
+
+/// Presses `keys` together and lets them go, as a keyboard shortcut.
+pub fn press_keys(keys: &[VIRTUAL_KEY]) {
+    tap(keys);
 }
 
 /// Opens the Windows Start menu, exactly as the Windows key does.
@@ -557,6 +614,32 @@ pub fn minimize(windows: &[isize]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_combinations_parse_and_everything_else_does_not() {
+        assert_eq!(
+            parse_keys("Win+Shift+F23"),
+            Some(vec![VK_LWIN, VK_LSHIFT, VIRTUAL_KEY(VK_F1.0 + 22)])
+        );
+        assert_eq!(parse_keys(" alt + SPACE "), Some(vec![VK_LMENU, VK_SPACE]));
+        assert_eq!(
+            parse_keys("Ctrl+Alt+k"),
+            Some(vec![VK_LCONTROL, VK_LMENU, VIRTUAL_KEY(u16::from(b'K'))])
+        );
+        for target in [
+            "x-cmdpal://",
+            r"C:\Apps\C++ IDE.lnk",
+            "calculator:",
+            "F23",
+            "Win+",
+            "Win+Shift",
+            "Hyper+Space",
+            "Win+F25",
+            "Win+Space+K",
+        ] {
+            assert_eq!(parse_keys(target), None, "{target}");
+        }
+    }
     use windows::{
         Win32::UI::WindowsAndMessaging::{
             CreateWindowExW, DestroyWindow, EnumWindows, HWND_TOP, HWND_TOPMOST, SW_SHOWNOACTIVATE,

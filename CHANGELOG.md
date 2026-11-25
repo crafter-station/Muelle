@@ -26,7 +26,12 @@ copia la sección de la versión que se publica a la release de GitHub.
   bar ("Search opens"), such as another launcher; by default it still opens
   Windows Search. "Search opens" and "Clock opens" now also take a typed link,
   for apps the file picker cannot reach: `x-cmdpal://` opens PowerToys Command
-  Palette, for example.
+  Palette, for example. A key combination such as `Win+Alt+Space` presses a
+  launcher's own hotkey instead, so a second click on the icon closes it again.
+- With intelligent hiding, opening Windows Search, the notification center,
+  quick settings, the notification area flyout or a launcher from the menu bar
+  no longer brings the Dock up over the app in front: such windows keep the
+  Dock as it was. The desktop still shows it.
 - Downloads opens as a stack, like a group in the Dock: its 24 newest files
   fan out from the icon (a grid when there are many), with Windows' cached
   thumbnails, and a last item opens the folder in Explorer. Clicking a file
@@ -52,7 +57,13 @@ copia la sección de la versión que se publica a la release de GitHub.
   por defecto sigue abriendo la búsqueda de Windows. "La búsqueda abre" y "El
   reloj abre" aceptan también un enlace escrito, para apps que el selector de
   archivos no alcanza: `x-cmdpal://` abre la Paleta de comandos de PowerToys,
-  por ejemplo.
+  por ejemplo. Una combinación de teclas como `Win+Alt+Space` pulsa el atajo
+  del propio lanzador, así que un segundo clic en el icono lo vuelve a cerrar.
+- Con la ocultación inteligente, abrir desde la barra superior la búsqueda de
+  Windows, el centro de notificaciones, la configuración rápida, el menú del
+  área de notificación o un lanzador ya no hace aparecer el Dock sobre la app
+  del frente: esas ventanas lo dejan como estaba. El escritorio sigue
+  mostrándolo.
 - Descargas se abre como una pila, como un grupo del Dock: sus 24 archivos más
   recientes se despliegan desde el icono (en cuadrícula si son muchos), con las
   miniaturas que Windows ya tiene, y un último elemento abre la carpeta en el
