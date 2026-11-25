@@ -153,6 +153,9 @@ static AUDIO_TICK_PENDING: AtomicBool = AtomicBool::new(false);
 static TRIGGERS_LEFT: AtomicI32 = AtomicI32::new(0);
 static TRIGGERS_RIGHT: AtomicI32 = AtomicI32::new(0);
 static PANEL_LEFT: AtomicI32 = AtomicI32::new(0);
+/// The speaker icon while its volume slider is open, else empty.
+static SPEAKER_LEFT: AtomicI32 = AtomicI32::new(0);
+static SPEAKER_RIGHT: AtomicI32 = AtomicI32::new(0);
 static PANEL_RIGHT: AtomicI32 = AtomicI32::new(0);
 static BAR_TOP: AtomicI32 = AtomicI32::new(0);
 static BAR_BOTTOM: AtomicI32 = AtomicI32::new(0);
@@ -282,7 +285,7 @@ fn accessory_readings(snapshot: &AccessorySnapshot) -> [Option<AccessoryReading>
 impl Look {
     fn panel_content_height(&self) -> f32 {
         match self.panel {
-            Some(Island::Music) => 180.0,
+            Some(Island::Music | Island::Volume) => 180.0,
             Some(Island::Usage) => {
                 74.0 + Provider::ALL
                     .into_iter()
@@ -312,6 +315,9 @@ impl Look {
 enum Island {
     Music,
     Usage,
+    /// The volume slider under the speaker icon (issue #55): not opened
+    /// from the island, so it has no trigger there.
+    Volume,
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -717,7 +723,11 @@ unsafe extern "system" fn outside_click_proc(code: i32, w: WPARAM, l: LPARAM) ->
             && point.y < PANEL_BOTTOM.load(Ordering::Relaxed)
             && point.x >= PANEL_LEFT.load(Ordering::Relaxed)
             && point.x < PANEL_RIGHT.load(Ordering::Relaxed);
-        if !in_triggers && !in_panel {
+        let in_speaker = point.y >= BAR_TOP.load(Ordering::Relaxed)
+            && point.y < BAR_BOTTOM.load(Ordering::Relaxed)
+            && point.x >= SPEAKER_LEFT.load(Ordering::Relaxed)
+            && point.x < SPEAKER_RIGHT.load(Ordering::Relaxed);
+        if !in_triggers && !in_panel && !in_speaker {
             let window = ISLAND_HOOK_WINDOW.load(Ordering::Relaxed);
             if window != 0 {
                 // SAFETY: The window remains live until the hook is removed in Drop.
@@ -1447,6 +1457,20 @@ impl MenuBar {
         self.refresh(gfx)
     }
 
+    /// The volume slider under the speaker icon (issue #55).
+    fn open_volume_panel(&mut self, gfx: &Gfx) -> Result<()> {
+        self.panel = Some(Island::Volume);
+        let mut track = TRACKMOUSEEVENT {
+            cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+            dwFlags: TME_LEAVE,
+            hwndTrack: self.hwnd,
+            dwHoverTime: 0,
+        };
+        // SAFETY: `track` describes our live window.
+        unsafe { TrackMouseEvent(&mut track)? };
+        self.refresh(gfx)
+    }
+
     /// What clicking the clock opens; `None` for the notification center.
     pub fn set_clock_target(&mut self, target: Option<&str>) {
         if self.clock_target.as_deref() != target {
@@ -1990,6 +2014,8 @@ impl MenuBar {
         if y >= (self.bounds.bottom - self.bounds.top) as f32 {
             return Ok(());
         }
+        // A second click on the speaker closes its slider, as macOS does.
+        let volume_was_open = self.panel == Some(Island::Volume);
         self.dismiss_island(gfx)?;
         let hit = self
             .zones
@@ -2014,7 +2040,14 @@ impl MenuBar {
             },
             Some(Action::Power) => launcher::open_power_settings(),
             Some(Action::Network) => launcher::open_network_list(),
-            Some(Action::Sound) => launcher::open_sound(),
+            // Without an output device there is nothing to slide: Windows'
+            // own sound page says why.
+            Some(Action::Sound) if self.status.volume.is_none() => launcher::open_sound(),
+            Some(Action::Sound) => {
+                if !volume_was_open {
+                    self.open_volume_panel(gfx)?;
+                }
+            }
             Some(Action::Search) => launcher::open_search(),
             Some(Action::TaskView) => launcher::open_task_view(),
             Some(Action::Widgets) => launcher::open_widgets(),
@@ -2068,7 +2101,12 @@ impl MenuBar {
             ActiveProviders::default()
         };
         let track = self.media.as_ref().and_then(media::Watch::snapshot);
-        self.panel = available_panel(self.panel, track.is_some(), active_providers.any());
+        self.panel = available_panel(
+            self.panel,
+            track.is_some(),
+            active_providers.any(),
+            self.status.volume.is_some(),
+        );
         if !active_providers.any() {
             if let Some(usage) = &mut self.usage {
                 usage.mark_inactive();
@@ -2204,7 +2242,12 @@ impl MenuBar {
             self.look = Some(look);
             return self.progress_tick(gfx);
         }
-        self.panel = available_panel(self.panel, look.track.is_some(), look.usage_enabled);
+        self.panel = available_panel(
+            self.panel,
+            look.track.is_some(),
+            look.usage_enabled,
+            look.status.volume.is_some(),
+        );
         look.panel = self.panel;
         self.apply_look(gfx, look)
     }
@@ -2212,7 +2255,12 @@ impl MenuBar {
     fn apply_look(&mut self, gfx: &Gfx, mut look: Look) -> Result<()> {
         look.active_providers = look.usage.visible_providers(look.active_providers);
         look.usage_enabled &= look.active_providers.any();
-        self.panel = available_panel(look.panel, look.track.is_some(), look.usage_enabled);
+        self.panel = available_panel(
+            look.panel,
+            look.track.is_some(),
+            look.usage_enabled,
+            look.status.volume.is_some(),
+        );
         look.panel = self.panel;
         if look.panel != Some(Island::Usage) {
             self.usage_scroll = 0.0;
@@ -2221,7 +2269,7 @@ impl MenuBar {
             .look
             .as_ref()
             .is_some_and(|old| old.screen != look.screen || old.scale != look.scale);
-        if look.panel != Some(Island::Music) || moved {
+        if !matches!(look.panel, Some(Island::Music | Island::Volume)) || moved {
             self.release_volume(None)?;
         }
         if self.look.as_ref() == Some(&look) {
@@ -2514,6 +2562,7 @@ impl MenuBar {
         if status.buttons.widgets {
             items.push((symbol(&[(glyph::WIDGETS, 1.0)])?, Action::Widgets));
         }
+        let mut speaker = None;
         for (index, (item, action)) in items.iter().enumerate() {
             let zone_right = right;
             if let Some((_, label)) = battery_label
@@ -2527,6 +2576,9 @@ impl MenuBar {
             }
             let left = right - item.width;
             place(&layers, item, left)?;
+            if *action == Action::Sound {
+                speaker = Some((left, left + item.width));
+            }
             // The battery icon and its percentage form one control.
             // Accessory readings are passive status indicators, not controls.
             if *action != Action::AccessoryIndicator {
@@ -2589,6 +2641,29 @@ impl MenuBar {
         self.triggers_span = Span::default();
         self.panel_span = Span::default();
         self.draw_island(gfx, look, &layers, width, height, left_end, right)?;
+        let speaker_zone = speaker.filter(|_| look.panel == Some(Island::Volume));
+        if let Some((left, right)) = speaker_zone
+            && look.status.volume.is_some()
+        {
+            let span = volume_span_under((left + right) / 2.0, width, look.scale);
+            let geometry = IslandGeometry::new(span, height + px(PANEL_GAP), look);
+            let theme = Theme::for_popup(look.light, look.glass);
+            let content = popup_surface(
+                gfx,
+                theme,
+                &layers,
+                geometry,
+                px(look.panel_height()),
+                span.width() / 2.0,
+            )?;
+            self.draw_volume_capsule(gfx, &content, geometry)?;
+            self.panel_span = span;
+        }
+        // While the slider is open, a click on the speaker reaches the bar
+        // (to close it) instead of dismissing it first from the hook.
+        let (speaker_left, speaker_right) = speaker_zone.unwrap_or_default();
+        SPEAKER_LEFT.store(screen.left + speaker_left as i32, Ordering::Relaxed);
+        SPEAKER_RIGHT.store(screen.left + speaker_right as i32, Ordering::Relaxed);
         if let Some(drag) = self.volume_drag {
             let new_span = self.island_hits.iter().find_map(|hit| match hit.action {
                 IslandAction::Volume(span) => Some(span),
@@ -2783,6 +2858,7 @@ impl MenuBar {
                         }
                     }
                 }
+                Island::Volume => {}
                 Island::Usage => {
                     let anchors = match style {
                         IslandStyle::Notch => {
@@ -2801,6 +2877,7 @@ impl MenuBar {
             let (left, right) = match kind {
                 Island::Music => (span.left, divider.unwrap_or(span.right)),
                 Island::Usage => (divider.unwrap_or(span.left), span.right),
+                Island::Volume => (span.left, span.right),
             };
             self.island_hits.push(IslandHit {
                 bounds: (left, 0.0, right, bar_height),
@@ -2811,7 +2888,7 @@ impl MenuBar {
             }
             let desired = px(match kind {
                 Island::Music => 360.0,
-                Island::Usage => ISLAND_EXPANDED_WIDTH,
+                Island::Usage | Island::Volume => ISLAND_EXPANDED_WIDTH,
             });
             self.panel_span = match style {
                 IslandStyle::Notch => panel_span(span, width, desired),
@@ -2853,6 +2930,7 @@ impl MenuBar {
                 Island::Usage => {
                     self.draw_usage_panel(gfx, &content, geometry, height, look, &providers)?
                 }
+                Island::Volume => {}
             }
         }
         Ok(())
@@ -3545,6 +3623,21 @@ fn volume_percent(span: VolumeTrack, y: f32) -> u8 {
     (((span.bottom - y) / height).clamp(0.0, 1.0) * 100.0).round() as u8
 }
 
+/// The volume capsule centred under the speaker icon at `center`, kept on
+/// screen.
+fn volume_span_under(center: f32, width: f32, scale: f32) -> Span {
+    let px = |value: f32| (value * scale).round();
+    let capsule = px(44.0);
+    let margin = px(8.0);
+    let left = (center - capsule / 2.0)
+        .round()
+        .clamp(margin, (width - margin - capsule).max(margin));
+    Span {
+        left,
+        right: left + capsule,
+    }
+}
+
 /// Prefer the player's right edge, then its left. On narrow displays reserve
 /// space for the capsule instead of covering the progress or playback buttons.
 fn volume_popover_layout(panel: Span, width: f32, scale: f32) -> (Span, Span) {
@@ -3649,10 +3742,11 @@ fn toggle_panel(open: Option<Island>, clicked: Island) -> Option<Island> {
     (open != Some(clicked)).then_some(clicked)
 }
 
-fn available_panel(open: Option<Island>, music: bool, usage: bool) -> Option<Island> {
+fn available_panel(open: Option<Island>, music: bool, usage: bool, volume: bool) -> Option<Island> {
     open.filter(|island| match island {
         Island::Music => music,
         Island::Usage => usage,
+        Island::Volume => volume,
     })
 }
 
@@ -4694,6 +4788,72 @@ mod island_tests {
         look.monitor = Some(lines("5%", "0 KB/s"));
         bar.apply_look(&gfx, look)?;
         assert_eq!(zone(&bar), Some(wide));
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "Hidden compositor fixture; synthetic volume, no audio writes"]
+    fn native_volume_slider_hangs_under_the_speaker_while_there_is_an_output() -> Result<()> {
+        use anyhow::Context;
+        use windows::Win32::System::WinRT::{
+            CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+            DispatcherQueueOptions,
+        };
+        // SAFETY: All composition objects stay on this test's STA thread.
+        let _queue = unsafe {
+            CreateDispatcherQueueController(DispatcherQueueOptions {
+                dwSize: size_of::<DispatcherQueueOptions>() as u32,
+                threadType: DQTYPE_THREAD_CURRENT,
+                apartmentType: DQTAT_COM_STA,
+            })?
+        };
+        let gfx = Gfx::new()?;
+        let mut bar = MenuBar::create(&gfx, false, false, true, MenuBarWidgets::default())?;
+        bar.set_visible(false)?;
+        bar.audio = None;
+        let volume = Volume {
+            muted: false,
+            level: 2,
+            percent: 40,
+        };
+        bar.status.volume = Some(volume);
+        let mut look = bar.look.clone().context("initial look")?;
+        look.screen = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        look.track = None;
+        look.status.volume = Some(volume);
+        look.panel = Some(Island::Volume);
+        bar.apply_look(&gfx, look.clone())?;
+        assert_eq!(bar.panel, Some(Island::Volume));
+        let (speaker_left, speaker_right, _) = *bar
+            .zones
+            .iter()
+            .find(|(_, _, action)| *action == Action::Sound)
+            .context("speaker zone")?;
+        // The capsule hangs centred under the speaker, with its slider and mute.
+        let center = (bar.panel_span.left + bar.panel_span.right) / 2.0;
+        assert!(bar.panel_span.width() > 0.0);
+        assert!(center > speaker_left && center < speaker_right);
+        assert!(
+            bar.island_hits
+                .iter()
+                .any(|hit| matches!(hit.action, IslandAction::Volume(_)))
+        );
+        assert!(
+            bar.island_hits
+                .iter()
+                .any(|hit| matches!(hit.action, IslandAction::Mute))
+        );
+        assert!(bar.volume_controls.is_some());
+        // Without an output there is nothing to slide: the panel closes.
+        look.status.volume = None;
+        bar.apply_look(&gfx, look)?;
+        assert_eq!(bar.panel, None);
+        assert_eq!(bar.panel_span.width(), 0.0);
         Ok(())
     }
 
@@ -5840,8 +6000,23 @@ mod island_tests {
 
     #[test]
     fn losing_a_session_closes_its_panel_without_opening_the_other() {
-        assert_eq!(available_panel(Some(Island::Music), false, true), None);
-        assert_eq!(available_panel(Some(Island::Usage), true, false), None);
+        assert_eq!(
+            available_panel(Some(Island::Music), false, true, true),
+            None
+        );
+        assert_eq!(
+            available_panel(Some(Island::Usage), true, false, true),
+            None
+        );
+        // The volume slider closes when there is no output to set.
+        assert_eq!(
+            available_panel(Some(Island::Volume), true, true, false),
+            None
+        );
+        assert_eq!(
+            available_panel(Some(Island::Volume), false, false, true),
+            Some(Island::Volume)
+        );
     }
 
     #[test]
