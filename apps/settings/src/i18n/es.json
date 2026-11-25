@@ -8,6 +8,8 @@
   "showStart": "Mostrar Inicio",
   "showTrash": "Mostrar la Papelera",
   "showDownloads": "Mostrar Descargas",
+  "downloadsStack": "Abrir como pila",
+  "downloadsStackHint": "Los archivos más recientes se despliegan desde el icono, como un grupo. Apagado, abre la carpeta.",
   "pinExplorer": "Mantener Explorador en el Dock",
   "pinExplorerHint": "Desactivado, aparece solo mientras tiene ventanas abiertas.",
   "dockAutoHideSpeed": "Velocidad de la animación",

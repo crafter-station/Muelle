@@ -315,6 +315,22 @@ test("the search icon opens Windows Search until given its own target", async ()
   } finally { unmount(); }
 });
 
+test("Downloads opens as a stack unless turned off, under its Show Downloads switch", async () => {
+  const find = (view, key) => [...elements(view.body())].find((node) => node.props.label === texts.en.downloadsStack && key in node.props);
+  assert.equal(find(fixture("dock", { showDownloads: false }), "open").props.open, false);
+  const view = fixture("dock", { downloadsStack: undefined });
+  const unmount = await view.mount();
+  try {
+    assert.equal(find(view, "open").props.open, true);
+    assert.equal(find(view, "checked").props.checked, true, "on by default, as in macOS");
+    view.change(texts.en.downloadsStack, false);
+    view.fire(60);
+    await settle();
+    assert.deepEqual(view.calls, [{ downloadsStack: false }]);
+    assert.equal(find(view, "checked").props.checked, false);
+  } finally { unmount(); }
+});
+
 test("other workspaces are opt-in and save without changing other window preferences", async () => {
   const view = fixture("windows", { showOtherWorkspaces: undefined });
   const checked = () => [...elements(view.body())].find((node) =>

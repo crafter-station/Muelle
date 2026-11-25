@@ -8,6 +8,8 @@
   "showStart": "Show Start",
   "showTrash": "Show Recycle Bin",
   "showDownloads": "Show Downloads",
+  "downloadsStack": "Open as a stack",
+  "downloadsStackHint": "Newest files fan out from the icon, as a group does. Off, it opens the folder.",
   "pinExplorer": "Keep File Explorer in the Dock",
   "pinExplorerHint": "When off, it appears only while its windows are open.",
   "dockAutoHideSpeed": "Animation speed",

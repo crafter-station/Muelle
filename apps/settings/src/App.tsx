@@ -551,6 +551,9 @@ export function App() {
                 <Row label={t.showDownloads}>
                   <Toggle label={t.showDownloads} checked={config.showDownloads ?? true} onChange={(showDownloads) => update({ showDownloads })} />
                 </Row>
+                <SubRow label={t.downloadsStack} hint={t.downloadsStackHint} open={config.showDownloads ?? true}>
+                  <Toggle label={t.downloadsStack} checked={config.downloadsStack ?? true} onChange={(downloadsStack) => update({ downloadsStack })} />
+                </SubRow>
                 <Row label={t.showTrash}>
                   <Toggle label={t.showTrash} checked={config.showTrash ?? true} onChange={(showTrash) => update({ showTrash })} />
                 </Row>

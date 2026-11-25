@@ -12,7 +12,12 @@ use crate::{
     group_view::{DragGhost, GroupItem, GroupView, Placement, Released},
     menu,
     scene::Theme,
+    strings::text,
 };
+
+/// Files shown in a Downloads stack, newest first; the folder itself comes
+/// after them. Past a fan's worth they fold into a grid, as in macOS.
+const STACK_FILES: usize = 24;
 
 use super::{
     App, DRAG_POLL_MS, DRAG_TIMER, Dragging, HIDE_DELAY_MS, HIDE_TIMER, MenuRequest, MenuTarget,
@@ -48,7 +53,11 @@ impl App {
         let theme = Theme::new(stage.key.look);
         // The dock's own display, which a hidden dock can move between.
         let (screen, edge) = (stage.key.screen, stage.frame.edge);
-        let items = self.group_items(id, icon as u32);
+        let items = if self.is_downloads_stack(id) {
+            self.stack_items(id, icon as u32)
+        } else {
+            self.group_items(id, icon as u32)
+        };
         self.group_view = Some(GroupView::show(
             &self.gfx,
             id.to_owned(),
@@ -96,6 +105,48 @@ impl App {
         items
     }
 
+    /// Whether `id` is the Downloads folder unfolded as a stack, not a group.
+    pub(super) fn is_downloads_stack(&self, id: &str) -> bool {
+        self.config.downloads_stack && self.downloads.as_deref() == Some(id)
+    }
+
+    /// The newest files of `folder`, drawn `side` pixels wide, then the
+    /// folder itself, as a macOS stack ends with a way to Finder.
+    pub(super) fn stack_items(&mut self, folder: &str, side: u32) -> Vec<GroupItem> {
+        let files = muelle_shell::folder::newest(folder, STACK_FILES)
+            .inspect_err(|error| eprintln!("muelle: Descargas: {error}"))
+            .unwrap_or_default();
+        let mut items = Vec::with_capacity(files.len() + 1);
+        for file in files {
+            let icon = muelle_shell::icons::load_preview(&file.path, side)
+                .ok()
+                .and_then(|image| self.gfx.icon_brush(&image, side.min(image.width)).ok())
+                .or_else(|| self.placeholder.clone());
+            items.push(GroupItem {
+                id: file.path,
+                name: file.name,
+                icon,
+                running: false,
+            });
+        }
+        let icon = self
+            .icons
+            .get(folder, "")
+            .and_then(|visual| {
+                self.gfx
+                    .icon_brush(&visual.icon, side.min(visual.icon.width))
+                    .ok()
+            })
+            .or_else(|| self.placeholder.clone());
+        items.push(GroupItem {
+            id: folder.to_owned(),
+            name: text().show_in_explorer.replace('&', ""),
+            icon,
+            running: false,
+        });
+        items
+    }
+
     pub(super) fn close_group_view(&mut self) {
         if self.group_view.take().is_some()
             && self.config.hides_automatically()
@@ -110,10 +161,15 @@ impl App {
     /// The pointer moved over the unfolded group: past the drag threshold,
     /// the app pressed leaves the group.
     pub(super) fn group_view_moved(&mut self) -> Result<()> {
+        // Files stay in Downloads: a stack has nothing to drag out of it.
+        let stack = self
+            .group_view
+            .as_ref()
+            .is_some_and(|view| self.is_downloads_stack(&view.group_id));
         let Some(view) = &mut self.group_view else {
             return Ok(());
         };
-        if let Some((id, point)) = view.drag_started()? {
+        if !stack && let Some((id, point)) = view.drag_started()? {
             return self.start_group_drag(id, point);
         }
         view.update()
@@ -170,10 +226,16 @@ impl App {
         let Some(view) = &mut self.group_view else {
             return Ok(None);
         };
+        let group_id = view.group_id.clone();
         Ok(match view.release()? {
             Released::Item(id) => {
                 self.close_group_view();
-                self.click_app(id)
+                if self.is_downloads_stack(&group_id) {
+                    // A file opens in its app; the last item opens the folder.
+                    Some(Outside::Open(id))
+                } else {
+                    self.click_app(id)
+                }
             }
             Released::Dismiss => {
                 self.close_group_view();
@@ -189,10 +251,15 @@ impl App {
             return Ok(None);
         };
         let hit = view.item_at_cursor()?;
+        let stack = self.is_downloads_stack(&view.group_id);
         self.close_group_view();
         let Some((id, rect)) = hit else {
             return Ok(None);
         };
+        // In a Downloads stack, right-click shows the file in Explorer.
+        if stack {
+            return Ok(Some(Outside::Reveal(id)));
+        }
         let windows = self.windows_of(&id);
         let (items, end_task, jump) = self.entry_menu(&id, Role::App, &windows);
         let gap = self

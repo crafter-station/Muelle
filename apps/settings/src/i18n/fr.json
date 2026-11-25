@@ -8,6 +8,8 @@
   "showStart": "Afficher Démarrer",
   "showTrash": "Afficher la Corbeille",
   "showDownloads": "Afficher Téléchargements",
+  "downloadsStack": "Ouvrir en pile",
+  "downloadsStackHint": "Les fichiers les plus récents se déploient depuis l’icône, comme un groupe. Désactivé, le dossier s’ouvre.",
   "pinExplorer": "Garder l’Explorateur dans le Dock",
   "pinExplorerHint": "Désactivé, il apparaît uniquement lorsque ses fenêtres sont ouvertes.",
   "dockAutoHideSpeed": "Vitesse de l’animation",

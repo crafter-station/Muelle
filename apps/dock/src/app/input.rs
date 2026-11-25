@@ -275,6 +275,14 @@ impl App {
             Role::Start => Some(Outside::OpenStart),
             Role::Window => window_of(&id).and_then(|hwnd| self.activating(vec![hwnd])),
             Role::Shortcuts => self.folder_menu(id)?,
+            // Downloads unfolds as a stack, as a group does, unless that is
+            // turned off; another click folds it back.
+            Role::Folder if self.config.downloads_stack => {
+                if group_was_open.as_deref() != Some(id.as_str()) {
+                    self.open_group_view(&id)?;
+                }
+                None
+            }
             Role::Folder | Role::Trash => Some(Outside::Open(id)),
         })
     }

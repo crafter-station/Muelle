@@ -11,7 +11,7 @@ use windows::{
         UI::{
             Shell::{
                 IShellItem, IShellItem2, IShellItemImageFactory, SHCreateItemFromParsingName,
-                SHDefExtractIconW, SIIGBF_ICONONLY,
+                SHDefExtractIconW, SIIGBF_ICONONLY, SIIGBF_INCACHEONLY, SIIGBF_THUMBNAILONLY,
             },
             WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO},
         },
@@ -94,6 +94,52 @@ pub fn load_icon(parsing_name: &str, size: u32) -> Result<IconImage, IconError> 
     };
 
     read_pixels(&bitmap).ok_or_else(|| IconError::Pixels(parsing_name.to_owned()))
+}
+
+/// A file's picture for a Downloads stack: its thumbnail when Windows has
+/// one cached already (photos, PDFs, videos), centered on a square, or else
+/// its icon. It never asks Windows to render a new thumbnail, which can take
+/// a while for a large file.
+pub fn load_preview(path: &str, size: u32) -> Result<IconImage, IconError> {
+    let side = size as i32;
+    // SAFETY: The string and size live for each call; the bitmap is ours.
+    let cached = unsafe {
+        SHCreateItemFromParsingName::<_, _, IShellItemImageFactory>(&HSTRING::from(path), None)
+            .and_then(|factory| {
+                factory.GetImage(
+                    SIZE { cx: side, cy: side },
+                    SIIGBF_THUMBNAILONLY | SIIGBF_INCACHEONLY,
+                )
+            })
+            .ok()
+            .map(OwnedBitmap)
+    };
+    if let Some(image) = cached.as_ref().and_then(read_pixels) {
+        return Ok(squared(image));
+    }
+    load_icon(path, size)
+}
+
+/// `image` centered on a transparent square, so drawing it square does not
+/// stretch a landscape or portrait thumbnail.
+fn squared(image: IconImage) -> IconImage {
+    let side = image.width.max(image.height);
+    if image.width == image.height {
+        return image;
+    }
+    let (left, top) = ((side - image.width) / 2, (side - image.height) / 2);
+    let mut bgra = vec![0; side as usize * side as usize * 4];
+    let row = image.width as usize * 4;
+    for y in 0..image.height as usize {
+        let from = y * row;
+        let to = ((top as usize + y) * side as usize + left as usize) * 4;
+        bgra[to..to + row].copy_from_slice(&image.bgra[from..from + row]);
+    }
+    IconImage {
+        width: side,
+        height: side,
+        bgra,
+    }
 }
 
 /// `System.Tile.SmallLogoPath`: a Store app's small logo, relative to its
@@ -336,6 +382,21 @@ fn read_bits(bitmap: &OwnedBitmap) -> Option<(u32, u32, Vec<u8>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_landscape_thumbnail_is_centered_on_a_square() {
+        // 2×1: one opaque white pixel, one opaque red one.
+        let wide = IconImage {
+            width: 2,
+            height: 1,
+            bgra: vec![255, 255, 255, 255, 0, 0, 255, 255],
+        };
+        let square = squared(wide);
+        assert_eq!((square.width, square.height), (2, 2));
+        // The picture sits on the top row (rounded down), the rest is clear.
+        assert_eq!(&square.bgra[..8], &[255, 255, 255, 255, 0, 0, 255, 255]);
+        assert!(square.bgra[8..].iter().all(|&byte| byte == 0));
+    }
 
     #[test]
     fn the_unplated_logo_closest_to_the_size_is_chosen() {

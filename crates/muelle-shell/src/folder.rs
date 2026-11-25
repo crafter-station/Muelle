@@ -1,7 +1,7 @@
 //! A folder's contents as Explorer lists them, for the dock's folder menu,
 //! and the standard dialog to choose that folder.
 
-use std::{cmp::Ordering, fs, io, os::windows::fs::MetadataExt};
+use std::{cmp::Ordering, fs, io, os::windows::fs::MetadataExt, time::SystemTime};
 
 use windows::{
     Win32::{
@@ -39,6 +39,60 @@ pub struct FolderItem {
     pub is_folder: bool,
     /// Explorer's small icon, `None` if the shell has none.
     pub icon: Option<IconImage>,
+}
+
+/// An item of a Downloads stack (see [`newest`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecentItem {
+    pub path: String,
+    /// The file's own name, extension included, as a macOS stack shows it.
+    pub name: String,
+}
+
+/// Extensions browsers give a download still in progress; they rename it
+/// once it is complete.
+const IN_PROGRESS: [&str; 5] = ["crdownload", "part", "partial", "download", "tmp"];
+
+/// The `limit` newest items of `folder`, most recent first, as a macOS
+/// Downloads stack shows them: by when they arrived (created), or when they
+/// last changed where that is unknown. Hidden and system items are left out
+/// as in [`list`], and so are downloads still in progress.
+pub fn newest(folder: &str, limit: usize) -> io::Result<Vec<RecentItem>> {
+    let mut items: Vec<(SystemTime, RecentItem)> = fs::read_dir(folder)?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let meta = entry.metadata().ok()?;
+            if meta.file_attributes() & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM) != 0 {
+                return None;
+            }
+            let path = entry.path();
+            let in_progress = path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    IN_PROGRESS
+                        .iter()
+                        .any(|partial| extension.eq_ignore_ascii_case(partial))
+                });
+            if in_progress {
+                return None;
+            }
+            let arrived = meta
+                .created()
+                .or_else(|_| meta.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            Some((
+                arrived,
+                RecentItem {
+                    path: path.to_string_lossy().into_owned(),
+                    name: entry.file_name().to_string_lossy().into_owned(),
+                },
+            ))
+        })
+        .collect();
+    items.sort_by(|a, b| b.0.cmp(&a.0));
+    items.truncate(limit);
+    Ok(items.into_iter().map(|(_, item)| item).collect())
 }
 
 /// The items of `folder`: folders first, then files, each in Explorer's
@@ -217,6 +271,34 @@ fn pick_in_apartment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn newest_lists_the_latest_arrivals_first_without_partial_downloads() -> io::Result<()> {
+        let folder = std::env::temp_dir().join(format!("muelle-newest-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&folder);
+        fs::create_dir_all(&folder)?;
+        for name in [
+            "old.pdf",
+            "middle.zip",
+            "new.png",
+            "big.iso.crdownload",
+            "song.mp3.part",
+        ] {
+            fs::write(folder.join(name), b"x")?;
+            // Creation times far enough apart to order on every file system.
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        let names = |limit| -> io::Result<Vec<String>> {
+            Ok(newest(&folder.to_string_lossy(), limit)?
+                .into_iter()
+                .map(|item| item.name)
+                .collect())
+        };
+        assert_eq!(names(10)?, ["new.png", "middle.zip", "old.pdf"]);
+        assert_eq!(names(2)?, ["new.png", "middle.zip"]);
+        fs::remove_dir_all(&folder)?;
+        Ok(())
+    }
 
     fn item(name: &str, is_folder: bool) -> FolderItem {
         FolderItem {

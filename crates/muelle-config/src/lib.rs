@@ -69,6 +69,10 @@ pub struct Config {
     pub show_start: bool,
     pub show_trash: bool,
     pub show_downloads: bool,
+    /// Clicking Downloads fans out its newest files from the icon, as a
+    /// macOS Downloads stack and as a dock group do, ending with a way to the
+    /// folder. Off, the click opens the folder in Explorer.
+    pub downloads_stack: bool,
     /// Keep Explorer pinned; otherwise it appears only while its windows are open.
     pub pin_explorer: bool,
     /// Genie effect when minimizing. On by default; while enabled, the dock
@@ -384,6 +388,7 @@ impl Default for Config {
             show_start: true,
             show_trash: true,
             show_downloads: true,
+            downloads_stack: true,
             pin_explorer: true,
             magnified_size: 77,
             genie: true,
@@ -1066,6 +1071,15 @@ mod tests {
         }
         let chosen: Config = serde_json::from_str(r#"{"menuBarBluetoothWhenOff":true}"#)?;
         assert!(chosen.menu_bar_bluetooth_when_off);
+        Ok(())
+    }
+
+    #[test]
+    fn downloads_opens_as_a_stack_unless_turned_off() -> Result<(), serde_json::Error> {
+        let older: Config = serde_json::from_str(r#"{"iconSize":56}"#)?;
+        assert!(older.downloads_stack);
+        let off: Config = serde_json::from_str(r#"{"downloadsStack":false}"#)?;
+        assert!(!off.downloads_stack);
         Ok(())
     }
 

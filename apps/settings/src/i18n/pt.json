@@ -8,6 +8,8 @@
   "showStart": "Mostrar Iniciar",
   "showTrash": "Mostrar Lixeira",
   "showDownloads": "Mostrar Downloads",
+  "downloadsStack": "Abrir como pilha",
+  "downloadsStackHint": "Os arquivos mais recentes se abrem a partir do ícone, como um grupo. Desativado, abre a pasta.",
   "pinExplorer": "Manter o Explorador de Arquivos no Dock",
   "pinExplorerHint": "Quando desativado, aparece apenas enquanto houver janelas abertas.",
   "dockAutoHideSpeed": "Velocidade da animação",

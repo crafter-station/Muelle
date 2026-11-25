@@ -8,6 +8,8 @@
   "showStart": "إظهار قائمة ابدأ",
   "showTrash": "إظهار سلة المحذوفات",
   "showDownloads": "إظهار التنزيلات",
+  "downloadsStack": "الفتح كمكدس",
+  "downloadsStackHint": "تنفتح أحدث الملفات من الرمز كما في المجموعة. عند الإيقاف، يُفتح المجلد.",
   "pinExplorer": "إبقاء مستكشف الملفات في Dock",
   "pinExplorerHint": "عند تعطيله، يظهر فقط عندما تكون له نوافذ مفتوحة.",
   "dockAutoHideSpeed": "سرعة الحركة",

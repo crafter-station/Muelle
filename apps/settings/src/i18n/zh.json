@@ -8,6 +8,8 @@
   "showStart": "显示开始菜单",
   "showTrash": "显示回收站",
   "showDownloads": "显示下载",
+  "downloadsStack": "以堆栈方式打开",
+  "downloadsStackHint": "最新文件从图标展开，就像分组一样。关闭时打开文件夹。",
   "pinExplorer": "将文件资源管理器固定到程序坞",
   "pinExplorerHint": "关闭后，仅在有窗口打开时显示。",
   "dockAutoHideSpeed": "动画速度",

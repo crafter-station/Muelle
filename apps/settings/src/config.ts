@@ -28,6 +28,8 @@ export interface Config {
   showStart: boolean;
   showTrash: boolean;
   showDownloads: boolean;
+  /** Clicking Downloads fans out its newest files instead of opening the folder. */
+  downloadsStack: boolean;
   pinExplorer: boolean;
   genie: boolean;
   genieSpeed: GenieSpeed;
