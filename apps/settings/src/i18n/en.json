@@ -82,6 +82,8 @@
   "clockTargetAllFiles": "All files",
   "searchTarget": "Search opens",
   "searchTargetDefault": "Windows Search, as on the taskbar. The icon follows the taskbar's search setting.",
+  "openTargetPlaceholder": "App, shortcut or link",
+  "searchTargetPlaceholder": "App, shortcut or link, e.g. x-cmdpal://",
   "menuBarBluetoothWhenOff": "Show Bluetooth while it's off",
   "menuBarBluetoothWhenOffHint": "A dimmed icon that opens Bluetooth settings, so you can turn it on from the menu bar.",
   "aiUsageHint": "Uses your existing sessions; checks every 5 min. Never saves credentials.",

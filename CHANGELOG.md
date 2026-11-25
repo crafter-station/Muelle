@@ -22,9 +22,11 @@ copia la sección de la versión que se publica a la release de GitHub.
   Bluetooth icon stays while the radio is off, so Bluetooth can be turned on
   from the bar. Off by default; the retired visibility override is still
   ignored (issue #55).
-- The search icon can open an app, shortcut or URI chosen in Settings → Menu
-  bar ("Search opens"), such as another launcher. By default it still opens
-  Windows Search.
+- The search icon can open an app, shortcut or link chosen in Settings → Menu
+  bar ("Search opens"), such as another launcher; by default it still opens
+  Windows Search. "Search opens" and "Clock opens" now also take a typed link,
+  for apps the file picker cannot reach: `x-cmdpal://` opens PowerToys Command
+  Palette, for example.
 - Downloads opens as a stack, like a group in the Dock: its 24 newest files
   fan out from the icon (a grid when there are many), with Windows' cached
   thumbnails, and a last item opens the folder in Explorer. Clicking a file
@@ -45,9 +47,12 @@ copia la sección de la versión que se publica a la release de GitHub.
   superior: un icono de Bluetooth atenuado se mantiene con la radio apagada,
   para encenderla desde la barra. Desactivada por defecto; el antiguo ajuste
   de visibilidad sigue ignorándose (issue #55).
-- El icono de búsqueda puede abrir una app, un acceso directo o un URI elegido
-  en Ajustes → Barra superior ("La búsqueda abre"), como otro lanzador. Por
-  defecto sigue abriendo la búsqueda de Windows.
+- El icono de búsqueda puede abrir una app, un acceso directo o un enlace
+  elegido en Ajustes → Barra superior ("La búsqueda abre"), como otro lanzador;
+  por defecto sigue abriendo la búsqueda de Windows. "La búsqueda abre" y "El
+  reloj abre" aceptan también un enlace escrito, para apps que el selector de
+  archivos no alcanza: `x-cmdpal://` abre la Paleta de comandos de PowerToys,
+  por ejemplo.
 - Descargas se abre como una pila, como un grupo del Dock: sus 24 archivos más
   recientes se despliegan desde el icono (en cuadrícula si son muchos), con las
   miniaturas que Windows ya tiene, y un último elemento abre la carpeta en el

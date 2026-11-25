@@ -32,7 +32,7 @@ import {
   saveConfig,
   setAutostart,
 } from "./config";
-import { Card, Row, Segmented, Select, Slider, SubRow, Toggle, VisualChoices } from "./controls";
+import { Card, Row, Segmented, Select, Slider, SubRow, TextField, Toggle, VisualChoices } from "./controls";
 import { DockDensityPreview, DockPreview, IslandPreview, MascotPreview, SettingIcon, SpeedPreview, ThemePreview } from "./visuals";
 import { type SectionId, SectionIcon } from "./icons";
 import { UpdateBanner } from "./UpdateBanner";
@@ -703,8 +703,14 @@ export function App() {
                     onChange={(menuBarNotifications) => update({ menuBarNotifications })}
                   />
                 </SubRow>
-                <SubRow label={t.clockTarget} hint={config.menuBarClockTarget ?? t.clockTargetDefault} open={config.menuBar}>
+                <SubRow label={t.clockTarget} hint={config.menuBarClockTarget ? undefined : t.clockTargetDefault} open={config.menuBar} stacked>
                   <div className="push-group">
+                    <TextField
+                      label={t.clockTarget}
+                      value={config.menuBarClockTarget ?? null}
+                      placeholder={t.openTargetPlaceholder}
+                      onCommit={(menuBarClockTarget) => update({ menuBarClockTarget })}
+                    />
                     {config.menuBarClockTarget ? (
                       <button type="button" className="push" onClick={() => update({ menuBarClockTarget: null })}>
                         {t.clockTargetReset}
@@ -715,8 +721,14 @@ export function App() {
                     </button>
                   </div>
                 </SubRow>
-                <SubRow label={t.searchTarget} hint={config.menuBarSearchTarget ?? t.searchTargetDefault} open={config.menuBar}>
+                <SubRow label={t.searchTarget} hint={config.menuBarSearchTarget ? undefined : t.searchTargetDefault} open={config.menuBar} stacked>
                   <div className="push-group">
+                    <TextField
+                      label={t.searchTarget}
+                      value={config.menuBarSearchTarget ?? null}
+                      placeholder={t.searchTargetPlaceholder}
+                      onCommit={(menuBarSearchTarget) => update({ menuBarSearchTarget })}
+                    />
                     {config.menuBarSearchTarget ? (
                       <button type="button" className="push" onClick={() => update({ menuBarSearchTarget: null })}>
                         {t.clockTargetReset}

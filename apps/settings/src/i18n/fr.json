@@ -82,6 +82,8 @@
   "clockTargetAllFiles": "Tous les fichiers",
   "searchTarget": "La recherche ouvre",
   "searchTargetDefault": "Recherche Windows, comme dans la barre des tâches. L’icône suit le réglage de recherche de la barre des tâches.",
+  "openTargetPlaceholder": "App, raccourci ou lien",
+  "searchTargetPlaceholder": "App, raccourci ou lien, p. ex. x-cmdpal://",
   "menuBarBluetoothWhenOff": "Afficher le Bluetooth même désactivé",
   "menuBarBluetoothWhenOffHint": "Une icône estompée qui ouvre les paramètres Bluetooth, pour l’activer depuis la barre de menus.",
   "aiUsageHint": "Utilise vos sessions existantes ; vérifie toutes les 5 min. Aucun identifiant enregistré.",

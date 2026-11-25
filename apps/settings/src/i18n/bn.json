@@ -82,6 +82,8 @@
   "clockTargetAllFiles": "সব ফাইল",
   "searchTarget": "সার্চে ক্লিক করলে খোলে",
   "searchTargetDefault": "Windows সার্চ, টাস্কবারের মতো। আইকনটি টাস্কবারের সার্চ সেটিং অনুসরণ করে।",
+  "openTargetPlaceholder": "অ্যাপ, শর্টকাট বা লিংক",
+  "searchTargetPlaceholder": "অ্যাপ, শর্টকাট বা লিংক, যেমন x-cmdpal://",
   "menuBarBluetoothWhenOff": "বন্ধ থাকলেও ব্লুটুথ দেখান",
   "menuBarBluetoothWhenOffHint": "একটি ম্লান আইকন যা ব্লুটুথ সেটিংস খোলে, যাতে মেনু বার থেকে এটি চালু করতে পারেন।",
   "aiUsageHint": "বর্তমান সেশন ব্যবহার করে; প্রতি 5 মিনিটে পরীক্ষা। লগইন তথ্য কখনো সংরক্ষণ করে না।",

@@ -296,6 +296,7 @@ test("the search icon opens Windows Search until given its own target", async ()
   const view = fixture("menubar", { menuBarSearchTarget: undefined }, async () => {}, native);
   const row = () => [...elements(view.body())].find((node) => node.props.label === texts.en.searchTarget && "open" in node.props);
   const button = (text) => [...elements(row().props.children)].find((node) => node.type === "button" && node.props.children === text);
+  const field = () => [...elements(row().props.children)].find((node) => typeof node.props.onCommit === "function");
   const unmount = await view.mount();
   try {
     assert.equal(row().props.hint, texts.en.searchTargetDefault);
@@ -306,7 +307,8 @@ test("the search icon opens Windows Search until given its own target", async ()
     await settle();
     assert.deepEqual(view.clockPicks, [{ current: null, apps: texts.en.clockTargetApps, all: texts.en.clockTargetAllFiles }]);
     assert.deepEqual(view.calls, [{ menuBarSearchTarget: picked }]);
-    assert.equal(row().props.hint, picked);
+    assert.equal(row().props.hint, undefined, "the field shows the target");
+    assert.equal(field().props.value, picked);
     button(texts.en.clockTargetReset).props.onClick();
     view.fire(60);
     await settle();
@@ -328,6 +330,36 @@ test("Downloads opens as a stack unless turned off, under its Show Downloads swi
     await settle();
     assert.deepEqual(view.calls, [{ downloadsStack: false }]);
     assert.equal(find(view, "checked").props.checked, false);
+  } finally { unmount(); }
+});
+
+test("a link can be typed for the search icon and the clock, as for PowerToys Command Palette", async () => {
+  const view = fixture("menubar", { menuBarSearchTarget: undefined, menuBarClockTarget: undefined });
+  const field = (label) => [...elements(view.body())].find((node) =>
+    node.props.label === label && typeof node.props.onCommit === "function");
+  const unmount = await view.mount();
+  try {
+    for (const label of [texts.en.searchTarget, texts.en.clockTarget]) {
+      assert.equal(field(label).props.value, null);
+      assert.ok(field(label).props.placeholder);
+    }
+    assert.match(field(texts.en.searchTarget).props.placeholder, /x-cmdpal:\/\//);
+    field(texts.en.searchTarget).props.onCommit("x-cmdpal://");
+    view.fire(60);
+    await settle();
+    assert.deepEqual(view.calls, [{ menuBarSearchTarget: "x-cmdpal://" }]);
+    assert.equal(field(texts.en.searchTarget).props.value, "x-cmdpal://");
+    field(texts.en.clockTarget).props.onCommit("outlookcal:");
+    view.fire(60);
+    await settle();
+    assert.deepEqual(view.calls.at(-1), { menuBarClockTarget: "outlookcal:" });
+    // Emptying a field goes back to the default.
+    field(texts.en.searchTarget).props.onCommit(null);
+    view.fire(60);
+    await settle();
+    assert.deepEqual(view.calls.at(-1), { menuBarSearchTarget: null });
+    const row = [...elements(view.body())].find((node) => node.props.label === texts.en.searchTarget && "open" in node.props);
+    assert.equal(row.props.hint, texts.en.searchTargetDefault);
   } finally { unmount(); }
 });
 

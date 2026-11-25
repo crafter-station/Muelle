@@ -133,6 +133,44 @@ export function Select<T extends string>({ value, label, options, onChange }: Se
   </span>;
 }
 
+interface TextFieldProps {
+  label: string;
+  value: string | null;
+  placeholder: string;
+  /** The trimmed text, or null when emptied; called only when it changed. */
+  onCommit: (value: string | null) => void;
+}
+
+/**
+ * One line of text, saved when it loses the focus or on Enter, so a
+ * half-typed link never takes effect; Escape puts the saved value back. It
+ * is keyed on the saved value, so a choice made elsewhere (a picker, a
+ * reset) shows at once.
+ */
+export function TextField({ label, value, placeholder, onCommit }: TextFieldProps) {
+  const saved = value ?? "";
+  const commit = (text: string) => {
+    const trimmed = text.trim();
+    if (trimmed !== saved) onCommit(trimmed || null);
+  };
+  return <input
+    key={saved}
+    type="text"
+    className="text-field"
+    aria-label={label}
+    defaultValue={saved}
+    placeholder={placeholder}
+    spellCheck={false}
+    autoComplete="off"
+    dir="auto"
+    onBlur={(event) => commit(event.currentTarget.value)}
+    onKeyDown={(event) => {
+      if (event.key === "Escape") event.currentTarget.value = saved;
+      if (event.key === "Enter" || event.key === "Escape") event.currentTarget.blur();
+    }}
+  />;
+}
+
 interface VisualChoicesProps<T extends string> {
   label: string;
   value: T;

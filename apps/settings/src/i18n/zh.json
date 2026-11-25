@@ -82,6 +82,8 @@
   "clockTargetAllFiles": "所有文件",
   "searchTarget": "点击搜索打开",
   "searchTargetDefault": "Windows 搜索，与任务栏相同。图标跟随任务栏的搜索设置。",
+  "openTargetPlaceholder": "应用、快捷方式或链接",
+  "searchTargetPlaceholder": "应用、快捷方式或链接，例如 x-cmdpal://",
   "menuBarBluetoothWhenOff": "蓝牙关闭时也显示",
   "menuBarBluetoothWhenOffHint": "显示变暗的图标，点击打开蓝牙设置，以便从菜单栏开启蓝牙。",
   "aiUsageHint": "使用现有会话，每 5 分钟检查一次，不保存凭据。",

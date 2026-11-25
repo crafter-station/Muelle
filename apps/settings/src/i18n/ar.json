@@ -82,6 +82,8 @@
   "clockTargetAllFiles": "كل الملفات",
   "searchTarget": "النقر على البحث يفتح",
   "searchTargetDefault": "بحث Windows، كما في شريط المهام. يتبع الرمز إعداد البحث في شريط المهام.",
+  "openTargetPlaceholder": "تطبيق أو اختصار أو رابط",
+  "searchTargetPlaceholder": "تطبيق أو اختصار أو رابط، مثل x-cmdpal://",
   "menuBarBluetoothWhenOff": "إظهار البلوتوث حتى عند إيقافه",
   "menuBarBluetoothWhenOffHint": "رمز باهت يفتح إعدادات البلوتوث، لتشغيله من شريط القوائم.",
   "aiUsageHint": "يستخدم جلساتك الحالية ويتحقق كل 5 دقائق. لا يحفظ بيانات الاعتماد.",
