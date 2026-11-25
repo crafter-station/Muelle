@@ -6,6 +6,54 @@ copies the section of the version being published into the GitHub release.
 Cada versión lista sus cambios en inglés y en español. El flujo de publicación
 copia la sección de la versión que se publica a la release de GitHub.
 
+## [Unreleased]
+
+### English
+
+- The volume icon in the menu bar opens a volume slider under it, with the
+  percentage and a mute button, as the music panel shows them; another click
+  closes it. Without an output device it still opens Windows' sound page
+  (issue #55).
+- The notifications bell shows a red count of the notifications that arrived
+  since the notification center was last opened from the bar. Muelle reads
+  the notification center only while the bell is shown, and only when Windows
+  allows notification access (issue #55).
+- New option "Show Bluetooth while it's off" in Settings → Menu bar: a dimmed
+  Bluetooth icon stays while the radio is off, so Bluetooth can be turned on
+  from the bar. Off by default; the retired visibility override is still
+  ignored (issue #55).
+- The search icon can open an app, shortcut or URI chosen in Settings → Menu
+  bar ("Search opens"), such as another launcher. By default it still opens
+  Windows Search.
+- Downloads opens as a stack, like a group in the Dock: its 24 newest files
+  fan out from the icon (a grid when there are many), with Windows' cached
+  thumbnails, and a last item opens the folder in Explorer. Clicking a file
+  opens it; right-click shows it in Explorer. "Open as a stack" in Settings →
+  Dock turns it off.
+
+### Español
+
+- El icono de volumen de la barra superior abre un control deslizante debajo,
+  con el porcentaje y un botón de silencio, como en el panel de música; otro
+  clic lo cierra. Sin dispositivo de salida sigue abriendo la página de sonido
+  de Windows (issue #55).
+- La campana de notificaciones muestra un contador rojo de las notificaciones
+  llegadas desde la última vez que se abrió el centro de notificaciones desde
+  la barra. Muelle lo lee solo mientras la campana se muestra y solo si
+  Windows permite el acceso a las notificaciones (issue #55).
+- Nueva opción "Mostrar Bluetooth aunque esté apagado" en Ajustes → Barra
+  superior: un icono de Bluetooth atenuado se mantiene con la radio apagada,
+  para encenderla desde la barra. Desactivada por defecto; el antiguo ajuste
+  de visibilidad sigue ignorándose (issue #55).
+- El icono de búsqueda puede abrir una app, un acceso directo o un URI elegido
+  en Ajustes → Barra superior ("La búsqueda abre"), como otro lanzador. Por
+  defecto sigue abriendo la búsqueda de Windows.
+- Descargas se abre como una pila, como un grupo del Dock: sus 24 archivos más
+  recientes se despliegan desde el icono (en cuadrícula si son muchos), con las
+  miniaturas que Windows ya tiene, y un último elemento abre la carpeta en el
+  Explorador. Un clic abre el archivo; el clic derecho lo muestra en el
+  Explorador. "Abrir como pila" en Ajustes → Dock lo desactiva.
+
 ## [0.1.25]
 
 ### English
