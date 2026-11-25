@@ -90,7 +90,7 @@ pub fn newest(folder: &str, limit: usize) -> io::Result<Vec<RecentItem>> {
             ))
         })
         .collect();
-    items.sort_by(|a, b| b.0.cmp(&a.0));
+    items.sort_by_key(|item| std::cmp::Reverse(item.0));
     items.truncate(limit);
     Ok(items.into_iter().map(|(_, item)| item).collect())
 }
