@@ -512,6 +512,9 @@ impl Drop for ExitAnimation {
 
 pub struct MenuBar {
     bluetooth: Option<bluetooth::Monitor>,
+    /// In the bar row, where the pointer keeps the volume slider open: the
+    /// speaker and the width of the slider under it. Empty while closed.
+    volume_row_span: Span,
     /// Reads the notification center while the bell is shown.
     notification_watch: Option<notification_count::Watch>,
     /// The notifications there when the center was last opened from the
@@ -1286,6 +1289,7 @@ impl MenuBar {
             island_hits: Vec::new(),
             outside_click_hook: None,
             bluetooth: bluetooth::Monitor::new(hwnd.0 as isize, BLUETOOTH_CHANGED).ok(),
+            volume_row_span: Span::default(),
             notification_watch: None,
             notifications_seen: None,
             _network: NetworkWatch::new(hwnd.0 as isize, STATUS_CHANGED),
@@ -1797,10 +1801,14 @@ impl MenuBar {
             self.queue_volume(span, y);
             return self.paint_volume_preview(gfx);
         }
-        let span = if y < (self.bounds.bottom - self.bounds.top) as f32 {
-            self.triggers_span
-        } else {
+        let span = if y >= (self.bounds.bottom - self.bounds.top) as f32 {
             self.panel_span
+        } else if self.panel == Some(Island::Volume) {
+            // Opened from the speaker, not the island: resting on it, or above
+            // the slider, keeps it open; moving along the bar closes it.
+            self.volume_row_span
+        } else {
+            self.triggers_span
         };
         if self.panel.is_some() && (x < span.left || x >= span.right) {
             self.dismiss_island(gfx)?;
@@ -2766,6 +2774,7 @@ impl MenuBar {
         self.panel_span = Span::default();
         self.draw_island(gfx, look, &layers, width, height, left_end, right)?;
         let speaker_zone = speaker.filter(|_| look.panel == Some(Island::Volume));
+        self.volume_row_span = Span::default();
         if let Some((left, right)) = speaker_zone
             && look.status.volume.is_some()
         {
@@ -2782,6 +2791,10 @@ impl MenuBar {
             )?;
             self.draw_volume_capsule(gfx, &content, geometry)?;
             self.panel_span = span;
+            self.volume_row_span = Span {
+                left: span.left.min(left),
+                right: span.right.max(right),
+            };
         }
         // While the slider is open, a click on the speaker reaches the bar
         // (to close it) instead of dismissing it first from the hook.
@@ -5047,9 +5060,36 @@ mod island_tests {
         assert!(bar.volume_controls.is_some());
         // Without an output there is nothing to slide: the panel closes.
         look.status.volume = None;
-        bar.apply_look(&gfx, look)?;
+        bar.apply_look(&gfx, look.clone())?;
         assert_eq!(bar.panel, None);
         assert_eq!(bar.panel_span.width(), 0.0);
+
+        // Through a real click on the speaker: it opens, a second one closes.
+        // Clicks redraw from the real screen, so lay the bar out from it too.
+        bar.status.volume = Some(volume);
+        bar.refresh(&gfx)?;
+        let (left, right, _) = *bar
+            .zones
+            .iter()
+            .find(|(_, _, action)| *action == Action::Sound)
+            .context("speaker zone")?;
+        let x = (left + right) / 2.0;
+        bar.click(&gfx, x, 10.0)?;
+        assert_eq!(bar.panel, Some(Island::Volume));
+        assert!(bar.panel_span.width() > 0.0);
+        // Windows follows a click with a move: resting on the speaker, or
+        // going down to the slider, keeps it open.
+        bar.pointer_moved(&gfx, x, 10.0)?;
+        let below = (bar.bounds.bottom - bar.bounds.top) as f32 + 4.0;
+        bar.pointer_moved(&gfx, x, below)?;
+        assert_eq!(bar.panel, Some(Island::Volume));
+        bar.click(&gfx, x, 10.0)?;
+        assert_eq!(bar.panel, None);
+        // Moving away along the bar closes it, as the island's panels close.
+        bar.click(&gfx, x, 10.0)?;
+        assert_eq!(bar.panel, Some(Island::Volume));
+        bar.pointer_moved(&gfx, (x - 300.0).max(0.0), 10.0)?;
+        assert_eq!(bar.panel, None);
         Ok(())
     }
 
