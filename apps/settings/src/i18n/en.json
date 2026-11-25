@@ -71,7 +71,7 @@
   "menuBarSystemMonitor": "System monitor",
   "menuBarSystemMonitorHint": "CPU, memory and network speed next to the status icons. Clicking it opens Task Manager. Nothing is measured while off.",
   "menuBarNotifications": "Notifications button",
-  "menuBarNotificationsHint": "A bell at the right end that opens the Windows notification center.",
+  "menuBarNotificationsHint": "A bell at the right end that opens the Windows notification center, with a red count of new notifications.",
   "clockTarget": "Clock opens",
   "clockTargetDefault": "Notifications and calendar, as on the taskbar.",
   "clockTargetChoose": "Choose…",

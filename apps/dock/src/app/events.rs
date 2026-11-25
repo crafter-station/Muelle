@@ -195,6 +195,15 @@ pub fn menu_bar_audio_changed() {
     });
 }
 
+/// The notification center changed, or a read of it finished (see
+/// `notification_count::CHANGED` and `READ`).
+pub fn menu_bar_notifications(what: usize) {
+    with_app("notificaciones", |app| match &mut app.menubar {
+        Some(bar) => bar.notifications_event(&app.gfx, what),
+        None => Ok(()),
+    });
+}
+
 pub fn menu_bar_bluetooth_changed() {
     with_app("Bluetooth", |app| match &mut app.menubar {
         Some(bar) => bar.bluetooth_changed(&app.gfx),

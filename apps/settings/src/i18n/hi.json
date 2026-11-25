@@ -71,7 +71,7 @@
   "menuBarSystemMonitor": "सिस्टम मॉनिटर",
   "menuBarSystemMonitorHint": "स्थिति आइकनों के पास CPU, मेमोरी और नेटवर्क की गति। क्लिक करने पर टास्क मैनेजर खुलता है। बंद होने पर कुछ भी नहीं मापा जाता।",
   "menuBarNotifications": "सूचना बटन",
-  "menuBarNotificationsHint": "दाएँ छोर पर एक घंटी, जो Windows सूचना केंद्र खोलती है।",
+  "menuBarNotificationsHint": "दाएँ छोर पर एक घंटी, जो Windows सूचना केंद्र खोलती है, नई सूचनाओं की लाल गिनती के साथ।",
   "clockTarget": "घड़ी पर क्लिक करने से खुलता है",
   "clockTargetDefault": "सूचनाएँ और कैलेंडर, टास्कबार की तरह।",
   "clockTargetChoose": "चुनें…",

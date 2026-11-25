@@ -27,6 +27,7 @@ use muelle_shell::{
     watch::RegistryWatch,
 };
 use std::{
+    collections::HashSet,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering},
@@ -76,6 +77,7 @@ use crate::{
     gfx::{Gfx, Ink, LabelBrush},
     mascot,
     media::{self, Control as MediaControl, Track},
+    notification_count,
     scene::Theme,
     strings,
     usage::{
@@ -95,6 +97,9 @@ const VOLUME_CAPTURE_LOST: u32 = WM_APP + 31;
 const AUDIO_CHANGED: u32 = WM_APP + 32;
 const AUDIO_TICK: u32 = WM_APP + 33;
 const BLUETOOTH_CHANGED: u32 = WM_APP + 34;
+/// From the notification center watch, with `notification_count::CHANGED` or
+/// `READ` as `WPARAM`.
+const NOTIFICATIONS: u32 = WM_APP + 35;
 const VOLUME_TIMER: usize = 4;
 const PROGRESS_TIMER: usize = 5;
 /// The system monitor's samples (issue #64): every 2 s while it shows, and
@@ -263,6 +268,9 @@ struct Look {
     battery: Option<Battery>,
     status: Status,
     widgets: MenuBarWidgets,
+    /// New notifications since the center was last opened from the bar: the
+    /// bell's badge (0 hides it).
+    notifications_unread: u32,
     usage: Snapshot,
     usage_enabled: bool,
     active_providers: ActiveProviders,
@@ -498,6 +506,11 @@ impl Drop for ExitAnimation {
 
 pub struct MenuBar {
     bluetooth: Option<bluetooth::Monitor>,
+    /// Reads the notification center while the bell is shown.
+    notification_watch: Option<notification_count::Watch>,
+    /// The notifications there when the center was last opened from the
+    /// bar, or at the first read: only newer ones are counted.
+    notifications_seen: Option<HashSet<u32>>,
     accessories: Option<accessories::Monitor>,
     accessories_enabled: bool,
     accessory_retry_at: Instant,
@@ -643,6 +656,7 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         ACCESSORIES_CHANGED => app::menu_bar_accessories_changed(),
         MEDIA_CHANGED => app::menu_bar_media_changed(),
         BLUETOOTH_CHANGED => app::menu_bar_bluetooth_changed(),
+        NOTIFICATIONS => app::menu_bar_notifications(w.0),
         AUDIO_CHANGED => {
             if !AUDIO_TICK_PENDING.swap(true, Ordering::Relaxed) {
                 unsafe {
@@ -1262,6 +1276,8 @@ impl MenuBar {
             island_hits: Vec::new(),
             outside_click_hook: None,
             bluetooth: bluetooth::Monitor::new(hwnd.0 as isize, BLUETOOTH_CHANGED).ok(),
+            notification_watch: None,
+            notifications_seen: None,
             _network: NetworkWatch::new(hwnd.0 as isize, STATUS_CHANGED),
             privacy_watch: status::watch_privacy(hwnd.0 as isize, REGISTRY_CHANGED),
             settings_watch: status::watch_taskbar_settings(hwnd.0 as isize, REGISTRY_CHANGED),
@@ -1270,6 +1286,7 @@ impl MenuBar {
             audio: AudioWatch::new(hwnd.0 as isize, AUDIO_CHANGED),
         };
         AUDIO_TICK_PENDING.store(false, Ordering::Relaxed);
+        bar.sync_notification_watch();
         bar.update_status();
         bar.refresh(gfx)?;
         bar.schedule_next_minute();
@@ -1457,7 +1474,70 @@ impl MenuBar {
             return Ok(());
         }
         self.widgets = widgets;
+        self.sync_notification_watch();
         self.refresh(gfx)
+    }
+
+    /// The notification center is read only while the bell is shown.
+    fn sync_notification_watch(&mut self) {
+        let wanted = self.widgets.notifications;
+        if wanted == self.notification_watch.is_some() {
+            return;
+        }
+        self.notifications_seen = None;
+        self.notification_watch = wanted
+            .then(|| notification_count::Watch::start(self.hwnd.0 as isize, NOTIFICATIONS))
+            .flatten();
+    }
+
+    /// The watch says the center changed, or a read of it finished.
+    pub fn notifications_event(&mut self, gfx: &Gfx, what: usize) -> Result<()> {
+        let Some(watch) = &self.notification_watch else {
+            return Ok(());
+        };
+        if what == notification_count::CHANGED {
+            watch.refresh();
+            return Ok(());
+        }
+        // The first read sets the starting point: notifications that were
+        // already waiting when the bell appeared are not new.
+        if self.notifications_seen.is_none() {
+            self.notifications_seen = watch.ids().map(|ids| ids.into_iter().collect());
+        }
+        self.update_notification_count(gfx)
+    }
+
+    /// The notification center was opened from the bar: everything in it
+    /// now counts as seen.
+    fn notifications_opened(&mut self, gfx: &Gfx) -> Result<()> {
+        let Some(watch) = &self.notification_watch else {
+            return Ok(());
+        };
+        if let Some(ids) = watch.ids() {
+            self.notifications_seen = Some(ids.into_iter().collect());
+        }
+        self.update_notification_count(gfx)
+    }
+
+    fn notifications_unread(&self) -> u32 {
+        match (&self.notification_watch, &self.notifications_seen) {
+            (Some(watch), Some(seen)) => watch
+                .ids()
+                .map_or(0, |ids| notification_count::unread(&ids, seen)),
+            _ => 0,
+        }
+    }
+
+    fn update_notification_count(&mut self, gfx: &Gfx) -> Result<()> {
+        let unread = self.notifications_unread();
+        let Some(mut look) = self.look.clone() else {
+            return Ok(());
+        };
+        if look.notifications_unread == unread {
+            return Ok(());
+        }
+        look.notifications_unread = unread;
+        self.apply_look(gfx, look)
     }
 
     /// What clicking the clock opens; `None` for the notification center.
@@ -1854,6 +1934,9 @@ impl MenuBar {
     }
 
     pub fn tick(&mut self, gfx: &Gfx) -> Result<()> {
+        if let Some(watch) = &self.notification_watch {
+            watch.refresh();
+        }
         self.update_status();
         self.watch_network();
         let audio_changed = self
@@ -2023,16 +2106,23 @@ impl MenuBar {
         match hit.map(|(_, _, action)| *action) {
             Some(Action::AccessoryIndicator) => {}
             Some(Action::QuickSettings) => launcher::open_quick_settings(),
-            Some(Action::Notifications) => launcher::open_notifications(),
+            Some(Action::Notifications) => {
+                launcher::open_notifications();
+                self.notifications_opened(gfx)?;
+            }
             // A chosen target that no longer opens (an uninstalled app)
             // falls back to what the item always opened.
             Some(Action::Clock) => {
-                open_or(self.clock_target.as_deref(), launcher::open_notifications);
+                if open_or(self.clock_target.as_deref(), launcher::open_notifications) {
+                    self.notifications_opened(gfx)?;
+                }
             }
             Some(Action::Power) => launcher::open_power_settings(),
             Some(Action::Network) => launcher::open_network_list(),
             Some(Action::Sound) => launcher::open_sound(),
-            Some(Action::Search) => open_or(self.search_target.as_deref(), launcher::open_search),
+            Some(Action::Search) => {
+                open_or(self.search_target.as_deref(), launcher::open_search);
+            }
             Some(Action::TaskView) => launcher::open_task_view(),
             Some(Action::Widgets) => launcher::open_widgets(),
             Some(Action::Bluetooth) => launcher::open_bluetooth(),
@@ -2114,6 +2204,7 @@ impl MenuBar {
             battery: system::battery(),
             status: self.status,
             widgets: self.widgets,
+            notifications_unread: self.notifications_unread(),
             usage: self
                 .usage
                 .as_ref()
@@ -2538,6 +2629,7 @@ impl MenuBar {
         if status.buttons.widgets {
             items.push((symbol(&[(glyph::WIDGETS, 1.0)])?, Action::Widgets));
         }
+        let mut bell = None;
         for (index, (item, action)) in items.iter().enumerate() {
             let zone_right = right;
             if let Some((_, label)) = battery_label
@@ -2551,12 +2643,20 @@ impl MenuBar {
             }
             let left = right - item.width;
             place(&layers, item, left)?;
+            if *action == Action::Notifications {
+                bell = Some((left, item.width, ((height - item.height) / 2.0).round()));
+            }
             // The battery icon and its percentage form one control.
             // Accessory readings are passive status indicators, not controls.
             if *action != Action::AccessoryIndicator {
                 self.zones.push((left - slop, zone_right + slop, *action));
             }
             right = left - px(ITEM_GAP);
+        }
+        if let Some(bell) = bell
+            && look.notifications_unread > 0
+        {
+            draw_notification_badge(gfx, &layers, bell, look.notifications_unread, scale)?;
         }
 
         // The system monitor (issue #64), left of the status icons: two
@@ -3670,11 +3770,59 @@ impl IslandGeometry {
 }
 
 /// Opens the user's `target` for a menu bar item, or does what the item
-/// does by default when there is none or it fails to open.
-fn open_or(target: Option<&str>, default: fn()) {
-    if !target.is_some_and(|target| launcher::open(target).is_ok()) {
-        default();
+/// does by default when there is none or it fails to open. `true` when it
+/// did the default.
+fn open_or(target: Option<&str>, default: fn()) -> bool {
+    if target.is_some_and(|target| launcher::open(target).is_ok()) {
+        return false;
     }
+    default();
+    true
+}
+
+/// The red count on the bell's top-right corner, as a macOS badge.
+fn draw_notification_badge(
+    gfx: &Gfx,
+    layers: &VisualCollection,
+    bell: (f32, f32, f32),
+    unread: u32,
+    scale: f32,
+) -> Result<()> {
+    let (bell_left, bell_width, bell_top) = bell;
+    let px = |value: f32| (value * scale).round();
+    let label = gfx.text_brush_sized(
+        &notification_count::badge_text(unread),
+        scale,
+        8.5,
+        true,
+        Ink::Light,
+    )?;
+    let height = px(12.0);
+    let width = (label.width + px(6.0)).max(height);
+    let left = bell_left + bell_width - width * 0.7;
+    let top = (bell_top - px(1.0)).max(0.0);
+    let c = &gfx.compositor;
+    add_rounded_box(
+        c,
+        layers,
+        left,
+        top,
+        width,
+        height,
+        height / 2.0,
+        rgba(255, 59, 48, 255),
+        None,
+    )?;
+    add_visual(
+        c,
+        layers,
+        &label.brush.cast()?,
+        left + (width - label.width) / 2.0,
+        top + (height - label.height) / 2.0,
+        label.width,
+        label.height,
+    )?;
+    Ok(())
 }
 
 fn toggle_panel(open: Option<Island>, clicked: Island) -> Option<Island> {
@@ -4556,6 +4704,19 @@ mod island_tests {
                 usize::from(notifications)
             );
         }
+        // A count on the bell is drawn over it, without another click zone.
+        look.widgets.notifications = true;
+        look.notifications_unread = 5;
+        bar.apply_look(&gfx, look.clone())?;
+        assert_eq!(
+            bar.zones
+                .iter()
+                .filter(|(_, _, a)| *a == Action::Notifications)
+                .count(),
+            1
+        );
+        look.notifications_unread = 120;
+        bar.apply_look(&gfx, look.clone())?;
         // The clock target is not drawn: choosing one keeps the same look.
         let drawn = bar.look.clone();
         bar.set_clock_target(Some("ms-clock:"));

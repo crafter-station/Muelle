@@ -71,7 +71,7 @@
   "menuBarSystemMonitor": "مراقب النظام",
   "menuBarSystemMonitorHint": "المعالج والذاكرة وسرعة الشبكة بجانب أيقونات الحالة. النقر عليه يفتح إدارة المهام. لا يُقاس شيء عند إيقافه.",
   "menuBarNotifications": "زر الإشعارات",
-  "menuBarNotificationsHint": "جرس في الطرف الأيمن يفتح مركز الإشعارات في Windows.",
+  "menuBarNotificationsHint": "جرس في الطرف الأيمن يفتح مركز الإشعارات في Windows، مع عدّاد أحمر للإشعارات الجديدة.",
   "clockTarget": "النقر على الساعة يفتح",
   "clockTargetDefault": "الإشعارات والتقويم، كما في شريط المهام.",
   "clockTargetChoose": "اختيار…",

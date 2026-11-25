@@ -71,7 +71,7 @@
   "menuBarSystemMonitor": "Monitor del sistema",
   "menuBarSystemMonitorHint": "CPU, memoria y velocidad de red junto a los iconos de estado. Al hacer clic abre el Administrador de tareas. Apagado, no mide nada.",
   "menuBarNotifications": "Botón de notificaciones",
-  "menuBarNotificationsHint": "Una campana en el extremo derecho que abre el centro de notificaciones de Windows.",
+  "menuBarNotificationsHint": "Una campana en el extremo derecho que abre el centro de notificaciones de Windows, con un contador rojo de notificaciones nuevas.",
   "clockTarget": "El reloj abre",
   "clockTargetDefault": "Notificaciones y calendario, como en la barra de tareas.",
   "clockTargetChoose": "Elegir…",

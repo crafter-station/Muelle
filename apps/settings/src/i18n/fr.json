@@ -71,7 +71,7 @@
   "menuBarSystemMonitor": "Moniteur système",
   "menuBarSystemMonitorHint": "Processeur, mémoire et débit réseau à côté des icônes d'état. Un clic ouvre le Gestionnaire des tâches. Désactivé, rien n'est mesuré.",
   "menuBarNotifications": "Bouton de notifications",
-  "menuBarNotificationsHint": "Une cloche à l’extrémité droite qui ouvre le centre de notifications de Windows.",
+  "menuBarNotificationsHint": "Une cloche à l’extrémité droite qui ouvre le centre de notifications de Windows, avec un compteur rouge des nouvelles notifications.",
   "clockTarget": "L’horloge ouvre",
   "clockTargetDefault": "Notifications et calendrier, comme dans la barre des tâches.",
   "clockTargetChoose": "Choisir…",

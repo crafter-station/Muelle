@@ -29,6 +29,7 @@ mod menu;
 mod menubar;
 mod moments;
 mod multi_window_view;
+mod notification_count;
 mod overlays;
 mod recovery;
 mod scene;

@@ -71,7 +71,7 @@
   "menuBarSystemMonitor": "Monitor do sistema",
   "menuBarSystemMonitorHint": "CPU, memória e velocidade da rede ao lado dos ícones de estado. Um clique abre o Gerenciador de Tarefas. Desligado, nada é medido.",
   "menuBarNotifications": "Botão de notificações",
-  "menuBarNotificationsHint": "Um sino na extremidade direita que abre a central de notificações do Windows.",
+  "menuBarNotificationsHint": "Um sino na extremidade direita que abre a central de notificações do Windows, com um contador vermelho de notificações novas.",
   "clockTarget": "O relógio abre",
   "clockTargetDefault": "Notificações e calendário, como na barra de tarefas.",
   "clockTargetChoose": "Escolher…",

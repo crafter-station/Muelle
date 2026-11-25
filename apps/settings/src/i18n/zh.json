@@ -71,7 +71,7 @@
   "menuBarSystemMonitor": "系统监视器",
   "menuBarSystemMonitorHint": "在状态图标旁显示 CPU、内存和网速。点击可打开任务管理器。关闭时不进行任何测量。",
   "menuBarNotifications": "通知按钮",
-  "menuBarNotificationsHint": "在最右侧显示一个铃铛，点击可打开 Windows 通知中心。",
+  "menuBarNotificationsHint": "在最右侧显示一个铃铛，点击可打开 Windows 通知中心，红色数字表示新通知数量。",
   "clockTarget": "点击时钟打开",
   "clockTargetDefault": "通知和日历，与任务栏相同。",
   "clockTargetChoose": "选择…",
