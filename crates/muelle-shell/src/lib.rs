@@ -5,6 +5,7 @@ pub mod dock_link;
 pub mod end_task;
 pub mod files;
 pub mod folder;
+pub mod glaze;
 pub mod icon_cache;
 pub mod icons;
 pub mod imagery;

@@ -596,6 +596,37 @@ test("the menu bar shares the dock theme until given its own, which saves on its
   } finally { unmount(); }
 });
 
+test("Liquid Glass for other apps is off until asked for and saves each choice on its own key", async () => {
+  for (const language of Object.keys(texts)) {
+    const nodes = [...elements(fixture("appearance", { language }).body())];
+    const toggle = nodes.find((node) => node.props.label === texts[language].appGlassApps && "checked" in node.props);
+    assert.equal(toggle.props.checked, false, language);
+    for (const label of [texts[language].appGlassMaterial, texts[language].appGlassOpacity]) {
+      assert.equal(nodes.find((node) => node.props.label === label && "open" in node.props).props.open, false);
+    }
+  }
+
+  const view = fixture("appearance");
+  const unmount = await view.mount();
+  try {
+    view.change(texts.en.appGlassApps, true);
+    view.fire(60);
+    await settle();
+    assert.deepEqual(view.calls, [{ appGlass: true }]);
+    const nodes = [...elements(view.body())];
+    assert.equal(nodes.find((node) => node.props.label === texts.en.appGlassMaterial && node.props.options).props.value, "acrylic");
+    assert.equal(nodes.find((node) => node.props.label === texts.en.appGlassOpacity && "min" in node.props).props.value, 90);
+    view.change(texts.en.appGlassMaterial, "mica");
+    view.fire(60);
+    await settle();
+    assert.deepEqual(view.calls.at(-1), { appGlassMaterial: "mica" });
+    view.change(texts.en.appGlassOpacity, 75);
+    view.fire(60);
+    await settle();
+    assert.deepEqual(view.calls.at(-1), { appGlassOpacity: 75 });
+  } finally { unmount(); }
+});
+
 test("the alert bounce and the preview close button are always on, with no switch left", () => {
   for (const section of ["dock", "windows"]) for (const old of [false, true]) {
     const html = renderToStaticMarkup(fixture(section, { notificationBounce: old, showPreviewCloseButton: old }).body());

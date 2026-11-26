@@ -266,6 +266,8 @@ pub fn run() -> Result<()> {
             dock_display: None,
             names: HashMap::new(),
             calmed: Vec::new(),
+            glazed: Vec::new(),
+            glazed_with: None,
             started: false,
             stage: None,
             hovering: false,
@@ -424,6 +426,7 @@ pub fn run() -> Result<()> {
     let taking_over = APP.with_borrow_mut(|app| {
         app.as_mut().and_then(|app| {
             app.restore_transitions();
+            app.clear_glass();
             app.taskbar_worker.take()
         })
     });
