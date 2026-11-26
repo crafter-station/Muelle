@@ -276,3 +276,17 @@ fn native_hiding_clears_overlap_when_automatic_hiding_takes_precedence() -> Resu
     );
     Ok(())
 }
+
+#[test]
+fn flyouts_keep_the_dock_as_it_was_and_the_desktop_shows_it() {
+    use super::smart_covered;
+    for was_hidden in [false, true] {
+        // An app the dock shows decides by itself.
+        assert!(smart_covered(Some(true), false, was_hidden));
+        assert!(!smart_covered(Some(false), false, was_hidden));
+        // The desktop in front shows the dock.
+        assert!(!smart_covered(None, true, was_hidden));
+        // A flyout or a launcher's popup (from the menu bar) changes nothing.
+        assert_eq!(smart_covered(None, false, was_hidden), was_hidden);
+    }
+}
