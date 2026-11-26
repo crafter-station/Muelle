@@ -6,6 +6,22 @@ copies the section of the version being published into the GitHub release.
 Cada versión lista sus cambios en inglés y en español. El flujo de publicación
 copia la sección de la versión que se publica a la release de GitHub.
 
+## [Unreleased]
+
+### English
+
+- The volume icon in the menu bar opens a volume slider under it, with the
+  percentage and a mute button, as the music panel shows them; another click
+  closes it. Without an output device it still opens Windows' sound page
+  (issue #55).
+
+### Español
+
+- El icono de volumen de la barra superior abre un control deslizante debajo,
+  con el porcentaje y un botón de silencio, como en el panel de música; otro
+  clic lo cierra. Sin dispositivo de salida sigue abriendo la página de sonido
+  de Windows (issue #55).
+
 ## [0.1.26]
 
 ### English
