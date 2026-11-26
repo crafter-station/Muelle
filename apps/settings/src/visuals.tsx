@@ -3,6 +3,7 @@ import type { Appearance, DockDensity, DockPosition, GenieSpeed, IslandStyle, Ma
 import { MASCOT_PALETTE, MASCOT_SPRITES } from "./mascots";
 
 const PATHS = {
+  glass: <><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M3 8h18M7 17l4-5M11 17l6-7" /></>,
   size: <><rect x="3" y="9" width="6" height="6" rx="1.5" /><rect x="13" y="5" width="9" height="14" rx="2" /></>,
   magnification: <><circle cx="10" cy="10" r="6" /><path d="m15 15 5 5M7 10h6m-3-3v6" /></>,
   hide: <><path d="M3 9V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4M3 15v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-4M8 12h8m-3-3 3 3-3 3" /></>,

@@ -741,6 +741,9 @@ pub(crate) struct App {
     names: HashMap<String, String>,
     /// Windows whose system transitions are turned off (see `calm_windows`).
     calmed: Vec<isize>,
+    /// Windows given Liquid Glass (see `glaze_windows`), and the glass they got.
+    glazed: Vec<isize>,
+    glazed_with: Option<muelle_shell::glaze::Glaze>,
     /// Windows already minimized when the dock starts get no animation.
     started: bool,
     stage: Option<Stage>,

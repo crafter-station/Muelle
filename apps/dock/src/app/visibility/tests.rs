@@ -119,6 +119,8 @@ impl Fixture {
             dock_display: None,
             names: HashMap::new(),
             calmed: Vec::new(),
+            glazed: Vec::new(),
+            glazed_with: None,
             started: false,
             stage: None,
             hovering: false,

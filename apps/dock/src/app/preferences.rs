@@ -209,6 +209,7 @@ impl App {
         self.apply_menu_bar_setting();
         self.update_menu_bar_app()?;
         self.calm_windows();
+        self.glaze_windows();
         self.refresh()?;
         if hiding_changed {
             // refresh has recomputed overlap for the new policy and geometry.

@@ -144,6 +144,13 @@ pub struct Config {
     /// A theme of its own for the menu bar and its menus and panels (issue
     /// #54). `None`, the default, gives it the dock's `appearance`.
     pub menu_bar_appearance: Option<Appearance>,
+    /// Liquid Glass for other apps' windows, browsers included: a system
+    /// backdrop and, below 100 % opacity, a see-through window. Off by
+    /// default; everything is given back when it is turned off.
+    pub app_glass: bool,
+    pub app_glass_material: AppGlassMaterial,
+    /// How opaque glazed windows are, in percent (`APP_GLASS_OPACITY_RANGE`).
+    pub app_glass_opacity: u32,
     /// A folder shown at the right of the dock whose contents open as a
     /// menu, with a submenu for each folder inside, like a Windows 10 taskbar
     /// toolbar. Only one: the user arranges the folder as they like.
@@ -314,6 +321,24 @@ pub enum Appearance {
     Auto,
 }
 
+/// The material Windows draws behind other apps' windows (Windows 11 22H2
+/// and later; older versions keep only the opacity).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AppGlassMaterial {
+    Mica,
+    /// Mica tinted by the wallpaper, as tabbed windows use.
+    Tabbed,
+    /// The most glass-like of the three. Also what an unknown value from a
+    /// newer version reads as (serde needs this fallback last).
+    #[default]
+    #[serde(other)]
+    Acrylic,
+}
+
+/// Below half the text of glazed windows stops being readable.
+pub const APP_GLASS_OPACITY_RANGE: (u32, u32) = (50, 100);
+
 pub const ICON_SIZE_RANGE: (u32, u32) = (32, 96);
 pub const MAX_MAGNIFIED_SIZE: u32 = 160;
 
@@ -330,6 +355,9 @@ impl Config {
         self.magnified_size = self
             .magnified_size
             .clamp(self.icon_size, MAX_MAGNIFIED_SIZE);
+        self.app_glass_opacity = self
+            .app_glass_opacity
+            .clamp(APP_GLASS_OPACITY_RANGE.0, APP_GLASS_OPACITY_RANGE.1);
         self.shortcuts_folder = self
             .shortcuts_folder
             .map(|folder| folder.trim().to_owned())
@@ -398,6 +426,9 @@ impl Default for Config {
             language: Language::Auto,
             appearance: Appearance::Auto,
             menu_bar_appearance: None,
+            app_glass: false,
+            app_glass_material: AppGlassMaterial::Acrylic,
+            app_glass_opacity: 90,
             shortcuts_folder: None,
         }
     }
@@ -1068,6 +1099,29 @@ mod tests {
         }
         let left: Config = serde_json::from_str(r#"{"dockPosition":"left"}"#).unwrap_or_default();
         assert_eq!(left.dock_position, DockPosition::Left);
+    }
+
+    #[test]
+    fn app_glass_is_off_until_asked_for_and_its_opacity_stays_readable()
+    -> Result<(), serde_json::Error> {
+        let before: Config = serde_json::from_str(r#"{}"#)?;
+        assert!(!before.app_glass);
+        assert_eq!(before.app_glass_material, AppGlassMaterial::Acrylic);
+        assert_eq!(before.app_glass_opacity, 90);
+        let newer: Config = serde_json::from_str(r#"{"appGlassMaterial":"crystal"}"#)?;
+        assert_eq!(newer.app_glass_material, AppGlassMaterial::Acrylic);
+        let mica: Config = serde_json::from_str(r#"{"appGlass":true,"appGlassMaterial":"mica"}"#)?;
+        assert!(mica.app_glass);
+        assert_eq!(mica.app_glass_material, AppGlassMaterial::Mica);
+        for (opacity, kept) in [(0, 50), (49, 50), (75, 75), (100, 100), (400, 100)] {
+            let config = Config {
+                app_glass_opacity: opacity,
+                ..Config::default()
+            }
+            .sanitized();
+            assert_eq!(config.app_glass_opacity, kept);
+        }
+        Ok(())
     }
 
     #[test]

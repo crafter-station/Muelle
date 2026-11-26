@@ -3,8 +3,10 @@
 use std::{sync::atomic::Ordering, time::Instant};
 
 use anyhow::Result;
+use muelle_config::AppGlassMaterial;
 use muelle_core::bounce;
 use muelle_shell::{
+    glaze::{self, Glaze, Material},
     launcher, status,
     system::{animations_enabled, set_window_transitions},
     tracker,
@@ -135,6 +137,53 @@ impl App {
                 self.calmed.push(window.hwnd);
             }
         }
+    }
+
+    /// The Liquid Glass Settings asked for on other apps' windows, if any.
+    fn app_glaze(&self) -> Option<Glaze> {
+        self.config.app_glass.then(|| Glaze {
+            material: match self.config.app_glass_material {
+                AppGlassMaterial::Mica => Material::Mica,
+                AppGlassMaterial::Tabbed => Material::Tabbed,
+                AppGlassMaterial::Acrylic => Material::Acrylic,
+            },
+            opacity: u8::try_from(self.config.app_glass_opacity).unwrap_or(100),
+        })
+    }
+
+    /// Gives every tracked window, browsers included, the Liquid Glass chosen
+    /// in Settings: new windows as they appear, all of them again when the
+    /// material or the opacity changes. Turned off, they get back what they had.
+    pub(super) fn glaze_windows(&mut self) {
+        let Some(glaze) = self.app_glaze() else {
+            self.clear_glass();
+            return;
+        };
+        let windows = &self.windows;
+        self.glazed
+            .retain(|hwnd| windows.iter().any(|window| window.hwnd == *hwnd));
+        let changed = self.glazed_with != Some(glaze);
+        for window in windows {
+            let new = !self.glazed.contains(&window.hwnd);
+            if !changed && !new {
+                continue;
+            }
+            // A window that did not answer is tried again on the next sync.
+            let applied = glaze::apply(window.hwnd, glaze);
+            if applied && new {
+                self.glazed.push(window.hwnd);
+            } else if !applied {
+                self.glazed.retain(|hwnd| *hwnd != window.hwnd);
+            }
+        }
+        self.glazed_with = Some(glaze);
+    }
+
+    pub(super) fn clear_glass(&mut self) {
+        for hwnd in self.glazed.drain(..) {
+            glaze::restore(hwnd);
+        }
+        self.glazed_with = None;
     }
 
     pub(super) fn restore_transitions(&mut self) {
@@ -524,6 +573,7 @@ impl App {
             self.remember_rect(hwnd);
         }
         self.calm_windows();
+        self.glaze_windows();
         let recent_before = self.roster.recent().to_vec();
         let changed = self
             .roster

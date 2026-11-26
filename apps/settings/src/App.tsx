@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type Appearance,
+  type AppGlassMaterial,
   type Config,
   type DockPosition,
   type DockDensity,
@@ -17,6 +18,7 @@ import {
   type WindowsPreferences,
   ICON_SIZE,
   MAX_MAGNIFIED_SIZE,
+  APP_GLASS_OPACITY,
   checkUpdate,
   defaultConfig,
   getAutostart,
@@ -397,6 +399,37 @@ export function App() {
                     value={config.menuBarAppearance ?? config.appearance ?? "auto"}
                     options={themeChoices}
                     onChange={(menuBarAppearance) => update({ menuBarAppearance })}
+                  />
+                </SubRow>
+              </Card>
+              <Card title={t.appGlass}>
+                <Row icon={<SettingIcon name="glass" />} label={t.appGlassApps} hint={t.appGlassHint}>
+                  <Toggle
+                    label={t.appGlassApps}
+                    checked={config.appGlass ?? false}
+                    onChange={(appGlass) => update({ appGlass })}
+                  />
+                </Row>
+                <SubRow label={t.appGlassMaterial} open={config.appGlass ?? false}>
+                  <Segmented<AppGlassMaterial>
+                    label={t.appGlassMaterial}
+                    value={config.appGlassMaterial ?? "acrylic"}
+                    options={[
+                      { value: "acrylic", label: t.appGlassAcrylic },
+                      { value: "mica", label: t.appGlassMica },
+                      { value: "tabbed", label: t.appGlassTabbed },
+                    ]}
+                    onChange={(appGlassMaterial) => update({ appGlassMaterial })}
+                  />
+                </SubRow>
+                <SubRow label={t.appGlassOpacity} hint={t.appGlassOpacityHint} open={config.appGlass ?? false}>
+                  <Slider
+                    label={t.appGlassOpacity}
+                    unit="%"
+                    value={config.appGlassOpacity ?? 90}
+                    min={APP_GLASS_OPACITY.min}
+                    max={APP_GLASS_OPACITY.max}
+                    onChange={(appGlassOpacity) => update({ appGlassOpacity })}
                   />
                 </SubRow>
               </Card>

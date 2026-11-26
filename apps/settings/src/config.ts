@@ -11,6 +11,8 @@ export type DockAutoHideSpeed = "smooth" | "normal" | "fast";
 export type DockHidingMode = "visible" | "automatic" | "intelligent";
 /** `auto` follows Windows' light or dark mode. */
 export type Appearance = "auto" | "light" | "dark" | "frosted" | "clear" | "liquidGlass";
+/** What Windows draws behind other apps' windows when `appGlass` is on. */
+export type AppGlassMaterial = "acrylic" | "mica" | "tabbed";
 
 /** Mirrors `muelle_config::Config`. */
 export interface Config {
@@ -58,12 +60,18 @@ export interface Config {
   appearance: Appearance;
   /** The menu bar's own theme; null (or missing) gives it the dock's. */
   menuBarAppearance: Appearance | null;
+  /** Liquid Glass for other apps' windows and browsers. */
+  appGlass?: boolean;
+  appGlassMaterial?: AppGlassMaterial;
+  /** Percent, within `APP_GLASS_OPACITY`. */
+  appGlassOpacity?: number;
   /** The folder shown at the right of the dock, whose contents open as a menu. */
   shortcutsFolder: string | null;
 }
 
 export const ICON_SIZE = { min: 32, max: 96 } as const;
 export const MAX_MAGNIFIED_SIZE = 160;
+export const APP_GLASS_OPACITY = { min: 50, max: 100 } as const;
 
 export const loadConfig = () => invoke<Config>("get_config");
 export const defaultConfig = () => invoke<Config>("default_config");

@@ -6,6 +6,28 @@ copies the section of the version being published into the GitHub release.
 Cada versión lista sus cambios en inglés y en español. El flujo de publicación
 copia la sección de la versión que se publica a la release de GitHub.
 
+## [Unreleased]
+
+### English
+
+- Liquid Glass for other apps and browsers: Settings → Appearance → *Apps and
+  browsers* gives every window the dock tracks, Chrome, Edge and Firefox
+  included, an acrylic, Mica or tabbed backdrop (Windows 11 22H2 or later) and
+  an optional window opacity, from 50 to 100 %. Off by default. Turning it off,
+  quitting Muelle or a crash gives each window back exactly what it had; apps
+  running as administrator are left alone, and an app that does not respond
+  never holds the dock up.
+
+### Español
+
+- Liquid Glass en otras apps y navegadores: Ajustes → Apariencia → *Apps y
+  navegadores* da a cada ventana que sigue el dock, también Chrome, Edge y
+  Firefox, un fondo acrílico, Mica o con pestañas (Windows 11 22H2 o posterior)
+  y una opacidad opcional de la ventana, del 50 al 100 %. Viene desactivado. Al
+  apagarlo, al cerrar Muelle o tras un fallo, cada ventana recupera exactamente
+  lo que tenía; las apps abiertas como administrador no se tocan, y una app que
+  no responde nunca detiene el dock.
+
 ## [0.1.25]
 
 ### English
