@@ -5,10 +5,14 @@
 
 #![allow(dead_code)]
 
+#[path = "../../../apps/dock/src/appearance.rs"]
+mod appearance;
 #[path = "../../../apps/dock/src/gfx.rs"]
 mod gfx;
 #[path = "../../../apps/dock/src/menu.rs"]
 mod menu;
+#[path = "../../../apps/dock/src/scene.rs"]
+mod scene;
 
 use std::{io::Write, time::Duration};
 
@@ -165,7 +169,11 @@ fn main() -> anyhow::Result<()> {
             owner,
             &items,
             POINT { x: 960, y: 980 },
-            dark,
+            appearance::Look {
+                material: appearance::Material::Standard,
+                light: !dark,
+                glass: muelle_shell::system::transparency_enabled(),
+            },
             menu::Placement::Above,
         );
         println!("chosen: {chosen:?}");

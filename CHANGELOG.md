@@ -10,6 +10,11 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Dock context menus now inherit the full Dock material, and the language menu
+  inherits the menu bar's appearance. Window previews already follow the Dock;
+  open groups now dismiss when their material or display context changes.
+  Native folder submenus and accessibility fallbacks keep Windows' rendering.
+
 - Music, AI-usage and volume popups now follow the menu bar's complete material,
   including Frosted, Clear and Liquid Glass, while keeping readable text surfaces
   and the opaque fallback when Windows disables transparency.
@@ -31,6 +36,11 @@ copia la sección de la versión que se publica a la release de GitHub.
   (issue #55).
 
 ### Español
+
+- Los menús de clic derecho heredan el material completo del Dock y el selector
+  de idioma sigue la apariencia de la barra superior. Las previsualizaciones ya
+  siguen el Dock; los grupos abiertos se cierran si cambia su material o pantalla.
+  Los submenús nativos de carpetas y el modo accesible conservan el diseño de Windows.
 
 - Los popups de música, uso de IA y volumen siguen el material completo de la
   barra superior: esmerilado, transparente y Liquid Glass, manteniendo la lectura
@@ -127,9 +137,14 @@ copia la sección de la versión que se publica a la release de GitHub.
   to the primary display until the pointer brings it elsewhere, instead of
   reappearing on the other one (or on whatever display took its place). After
   displays change, or Windows rescales the Dock between displays with different
-  scaling, the Dock is rebuilt at once: it no longer showed for a while smaller
-  and off centre, unresponsive to hover. The log notes display changes, when the
-  Dock moves to another display, and why it did not when the pointer rested on
+  scaling, the Dock is rebuilt at once.
+- Fixed the Dock staying invisible, frozen or at the other display's scale for
+  a second or more when brought to another display with the pointer: its
+  window moved under a still pointer before Windows noticed the pointer in it,
+  and the Dock and Windows then passed "the pointer left" back and forth at
+  full speed, blocking the Dock until the mouse moved. The Dock now looks again
+  once Windows has caught up. The log notes display changes, when the Dock
+  moves to another display, and why it did not when the pointer rested on
   another display's edge.
 - Store apps show their logo without the coloured square behind it, as their
   taskbar button does (issue #73): Muelle uses the package's own logo, its light
@@ -154,10 +169,15 @@ copia la sección de la versión que se publica a la release de GitHub.
   que se oculta vuelve a la pantalla principal hasta que el puntero lo lleve a
   otra, en vez de reaparecer en la otra (o en la que ocupara su lugar). Tras un
   cambio de pantallas, o cuando Windows reescala el Dock entre pantallas con
-  distinta escala, el Dock se reconstruye al momento: ya no se veía un rato más
-  pequeño y descentrado, sin responder al puntero. El registro anota los
-  cambios de pantallas, cuándo el Dock pasa a otra y por qué no lo hizo al
-  dejar el puntero en el borde de otra pantalla.
+  distinta escala, el Dock se reconstruye al momento.
+- Corregido el Dock que se quedaba invisible, congelado o a la escala de la
+  otra pantalla durante un segundo o más al llevarlo con el puntero a otra
+  pantalla: su ventana se movía bajo un puntero quieto antes de que Windows
+  viera el puntero dentro, y el Dock y Windows se pasaban «el puntero salió» a
+  toda velocidad, bloqueando el Dock hasta mover el ratón. Ahora el Dock vuelve
+  a mirar cuando Windows se ha puesto al día. El registro anota los cambios de
+  pantallas, cuándo el Dock pasa a otra y por qué no lo hizo al dejar el
+  puntero en el borde de otra pantalla.
 - Las apps de la Tienda muestran su logo sin el cuadrado de color detrás, como
   su botón de la barra de tareas (issue #73): Muelle usa el logo del paquete,
   su forma clara con la barra clara y la imagen del shell solo para las apps

@@ -30,12 +30,12 @@ use super::{
     BIN_STATE, BIN_TIMER, BREAK_TIMER, CONFIG_CHANGED, DRAG_CANCELLED, DRAG_TIMER, DROP_RUN,
     EDGE_TIMER, FULLSCREEN_TIMER, HEALTH_CHECK, HIDE_TIMER, HSHELL_FLASH, HSHELL_LANGUAGE,
     HSHELL_REDRAW, HSHELL_RUDEAPPACTIVATED, HSHELL_WINDOWACTIVATED, HSHELL_WINDOWDESTROYED,
-    LAST_FRONT, MASCOT_TIMER, Outside, PBT_APMPOWERSTATUSCHANGE, PBT_APMRESUMEAUTOMATIC,
-    PBT_POWERSETTINGCHANGE, PINS_CHANGED, PINS_DELAY_MS, PINS_TIMER, PREVIEW_TIMER,
-    REFRESH_DELAY_MS, REFRESH_TIMER, SHELL_HOOK, SPI_SETWORKAREA, SPRING_TIMER, SWITCHER_TIMER,
-    SYNC_DELAY_MS, SYNC_TIMER, TASKBAR_CREATED, TASKBAR_DELAY_MS, TASKBAR_PREFS_CHANGED,
-    TASKBAR_TAKEN, TASKBAR_TIMER, TRIM_TIMER, UPDATE_TIMER, WELCOME_TIMER, WM_MOUSELEAVE,
-    WM_POWERBROADCAST,
+    LAST_FRONT, LEAVE_TIMER, MASCOT_TIMER, Outside, PBT_APMPOWERSTATUSCHANGE,
+    PBT_APMRESUMEAUTOMATIC, PBT_POWERSETTINGCHANGE, PINS_CHANGED, PINS_DELAY_MS, PINS_TIMER,
+    PREVIEW_TIMER, REFRESH_DELAY_MS, REFRESH_TIMER, SHELL_HOOK, SPI_SETWORKAREA, SPRING_TIMER,
+    SWITCHER_TIMER, SYNC_DELAY_MS, SYNC_TIMER, TASKBAR_CREATED, TASKBAR_DELAY_MS,
+    TASKBAR_PREFS_CHANGED, TASKBAR_TAKEN, TASKBAR_TIMER, TRIM_TIMER, UPDATE_TIMER, WELCOME_TIMER,
+    WM_MOUSELEAVE, WM_POWERBROADCAST,
     feedback::query_bin_in_background,
     lifecycle::{is_tracked, main_window},
     with_app, with_app_then,
@@ -135,7 +135,7 @@ pub fn menu_bar_clicked(x: f32, y: f32) {
                 return Ok(Some(Outside::InputMenu {
                     gfx: app.gfx.clone(),
                     anchor,
-                    dark: !crate::appearance::menu_bar_light(),
+                    look: crate::appearance::menu_bar(),
                 }));
             }
             bar.click(&app.gfx, x, y)?;
@@ -633,6 +633,13 @@ pub(super) unsafe extern "system" fn wndproc(
         edge_watch::CHANGED => with_app("borde de pantalla", App::edge_changed),
         WM_TIMER if w.0 == EDGE_TIMER => with_app("mostrar al llegar al borde", App::edge_rested),
         WM_TIMER if w.0 == PREVIEW_TIMER => with_app("selector de ventanas", App::preview_tick),
+        WM_TIMER if w.0 == LEAVE_TIMER => {
+            // SAFETY: `hwnd` is this live window on its owning UI thread.
+            unsafe {
+                let _ = KillTimer(Some(hwnd), w.0);
+            }
+            with_app("salida del ratón", App::recheck_leave);
+        }
         WM_TIMER if w.0 == HIDE_TIMER => {
             // SAFETY: Same as above.
             unsafe {

@@ -130,6 +130,7 @@ impl App {
     /// Rebuilds the dock even if nothing it shows changed, and puts its
     /// windows back in place: after the displays change (see `events`).
     pub(super) fn rebuild(&mut self) -> Result<()> {
+        self.close_group_view();
         self.stage = None;
         self.refresh()
     }
@@ -164,12 +165,20 @@ impl App {
             return Ok(());
         }
         self.close_preview();
-        // An unfolded group shows its apps as they were: it closes if they changed.
+        // Retained popups belong to the material/DPI/display they opened with.
+        // Close a stale group on these events, as we already do for previews;
+        // ordinary roster/attention changes still keep its current visual tree.
+        let popup_context_changed = self
+            .stage
+            .as_ref()
+            .is_some_and(|stage| stage.key.screen != key.screen);
         if let Some(view) = &self.group_view
-            && self
-                .roster
-                .group(&view.group_id)
-                .is_none_or(|group| group.apps.as_slice() != view.apps())
+            && (popup_context_changed
+                || !view.matches_context(Theme::new(key.look), key.scale, key.edge)
+                || self
+                    .roster
+                    .group(&view.group_id)
+                    .is_none_or(|group| group.apps.as_slice() != view.apps()))
         {
             self.close_group_view();
         }

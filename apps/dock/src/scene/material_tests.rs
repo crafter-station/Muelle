@@ -10,7 +10,7 @@ fn bar_popups_preserve_explicit_materials_and_readable_solid_fallbacks() {
                     light,
                     glass,
                 };
-                let popup = Theme::for_bar_popup(look);
+                let popup = Theme::for_popup_look(look);
                 let expected = if material == Material::Standard {
                     Theme::for_popup(light, glass)
                 } else {
@@ -188,7 +188,7 @@ fn glass_materials_build_bounded_backdrop_layers_only_when_windows_allows_them()
                 for theme in [
                     Theme::new(look),
                     Theme::for_bar(look),
-                    Theme::for_bar_popup(look),
+                    Theme::for_popup_look(look),
                 ] {
                     let fills = theme.fills(&gfx)?;
                     let backdrops = fills

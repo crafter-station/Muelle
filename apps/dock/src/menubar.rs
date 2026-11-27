@@ -287,7 +287,7 @@ fn accessory_readings(snapshot: &AccessorySnapshot) -> [Option<AccessoryReading>
 
 impl Look {
     fn popup_theme(&self) -> Theme {
-        Theme::for_bar_popup(appearance::Look {
+        Theme::for_popup_look(appearance::Look {
             material: self.material,
             light: self.light,
             glass: self.glass,
@@ -6457,7 +6457,11 @@ mod island_tests {
         let gfx = Gfx::new()?;
         for (light, glass) in [(true, true), (false, true), (true, false), (false, false)] {
             let root = gfx.compositor.CreateContainerVisual()?;
-            let theme = Theme::for_popup(light, glass);
+            let theme = Theme::for_popup_look(appearance::Look {
+                material: Material::Standard,
+                light,
+                glass,
+            });
             let geometry = IslandGeometry {
                 left: 90.0,
                 top: HEIGHT + PANEL_GAP,

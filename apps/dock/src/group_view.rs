@@ -481,6 +481,12 @@ impl GroupView {
         &self.ids
     }
 
+    /// Compare the retained view itself: icon-cache refreshes can discard the
+    /// dock stage without changing this popup's material or geometry.
+    pub fn matches_context(&self, theme: Theme, scale: f32, edge: DockEdge) -> bool {
+        self.theme == theme && self.scale == scale && self.edge == edge
+    }
+
     /// Whether a screen point lies inside the group panel.
     pub fn contains(&self, point: POINT) -> bool {
         contains(self.layout.bounds, point)

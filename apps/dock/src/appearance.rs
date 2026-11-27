@@ -126,12 +126,6 @@ pub fn light() -> bool {
     current().light
 }
 
-/// Whether menus opened from the menu bar are drawn light.
-#[must_use]
-pub fn menu_bar_light() -> bool {
-    menu_bar().light
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

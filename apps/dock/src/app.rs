@@ -186,6 +186,10 @@ const BIN_TIMER: usize = 5;
 const BIN_DELAY_MS: u32 = 300;
 const HIDE_TIMER: usize = 6;
 const HIDE_DELAY_MS: u32 = 300;
+/// Looks again at a leave reported while the pointer is over the dock (see
+/// `App::on_tracked_mouse_leave`). The shortest timer Windows allows.
+const LEAVE_TIMER: usize = 19;
+const LEAVE_RECHECK_MS: u32 = 10;
 /// Explorer writes a pin change in a few steps; read it once they settle.
 const PINS_TIMER: usize = 7;
 const PINS_DELAY_MS: u32 = 400;
@@ -405,7 +409,7 @@ pub(crate) enum Outside {
     InputMenu {
         gfx: Gfx,
         anchor: POINT,
-        dark: bool,
+        look: crate::appearance::Look,
     },
     QuitDock,
     OpenSettings,
@@ -426,7 +430,7 @@ pub(crate) struct MenuRequest {
     items: Vec<MenuItem>,
     anchor: POINT,
     placement: menu::Placement,
-    dark: bool,
+    look: crate::appearance::Look,
 }
 
 /// Preview positions follow discovery order, independently of activation's

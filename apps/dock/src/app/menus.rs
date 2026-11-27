@@ -71,7 +71,7 @@ pub(super) fn run_outside(outside: Outside) {
                 _ => eprintln!("muelle: no se encontró muelle-settings.exe junto al dock"),
             }
         }
-        Outside::InputMenu { gfx, anchor, dark } => {
+        Outside::InputMenu { gfx, anchor, look } => {
             use muelle_shell::keyboard;
             let context = keyboard::Context::current();
             let layouts = keyboard::layouts(strings::text().keyboard);
@@ -99,7 +99,7 @@ pub(super) fn run_outside(outside: Outside) {
                 app.menu_open = true;
                 Ok(())
             });
-            let chosen = menu::show_below(&gfx, owner, &items, anchor, dark);
+            let chosen = menu::show_below(&gfx, owner, &items, anchor, look);
             with_app("cerrar selector de teclado", App::after_menu);
             if chosen == Some(SETTINGS) {
                 submit(ShellAction::Open {
@@ -143,7 +143,7 @@ pub(super) fn run_outside(outside: Outside) {
                 owner,
                 &request.items,
                 request.anchor,
-                request.dark,
+                request.look,
                 request.placement,
             );
             with_app("menú cerrado", App::after_menu);
@@ -317,7 +317,7 @@ impl App {
             items,
             anchor,
             placement: stage_placement,
-            dark: !crate::appearance::light(),
+            look: crate::appearance::current(),
         })))
     }
 

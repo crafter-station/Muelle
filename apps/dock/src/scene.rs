@@ -32,7 +32,7 @@ use crate::{
 };
 use muelle_shell::icons::IconImage;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct Theme {
     pub light: bool,
     /// Blur what is behind the dock; without it the tint is drawn opaque.
@@ -211,7 +211,7 @@ impl Theme {
     }
 
     /// Uses the context menu tint with the same rim and sheen as the window picker.
-    pub(crate) fn for_popup(light: bool, glass: bool) -> Self {
+    fn for_popup(light: bool, glass: bool) -> Self {
         let tint = crate::menu::popup_tint(!light, glass);
         Self {
             tint,
@@ -224,10 +224,10 @@ impl Theme {
         }
     }
 
-    /// Bar popups inherit its complete material. Auto/light/dark keep the
+    /// Popups inherit their surface owner's complete material. Auto/light/dark keep the
     /// shared context-menu palette; explicit materials keep their coating and
     /// denser text-panel tint, including the solid energy-saver fallback.
-    pub(crate) fn for_bar_popup(look: Look) -> Self {
+    pub(crate) fn for_popup_look(look: Look) -> Self {
         match look.material {
             Material::Standard => Self::for_popup(look.light, look.glass),
             _ => Self::new(look),

@@ -16,8 +16,8 @@ use windows::Win32::{
 };
 
 use super::{
-    App, DRAG_POLL_MS, DRAG_TIMER, Entry, HIDE_DELAY_MS, HIDE_TIMER, LEAVE_HALO, Outside, Press,
-    Role,
+    App, DRAG_POLL_MS, DRAG_TIMER, Entry, HIDE_DELAY_MS, HIDE_TIMER, LEAVE_HALO, LEAVE_RECHECK_MS,
+    LEAVE_TIMER, Outside, Press, Role,
     preferences::{explorer_id, save_settings},
     window_of,
 };
@@ -134,16 +134,38 @@ impl App {
     }
 
     pub(super) fn on_tracked_mouse_leave(&mut self) -> Result<()> {
-        let mut point = POINT::default();
         // Moving/resizing the magnified input area can queue a leave before
         // the pointer re-enters. Do not discard a newer hover/dwell on delivery.
-        if unsafe { GetCursorPos(&mut point) }.is_ok()
-            && unsafe { windows::Win32::UI::WindowsAndMessaging::WindowFromPoint(point) }
-                == self.input
-        {
+        if self.pointer_over_input() {
+            // Not at once: when the input area moved under a still pointer
+            // (to another display, say), Windows has not seen the pointer
+            // enter it yet and answers a new leave request with another
+            // leave straight away. That loop kept the dock frozen and
+            // invisible for over a second at full CPU, and kept away the
+            // mouse move that ends it: posted messages come before input.
+            // A timer fires only once the queue is empty, after that move.
+            // SAFETY: Timer on our own window.
+            unsafe { SetTimer(Some(self.input), LEAVE_TIMER, LEAVE_RECHECK_MS, None) };
+            return Ok(());
+        }
+        self.on_mouse_leave()
+    }
+
+    /// The leave recheck: still over the dock, or gone meanwhile.
+    pub(super) fn recheck_leave(&mut self) -> Result<()> {
+        if self.pointer_over_input() {
             return self.on_mouse_move();
         }
         self.on_mouse_leave()
+    }
+
+    fn pointer_over_input(&self) -> bool {
+        let mut point = POINT::default();
+        // SAFETY: Read-only pointer and window queries.
+        unsafe {
+            GetCursorPos(&mut point).is_ok()
+                && windows::Win32::UI::WindowsAndMessaging::WindowFromPoint(point) == self.input
+        }
     }
 
     pub(super) fn on_mouse_leave(&mut self) -> Result<()> {

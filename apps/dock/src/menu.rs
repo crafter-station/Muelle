@@ -1,5 +1,5 @@
 //! The dock's context menu, drawn like a macOS menu: frosted glass that
-//! follows the light or dark theme, compact rows, and the selection in the
+//! follows the owner's complete theme, compact rows, and the selection in the
 //! system accent color. Mouse and full keyboard control (arrows, Home/End,
 //! Enter, Esc and the underlined letters of the native menu).
 //!
@@ -56,9 +56,9 @@ use windows::{
                 TPM_TOPALIGN, TPM_VCENTERALIGN, TRACK_POPUP_MENU_FLAGS, TrackPopupMenuEx,
                 TranslateMessage, WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_CAPTURECHANGED,
                 WM_CHAR, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE,
-                WM_NULL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSKEYDOWN, WM_TIMER,
-                WM_XBUTTONDOWN, WNDCLASSW, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
-                WS_EX_TOPMOST, WS_POPUP,
+                WM_NULL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETTINGCHANGE,
+                WM_SYSKEYDOWN, WM_THEMECHANGED, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW,
+                WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
             },
         },
     },
@@ -67,7 +67,11 @@ use windows::{
 
 use windows_numerics::{Vector2, Vector3};
 
-use crate::gfx::{Gfx, Ink, LabelBrush};
+use crate::{
+    appearance::Look,
+    gfx::{Gfx, Ink, LabelBrush},
+    scene::Theme,
+};
 
 pub enum MenuItem {
     Action {
@@ -105,10 +109,10 @@ pub fn show(
     owner: HWND,
     items: &[MenuItem],
     anchor: POINT,
-    dark: bool,
+    look: Look,
     placement: Placement,
 ) -> Option<u32> {
-    show_at(gfx, owner, items, anchor, dark, placement)
+    show_at(gfx, owner, items, anchor, look, placement)
 }
 
 pub fn show_below(
@@ -116,9 +120,9 @@ pub fn show_below(
     owner: HWND,
     items: &[MenuItem],
     anchor: POINT,
-    dark: bool,
+    look: Look,
 ) -> Option<u32> {
-    show_at(gfx, owner, items, anchor, dark, Placement::Below)
+    show_at(gfx, owner, items, anchor, look, Placement::Below)
 }
 
 /// Where a menu opens from its anchor point: above it, centred (an icon on
@@ -161,17 +165,17 @@ fn show_at(
     owner: HWND,
     items: &[MenuItem],
     anchor: POINT,
-    dark: bool,
+    look: Look,
     placement: Placement,
 ) -> Option<u32> {
     if needs_native_menu() {
-        return show_native(owner, items, anchor, dark, placement);
+        return show_native(owner, items, anchor, !look.light, placement);
     }
-    match Popup::open(gfx, owner, items, anchor, dark, placement) {
+    match Popup::open(gfx, owner, items, anchor, look, placement) {
         Ok(popup) => popup.run(),
         Err(error) => {
             eprintln!("muelle: menú: {error:#}");
-            show_native(owner, items, anchor, dark, placement)
+            show_native(owner, items, anchor, !look.light, placement)
         }
     }
 }
@@ -269,10 +273,11 @@ impl Popup {
         owner: HWND,
         items: &[MenuItem],
         anchor: POINT,
-        dark: bool,
+        look: Look,
         placement: Placement,
     ) -> Result<Self> {
         let c = &gfx.compositor;
+        let dark = !look.light;
         // SAFETY: Read-only query on our own window.
         let scale = unsafe { GetDpiForWindow(owner) }.max(96) as f32 / 96.0;
         let px = |logical: f32| (logical * scale).round();
@@ -321,11 +326,10 @@ impl Popup {
             });
         }
 
-        let glass = muelle_shell::system::transparency_enabled();
         let root = c.CreateContainerVisual()?;
         root.SetSize(Vector2::new(width, height))?;
         let layers = root.Children()?;
-        draw_popup_background(&layers, dark, glass, width, height)?;
+        draw_popup_background(gfx, &layers, look, width, height, scale)?;
 
         let selection = c.CreateShapeVisual()?;
         let selection_shape = c.CreateRoundedRectangleGeometry()?;
@@ -507,7 +511,7 @@ impl Popup {
             (screen.bottom - margin - h).max(screen.top + margin),
         );
 
-        let hwnd = create_window(dark)?;
+        let hwnd = create_window()?;
         // SAFETY: `hwnd` is the live window created above.
         let target = unsafe {
             gfx.compositor
@@ -767,7 +771,7 @@ enum Handled {
     Close(Option<u32>),
 }
 
-fn create_window(dark: bool) -> Result<HWND> {
+fn create_window() -> Result<HWND> {
     static CLASS: OnceLock<()> = OnceLock::new();
     // SAFETY: The class is registered once with a procedure that lives for
     // the whole process; the window is configured before it is shown.
@@ -799,21 +803,18 @@ fn create_window(dark: bool) -> Result<HWND> {
             Some(instance.into()),
             None,
         )?;
-        apply_popup_frame(hwnd, dark);
+        apply_popup_frame(hwnd);
         Ok(hwnd)
     }
 }
 
 /// Applies the native frame used by dock popups. Returns whether DWM
 /// accepted the corner preference so callers can provide a fallback.
-pub(crate) fn apply_popup_frame(hwnd: HWND, dark: bool) -> bool {
+pub(crate) fn apply_popup_frame(hwnd: HWND) -> bool {
     let enable = BOOL::from(true);
     let round = DWMWCP_ROUND;
-    let border = if dark {
-        COLORREF(0x0058_5654)
-    } else {
-        COLORREF(0x00C8_C6C4)
-    };
+    // The shared material draws its own rim. Avoid a second fixed DWM border.
+    let border = COLORREF(0xffff_fffe); // DWMWA_COLOR_NONE
     // SAFETY: Attribute values have the expected type and size; hwnd is a
     // live window owned by the caller. Older systems can reject attributes.
     unsafe {
@@ -841,32 +842,17 @@ pub(crate) fn apply_popup_frame(hwnd: HWND, dark: bool) -> bool {
 }
 
 pub(crate) fn draw_popup_background(
+    gfx: &Gfx,
     layers: &VisualCollection,
-    dark: bool,
-    glass: bool,
+    look: Look,
     width: f32,
     height: f32,
+    scale: f32,
 ) -> Result<()> {
-    let tint = popup_tint(dark, glass);
-    let compositor = layers.Compositor()?;
-    if glass {
-        add_sprite(
-            layers,
-            compositor.CreateHostBackdropBrush()?.cast()?,
-            0.0,
-            0.0,
-            width,
-            height,
-        )?;
-    }
-    add_sprite(
-        layers,
-        compositor.CreateColorBrushWithColor(tint)?.cast()?,
-        0.0,
-        0.0,
-        width,
-        height,
-    )
+    let panel =
+        Theme::for_popup_look(look).panel(gfx, Vector2::new(width, height), 8.0 * scale, scale)?;
+    layers.InsertAtBottom(&panel)?;
+    Ok(())
 }
 
 pub(crate) fn popup_tint(dark: bool, glass: bool) -> Color {
@@ -886,7 +872,9 @@ unsafe extern "system" fn menu_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         WM_CAPTURECHANGED if l.0 != hwnd.0 as isize => {
             DISMISSED.store(true, Ordering::Relaxed);
         }
-        WM_CANCELMODE => DISMISSED.store(true, Ordering::Relaxed),
+        WM_CANCELMODE | WM_SETTINGCHANGE | WM_THEMECHANGED => {
+            DISMISSED.store(true, Ordering::Relaxed)
+        }
         WM_SETCURSOR => {
             // SAFETY: The stock arrow cursor is owned by Windows.
             if let Ok(arrow) = unsafe { LoadCursorW(None, IDC_ARROW) } {
@@ -1094,6 +1082,86 @@ pub fn apply_theme(dark: bool) {
 mod tests {
     use super::*;
 
+    #[test]
+    #[ignore = "Private compositor surfaces only; no visible menu, focus or settings changes"]
+    fn native_context_menu_materials_keep_one_backdrop_and_honor_solid_fallbacks() -> Result<()> {
+        use crate::appearance::Material;
+        use windows::{
+            UI::Composition::{
+                CompositionBackdropBrush, CompositionColorBrush, CompositionLinearGradientBrush,
+                SpriteVisual,
+            },
+            Win32::System::WinRT::{
+                CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+                DispatcherQueueOptions,
+            },
+        };
+        fn inspect(root: &ContainerVisual) -> Result<(usize, usize, Vec<Color>)> {
+            let (mut backdrop, mut gradients, mut colors) = (0, 0, Vec::new());
+            if let Ok(sprite) = root.cast::<SpriteVisual>()
+                && let Ok(brush) = sprite.Brush()
+            {
+                backdrop += usize::from(brush.cast::<CompositionBackdropBrush>().is_ok());
+                gradients += usize::from(brush.cast::<CompositionLinearGradientBrush>().is_ok());
+                if let Ok(color) = brush.cast::<CompositionColorBrush>() {
+                    colors.push(color.Color()?);
+                }
+            }
+            for child in root.Children()? {
+                if let Ok(container) = child.cast::<ContainerVisual>() {
+                    let (b, g, c) = inspect(&container)?;
+                    backdrop += b;
+                    gradients += g;
+                    colors.extend(c);
+                }
+            }
+            Ok((backdrop, gradients, colors))
+        }
+        let _queue = unsafe {
+            CreateDispatcherQueueController(DispatcherQueueOptions {
+                dwSize: size_of::<DispatcherQueueOptions>() as u32,
+                threadType: DQTYPE_THREAD_CURRENT,
+                apartmentType: DQTAT_COM_STA,
+            })?
+        };
+        let gfx = Gfx::new()?;
+        for material in Material::ALL {
+            for light in [false, true] {
+                for glass in [false, true] {
+                    for scale in [1.0, 1.5, 2.0] {
+                        let root = gfx.compositor.CreateContainerVisual()?;
+                        let look = Look {
+                            material,
+                            light,
+                            glass,
+                        };
+                        draw_popup_background(
+                            &gfx,
+                            &root.Children()?,
+                            look,
+                            280.0 * scale,
+                            300.0 * scale,
+                            scale,
+                        )?;
+                        assert_eq!(root.Children()?.Count()?, 1);
+                        let (backdrops, gradients, colors) = inspect(&root)?;
+                        assert_eq!(backdrops, usize::from(glass));
+                        assert_eq!(
+                            gradients,
+                            1 + usize::from(material == Material::LiquidGlass && glass)
+                        );
+                        assert_eq!(colors.len(), 1);
+                        assert_eq!(colors[0].A == 255, !glass);
+                        if material == Material::Standard {
+                            assert_eq!(colors[0], popup_tint(!light, glass));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn icon(pixels: &[[u8; 4]]) -> IconImage {
         IconImage {
             width: pixels.len() as u32,
@@ -1163,7 +1231,11 @@ mod tests {
                     MenuItem::action(2, "English"),
                 ],
                 anchor,
-                true,
+                Look {
+                    material: crate::appearance::Material::Standard,
+                    light: false,
+                    glass: true,
+                },
                 Placement::Below,
             )?;
             let mut bounds = RECT::default();

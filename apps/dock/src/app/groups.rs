@@ -216,7 +216,7 @@ impl App {
             items,
             anchor,
             placement: menu::Placement::Above,
-            dark: !crate::appearance::light(),
+            look: crate::appearance::current(),
         })))
     }
 }
