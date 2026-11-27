@@ -86,6 +86,7 @@ pub struct Hour {
     pub temperature_c: f32,
     pub condition: Condition,
     pub precipitation_percent: Option<u8>,
+    pub is_day: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -103,6 +104,8 @@ pub struct Day {
 pub struct Forecast {
     /// IANA zone, retained for DST-aware formatting in the future UI.
     pub timezone: String,
+    /// Provider offset used for its fixed-offset daily calendar boundaries.
+    pub utc_offset_seconds: i32,
     pub current: Current,
     pub hours: Vec<Hour>,
     pub days: Vec<Day>,
@@ -129,6 +132,7 @@ struct RawHours {
     temperature_2m: Vec<Option<f32>>,
     weather_code: Vec<Option<u16>>,
     precipitation_probability: Vec<Option<u8>>,
+    is_day: Vec<Option<u8>>,
 }
 #[derive(Deserialize)]
 struct RawDays {
@@ -142,6 +146,7 @@ struct RawDays {
 #[derive(Deserialize)]
 struct Raw {
     timezone: String,
+    utc_offset_seconds: i32,
     current_units: Units,
     current: RawCurrent,
     hourly: RawHours,
@@ -152,8 +157,11 @@ fn temperature(value: Option<f32>) -> Option<f32> {
     value.filter(|value| value.is_finite() && (-100.0..=70.0).contains(value))
 }
 
+const MAX_UNIX: i64 = 253_402_300_799;
+
 fn ascending(times: &[i64]) -> bool {
-    times.iter().all(|&time| time > 0) && times.windows(2).all(|pair| pair[0] < pair[1])
+    times.iter().all(|&time| (1..=MAX_UNIX).contains(&time))
+        && times.windows(2).all(|pair| pair[0] < pair[1])
 }
 
 /// Decode a single bounded response. Parallel arrays must match before indexing;
@@ -169,7 +177,8 @@ pub fn decode(bytes: &[u8]) -> Result<Forecast, Error> {
     {
         return Err(Error::Payload("unexpected weather units"));
     }
-    if raw.timezone.is_empty()
+    if !(-14 * 3600..=14 * 3600).contains(&raw.utc_offset_seconds)
+        || raw.timezone.is_empty()
         || raw.timezone.len() > 100
         || !raw
             .timezone
@@ -187,6 +196,7 @@ pub fn decode(bytes: &[u8]) -> Result<Forecast, Error> {
         || hn != h.temperature_2m.len()
         || hn != h.weather_code.len()
         || hn != h.precipitation_probability.len()
+        || hn != h.is_day.len()
         || dn != d.temperature_2m_min.len()
         || dn != d.temperature_2m_max.len()
         || dn != d.weather_code.len()
@@ -194,7 +204,7 @@ pub fn decode(bytes: &[u8]) -> Result<Forecast, Error> {
         || dn != d.sunset.len()
         || !ascending(&h.time)
         || !ascending(&d.time)
-        || raw.current.time <= 0
+        || !(1..=MAX_UNIX).contains(&raw.current.time)
     {
         return Err(Error::Payload("invalid forecast timelines"));
     }
@@ -230,6 +240,11 @@ pub fn decode(bytes: &[u8]) -> Result<Forecast, Error> {
                     .map(Condition::from_wmo)
                     .unwrap_or(Condition::Unknown),
                 precipitation_percent: h.precipitation_probability[i].filter(|&v| v <= 100),
+                is_day: h.is_day[i].and_then(|day| match day {
+                    0 => Some(false),
+                    1 => Some(true),
+                    _ => None,
+                }),
             })
         })
         .collect();
@@ -247,13 +262,14 @@ pub fn decode(bytes: &[u8]) -> Result<Forecast, Error> {
                 condition: d.weather_code[i]
                     .map(Condition::from_wmo)
                     .unwrap_or(Condition::Unknown),
-                sunrise: d.sunrise[i].filter(|&v| v > 0),
-                sunset: d.sunset[i].filter(|&v| v > 0),
+                sunrise: d.sunrise[i].filter(|v| (1..=MAX_UNIX).contains(v)),
+                sunset: d.sunset[i].filter(|v| (1..=MAX_UNIX).contains(v)),
             })
         })
         .collect();
     Ok(Forecast {
         timezone: raw.timezone,
+        utc_offset_seconds: raw.utc_offset_seconds,
         current,
         hours,
         days,

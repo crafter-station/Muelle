@@ -12,7 +12,6 @@ interface WallpaperTexts {
   wallpaperNames: readonly string[];
 }
 
-/** Mounted only in Appearance. No polling, full-size image decoding or remote URLs. */
 export function WallpaperGallery({ texts, onApplied }: { texts: WallpaperTexts; onApplied: (preview: string) => void }) {
   const [selected, setSelected] = useState<number | null>(null);
   const [pending, setPending] = useState<number | null>(null);
@@ -32,7 +31,6 @@ export function WallpaperGallery({ texts, onApplied }: { texts: WallpaperTexts; 
   }, []);
 
   const choose = async (id: number, preview: string) => {
-    // A ref closes the gap before React paints the disabled buttons.
     if (busy.current) return;
     busy.current = true;
     revision.current += 1;
@@ -40,7 +38,6 @@ export function WallpaperGallery({ texts, onApplied }: { texts: WallpaperTexts; 
     setFailed(false);
     try {
       await applyWallpaper(id, preview);
-      // Keep other Settings previews current even if the user has navigated away.
       onApplied(preview);
       if (mounted.current) setSelected(id);
     } catch {

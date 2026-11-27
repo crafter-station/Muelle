@@ -181,7 +181,7 @@ fn show_at(
 }
 
 /// A screen reader or high contrast is on.
-fn needs_native_menu() -> bool {
+pub(crate) fn needs_native_menu() -> bool {
     let mut reader = BOOL::default();
     let mut contrast = HIGHCONTRASTW {
         cbSize: size_of::<HIGHCONTRASTW>() as u32,

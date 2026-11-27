@@ -12,6 +12,35 @@ impl Gfx {
                 let white = dc.CreateSolidColorBrush(&rgb(0.91, 0.96, 1.0, 1.0), None)?;
                 let gray = dc.CreateSolidColorBrush(&rgb(0.65, 0.76, 0.87, 1.0), None)?;
                 let blue = dc.CreateSolidColorBrush(&rgb(0.28, 0.69, 1.0, 1.0), None)?;
+                let gradient = |top, bottom, end: f32| -> Result<_> {
+                    let stops = dc.CreateGradientStopCollection(
+                        &[
+                            D2D1_GRADIENT_STOP {
+                                position: 0.0,
+                                color: top,
+                            },
+                            D2D1_GRADIENT_STOP {
+                                position: 1.0,
+                                color: bottom,
+                            },
+                        ],
+                        D2D1_COLOR_SPACE_SRGB,
+                        D2D1_COLOR_SPACE_SRGB,
+                        D2D1_BUFFER_PRECISION_8BPC_UNORM,
+                        D2D1_EXTEND_MODE_CLAMP,
+                        D2D1_COLOR_INTERPOLATION_MODE_PREMULTIPLIED,
+                    )?;
+                    Ok(dc.CreateLinearGradientBrush(
+                        &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                            startPoint: Vector2::new(12.0 * scale, 5.0 * scale),
+                            endPoint: Vector2::new(28.0 * scale, end * scale),
+                        },
+                        None,
+                        &stops,
+                    )?)
+                };
+                let sun = gradient(rgb(1.0, 0.96, 0.62, 1.0), rgb(1.0, 0.65, 0.03, 1.0), 25.0)?;
+                let cloud = gradient(rgb(1.0, 1.0, 1.0, 1.0), rgb(0.72, 0.84, 0.95, 1.0), 36.0)?;
                 let point = |x, y| Vector2::new(x * scale, y * scale);
                 let ellipse = |x, y, rx, ry| D2D1_ELLIPSE {
                     point: point(x, y),
@@ -23,7 +52,7 @@ impl Gfx {
                     let (cx, cy, radius) = if glyph == WeatherGlyph::Sun {
                         (20.0, 20.0, 8.5)
                     } else {
-                        (15.0, 13.0, 6.8)
+                        (28.0, 12.0, 8.0)
                     };
                     for ray in 0..8 {
                         let a = ray as f32 * std::f32::consts::FRAC_PI_4;
@@ -35,13 +64,13 @@ impl Gfx {
                             None,
                         );
                     }
-                    dc.FillEllipse(&ellipse(cx, cy, radius, radius), &yellow);
+                    dc.FillEllipse(&ellipse(cx, cy, radius, radius), &sun);
                 }
                 if matches!(glyph, WeatherGlyph::Moon | WeatherGlyph::NightCloud) {
                     let (x, y, r) = if glyph == WeatherGlyph::Moon {
                         (20.0, 19.0, 12.0)
                     } else {
-                        (15.0, 13.0, 9.0)
+                        (28.0, 12.0, 8.0)
                     };
                     dc.FillEllipse(&ellipse(x, y, r, r), &white);
                     dc.FillEllipse(&ellipse(x - 3.0, y - 3.0, r * 0.2, r * 0.2), &gray);
@@ -58,8 +87,8 @@ impl Gfx {
                         | WeatherGlyph::Fog
                 ) {
                     dc.FillEllipse(&ellipse(13.0, 24.0, 9.0, 7.0), &gray);
-                    dc.FillEllipse(&ellipse(23.0, 20.0, 10.0, 9.0), &white);
-                    dc.FillEllipse(&ellipse(31.0, 25.0, 7.0, 6.0), &white);
+                    dc.FillEllipse(&ellipse(21.0, 22.0, 10.0, 9.0), &cloud);
+                    dc.FillEllipse(&ellipse(30.0, 27.0, 7.0, 6.0), &cloud);
                     dc.FillRoundedRectangle(
                         &D2D1_ROUNDED_RECT {
                             rect: D2D_RECT_F {
@@ -71,7 +100,7 @@ impl Gfx {
                             radiusX: 4.0 * scale,
                             radiusY: 4.0 * scale,
                         },
-                        &white,
+                        &cloud,
                     );
                 }
                 if matches!(

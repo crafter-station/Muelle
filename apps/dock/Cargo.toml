@@ -33,6 +33,7 @@ windows = { workspace = true, features = [
     "Devices_Radios",
     "Devices_HumanInterfaceDevice",
     "Foundation",
+    "Globalization_DateTimeFormatting",
     "Graphics",
     "Graphics_DirectX",
     "Media_Control",
@@ -77,4 +78,4 @@ windows = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
-windows = { workspace = true, features = ["Win32_System_Pipes"] }
+windows = { workspace = true, features = ["Win32_System_Pipes", "Win32_System_ProcessStatus"] }

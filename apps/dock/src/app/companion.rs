@@ -41,6 +41,7 @@ impl App {
             && !self.hovering
             && self.amount.value == 0.0
             && !self.menu_open
+            && self.weather.popup.is_none()
             && self.press.is_none()
             && self.drag.is_none()
             && !self.drag_over

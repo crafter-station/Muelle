@@ -23,6 +23,23 @@ pub enum Error {
     Json(#[from] serde_json::Error),
 }
 
+impl Error {
+    /// Stable diagnostic category; never includes a URL, coordinate or body.
+    pub fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::Coordinates => "coordinates",
+            Self::Payload(_) => "payload",
+            Self::TooLarge => "body_limit",
+            Self::RateLimited { .. } => "rate_limited",
+            Self::Http(_) => "http_status",
+            Self::Network(e) if e.is_timeout() => "network_timeout",
+            Self::Network(_) => "network",
+            Self::Read(_) => "body_read",
+            Self::Json(_) => "json",
+        }
+    }
+}
+
 /// Lazily construct only after opt-in. Never invoke fetch on a UI thread.
 /// A fixed HTTPS origin, no redirects, cookies, credentials or automatic retries.
 pub struct Client(reqwest::blocking::Client);
@@ -63,7 +80,7 @@ impl Client {
             ),
             (
                 "hourly",
-                "temperature_2m,precipitation_probability,weather_code".into(),
+                "temperature_2m,precipitation_probability,weather_code,is_day".into(),
             ),
             (
                 "daily",

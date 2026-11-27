@@ -6,13 +6,12 @@ use super::{
 use crate::{
     gfx::WeatherGlyph,
     menu,
-    weather::{self, Card, Key, Model},
+    weather::{self, Card, Key, Model, glyph},
 };
 use anyhow::Result;
 use muelle_config::WeatherLocation;
-use muelle_core::layout::Rect;
 use muelle_shell::{power, status};
-use muelle_weather::{Condition, Coordinates, Demand, Forecast, Refresh, Ticket};
+use muelle_weather::{Coordinates, Demand, Forecast, Refresh, Ticket};
 use std::{
     sync::{Arc, Mutex, atomic::Ordering},
     thread,
@@ -26,6 +25,7 @@ use windows::Win32::{
 pub(super) const READY: u32 = WM_APP + 110;
 pub(super) const EVENT: u32 = WM_APP + 111;
 pub(super) const NETWORK: u32 = WM_APP + 112;
+pub(super) const POPUP_EVENT: u32 = WM_APP + 113;
 pub(super) const TIMER: usize = 21;
 const SOURCE: u32 = 1;
 const SETTINGS: u32 = 2;
@@ -41,16 +41,20 @@ pub(super) struct State {
     configured: Option<(bool, Option<WeatherLocation>)>,
     mailbox: Mailbox,
     pub(super) card: Option<Card>,
+    pub(super) popup: Option<weather::popup::Popup>,
     network: Option<status::NetworkWatch>,
     online: bool,
     network_known: bool,
     hovering: bool,
     locked: bool,
+    sleeping: bool,
     failed: bool,
     revision: u64,
     due: Option<Instant>,
     view_retry: Option<Instant>,
     pending: Option<Pending>,
+    network_retry: Option<Instant>,
+    popup_hour: Option<(u64, Instant)>,
 }
 
 pub(crate) fn signal(source: HWND, event: usize) {
@@ -65,15 +69,28 @@ pub(crate) fn signal(source: HWND, event: usize) {
     }
 }
 
+pub(crate) fn popup_signal(source: HWND, action: isize) {
+    unsafe {
+        let _ = PostMessageW(
+            Some(HWND(MAIN_WINDOW.load(Ordering::Relaxed) as *mut _)),
+            POPUP_EVENT,
+            WPARAM(source.0 as usize),
+            LPARAM(action),
+        );
+    }
+}
+
 impl App {
     pub(super) fn weather_holds_open(&self) -> bool {
-        self.weather.hovering
+        self.weather.hovering || self.weather.popup.is_some()
     }
     pub(super) fn weather_locked(&mut self, locked: bool) {
         self.weather.locked = locked;
         self.sync_weather();
     }
     pub(super) fn suspend_weather_view(&mut self) {
+        self.weather.popup = None;
+        self.weather.popup_hour = None;
         let hovered = std::mem::take(&mut self.weather.hovering);
         self.weather.card = None;
         self.arm_weather(None);
@@ -86,11 +103,10 @@ impl App {
     fn weather_visible(&self) -> bool {
         self.config.weather
             && !self.weather.locked
+            && !self.weather.sleeping
             && !self.fullscreen
             && self.moving_since.is_none()
-            && self.slide.target == 0.0
-            && self.slide.value == 0.0
-            && self.slide.is_settled()
+            && self.slide.value < 1.0
             && self.preview.is_none()
             && self.group_view.is_none()
             && self.drag.is_none()
@@ -118,9 +134,10 @@ impl App {
             self.weather.service.configure(config.0, coordinates);
             self.weather.configured = Some(config);
             self.weather.failed = false;
+            self.weather.view_retry = None;
             self.weather.revision = self.weather.revision.wrapping_add(1);
             if config.0 && self.weather.network.is_none() {
-                self.weather.network = status::NetworkWatch::new(self.input.0 as isize, NETWORK);
+                self.subscribe_weather_network();
                 unsafe {
                     let _ = PostMessageW(Some(self.input), NETWORK, WPARAM(0), LPARAM(0));
                 }
@@ -128,6 +145,7 @@ impl App {
                 self.weather.network = None;
                 self.weather.online = false;
                 self.weather.network_known = false;
+                self.weather.network_retry = None;
             }
         }
         if !self.weather_visible() || self.stage.is_none() {
@@ -138,33 +156,16 @@ impl App {
             self.suspend_weather_view();
             return;
         };
-        let dock = stage.frame.rect(Rect {
-            x: 0.0,
-            y: 0.0,
-            width: stage.layout.width,
-            height: stage.layout.height,
-        });
-        let rect = windows::Win32::Foundation::RECT {
-            left: dock.x.round() as i32,
-            top: dock.y.round() as i32,
-            right: (dock.x + dock.width).round() as i32,
-            bottom: (dock.y + dock.height).round() as i32,
-        };
-        let Some(placement) = weather::place(rect, stage.key.screen, stage.key.edge, stage.scale)
-        else {
+        let Some(placement) = stage.weather_place else {
             self.suspend_weather_view();
             return;
         };
-        // A fallback above the Dock yields while its icons magnify into it.
-        if placement.bounds.bottom <= rect.top && self.hovering {
-            self.suspend_weather_view();
-            return;
-        }
         let now = Instant::now();
         let cached = self.weather.service.cached(now);
         let cache_kind = cached.as_ref().map_or(0, |c| if c.stale { 2 } else { 1 });
         let key = Key {
             placement,
+            screen: stage.key.screen,
             look: stage.key.look,
             scale: stage.scale,
             revision: self
@@ -174,6 +175,23 @@ impl App {
                 .wrapping_add(cache_kind),
             language: crate::strings::language(),
         };
+        if key.visible_bounds().is_none() {
+            self.suspend_weather_view();
+            return;
+        }
+        // Position-only spring/magnification frames do not format strings,
+        // rasterize art or replace the Composition root.
+        if let Some(view) = &mut self.weather.card
+            && view.key.same_surface(key)
+            && let Err(error) = view.reposition(key)
+        {
+            self.suspend_weather_view();
+            self.weather.view_retry = Some(now + Duration::from_secs(60));
+            crate::recovery::graphics_error(&error);
+            muelle_shell::log::line(&format!("posición del clima: {error:#}"));
+            self.arm_weather(self.weather.view_retry);
+            return;
+        }
         let redraw = self
             .weather
             .card
@@ -229,7 +247,9 @@ impl App {
             if let Err(error) = result {
                 self.suspend_weather_view();
                 self.weather.view_retry = Some(now + Duration::from_secs(60));
+                crate::recovery::graphics_error(&error);
                 muelle_shell::log::line(&format!("tarjeta del clima: {error:#}"));
+                self.arm_weather(self.weather.view_retry);
                 return;
             }
             self.weather.view_retry = None;
@@ -246,11 +266,34 @@ impl App {
         // Local freshness/expiry also advances while offline, without a request
         // or a permanent UI clock. Hidden cards have no deadline at all.
         if let Some(cache) = self.weather.service.cached(now) {
-            let boundary = Duration::from_secs(if cache.stale { 2 * 3600 } else { 30 * 60 });
-            let expiry = now + boundary.saturating_sub(cache.age) + Duration::from_millis(1);
-            due = Some(due.map_or(expiry, |d| d.min(expiry)));
+            due = Some(due.map_or(cache.next_change, |d| d.min(cache.next_change)));
+        }
+        for deadline in [self.weather.view_retry, self.weather.network_retry]
+            .into_iter()
+            .flatten()
+        {
+            due = Some(due.map_or(deadline, |d| d.min(deadline)));
+        }
+        // One local wake at the next hour only while the forecast is open:
+        // remove elapsed columns/date labels without a minute clock or HTTP.
+        if self.weather.popup.is_some() {
+            let unix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |t| t.as_secs());
+            let deadline = match self.weather.popup_hour {
+                Some((hour, deadline)) if hour == unix / 3600 => deadline,
+                _ => {
+                    let deadline = now + Duration::from_secs(3600 - unix % 3600);
+                    self.weather.popup_hour = Some((unix / 3600, deadline));
+                    deadline
+                }
+            };
+            due = Some(due.map_or(deadline, |d| d.min(deadline)));
+        } else {
+            self.weather.popup_hour = None;
         }
         self.arm_weather(due);
+        self.sync_weather_popup();
     }
 
     fn arm_weather(&mut self, due: Option<Instant>) {
@@ -278,6 +321,15 @@ impl App {
     pub(super) fn weather_tick(&mut self) -> Result<()> {
         self.arm_weather(None);
         self.take_weather_result();
+        if self.weather_visible()
+            && self
+                .weather
+                .network_retry
+                .is_some_and(|due| Instant::now() >= due)
+        {
+            self.subscribe_weather_network();
+            self.weather_network()?;
+        }
         if let Some(work) = &mut self.weather.pending
             && work
                 .deadline
@@ -287,6 +339,9 @@ impl App {
             // if PostMessage failed, or show unavailable without spawning a
             // second worker while the original still owns its request.
             work.deadline = None;
+            muelle_shell::log::line(
+                "clima: respuesta pendiente tras 15 s; se conserva un único trabajador",
+            );
             self.weather.failed = true;
             self.weather.revision = self.weather.revision.wrapping_add(1);
         }
@@ -306,8 +361,16 @@ impl App {
                 .spawn(move || {
                     power::set_thread_efficiency(true);
                     // Client, DNS, TLS, body validation and parsing all stay here.
+                    let started = Instant::now();
                     let result = muelle_weather::Client::new()
                         .and_then(|client| client.fetch(ticket.coordinates()));
+                    if let Err(error) = &result {
+                        muelle_shell::log::line(&format!(
+                            "clima: consulta fallida ({}, {} ms)",
+                            error.diagnostic_code(),
+                            started.elapsed().as_millis()
+                        ));
+                    }
                     *mailbox
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner) =
@@ -318,6 +381,7 @@ impl App {
                     }
                 });
             if spawned.is_err() {
+                muelle_shell::log::line("clima: no se pudo iniciar el trabajador");
                 self.weather.pending = None;
                 self.weather.service.finish(
                     ticket,
@@ -355,8 +419,8 @@ impl App {
             let failed = result.is_err();
             if self.weather.service.finish(ticket, result, Instant::now()) {
                 self.weather.failed = failed;
+                self.weather.revision = self.weather.revision.wrapping_add(1);
             }
-            self.weather.revision = self.weather.revision.wrapping_add(1);
         }
     }
     pub(super) fn weather_network(&mut self) -> Result<()> {
@@ -392,6 +456,13 @@ impl App {
                     SetTimer(Some(self.input), HIDE_TIMER, HIDE_DELAY_MS, None);
                 }
             }
+            return Ok(None);
+        }
+        if event == 2 && menu::needs_native_menu() {
+            return self.accessible_weather_menu();
+        }
+        if event == 2 {
+            self.toggle_weather_popup()?;
             return Ok(None);
         }
         let r = card.key.placement.bounds;
@@ -437,19 +508,11 @@ impl App {
     }
 }
 
-fn glyph(condition: Condition, is_day: Option<bool>) -> WeatherGlyph {
-    match condition {
-        Condition::Clear if is_day == Some(false) => WeatherGlyph::Moon,
-        Condition::Clear => WeatherGlyph::Sun,
-        Condition::PartlyCloudy if is_day == Some(false) => WeatherGlyph::NightCloud,
-        Condition::PartlyCloudy => WeatherGlyph::PartlyCloudy,
-        Condition::Overcast => WeatherGlyph::Cloud,
-        Condition::Fog => WeatherGlyph::Fog,
-        Condition::Drizzle | Condition::Rain | Condition::FreezingRain | Condition::Showers => {
-            WeatherGlyph::Rain
-        }
-        Condition::Snow => WeatherGlyph::Snow,
-        Condition::Thunderstorm => WeatherGlyph::Storm,
-        Condition::Unknown => WeatherGlyph::Unknown,
-    }
-}
+#[path = "weather/popup.rs"]
+mod popup;
+
+#[path = "weather/recovery.rs"]
+mod recovery;
+
+#[path = "weather/accessibility.rs"]
+mod accessibility;

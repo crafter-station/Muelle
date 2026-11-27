@@ -124,6 +124,9 @@ impl App {
         if let Some(card) = &self.weather.card {
             card.refresh_backdrops(&self.gfx)?;
         }
+        if let Some(popup) = &self.weather.popup {
+            popup.refresh_backdrops(&self.gfx)?;
+        }
         Ok(())
     }
 
@@ -169,6 +172,7 @@ impl App {
             density: self.config.dock_density,
             max_scale: self.config.max_scale(),
             indicators: self.config.show_indicators,
+            weather: self.config.weather,
             entries: self.current_entries(),
         };
         if self.stage.as_ref().is_some_and(|stage| stage.key == key) {
@@ -215,7 +219,14 @@ impl App {
             screen_width
         };
         let kinds: Vec<ItemKind> = key.entries.iter().map(|entry| entry.kind).collect();
-        let mut dock = layout(&kinds, &metrics);
+        let make_layout = |metrics: &Metrics| {
+            let mut dock = layout(&kinds, metrics);
+            if key.weather {
+                crate::weather::reserve(&mut dock, metrics, edge);
+            }
+            dock
+        };
+        let mut dock = make_layout(&metrics);
         let available = (length_room - 2.0 * px(FLOAT_MARGIN)).max(1.0);
         // A side dock often fills the height. Magnified, it spreads by up to
         // half its growth past each end, which would put the first icon
@@ -234,7 +245,7 @@ impl App {
             // Keep the roster reachable on a smaller display without
             // changing the user's saved icon size.
             metrics = metrics.scaled(available / (dock.width + spread));
-            dock = layout(&kinds, &metrics);
+            dock = make_layout(&metrics);
         }
         dock.width = dock.width.round();
         dock.height = dock.height.round();
@@ -463,6 +474,7 @@ impl App {
                 },
             },
             slide_distance: dock.height + px(FLOAT_MARGIN) + room,
+            weather_place: None,
             layout: dock,
         };
         self.stage = Some(stage);
@@ -527,8 +539,8 @@ impl App {
 
     pub(super) fn render(&mut self) -> Result<()> {
         self.sync_companion();
-        self.sync_weather();
         let Some(stage) = &mut self.stage else {
+            self.sync_weather();
             return Ok(());
         };
         let mut state = magnify(
@@ -609,6 +621,13 @@ impl App {
             && stage.reorder.is_none()
             && drag.is_none();
         let slide = self.slide.value * stage.slide_distance;
+        stage.weather_place = stage
+            .key
+            .weather
+            .then(|| {
+                crate::weather::place(stage.frame, &stage.layout, stage.icon, state.right, slide)
+            })
+            .flatten();
         stage.scene.apply(&Frame {
             state: &state,
             hovered: self.hovered.filter(|&index| {
@@ -642,6 +661,7 @@ impl App {
                 self.thumbnails.place(hwnd, slot, corner, opacity);
             }
         }
+        self.sync_weather();
         Ok(())
     }
 }

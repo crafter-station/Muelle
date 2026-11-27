@@ -2,7 +2,6 @@ use super::Placement;
 use crate::{
     appearance::Look,
     gfx::{Gfx, Ink, LabelBrush, WeatherGlyph},
-    scene::Theme,
 };
 use anyhow::Result;
 use std::sync::OnceLock;
@@ -12,7 +11,7 @@ use windows::{
         Composition::{CompositionSurfaceBrush, ContainerVisual, Desktop::DesktopWindowTarget},
     },
     Win32::{
-        Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+        Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
         System::{LibraryLoader::GetModuleHandleW, WinRT::Composition::ICompositorDesktopInterop},
         UI::{
             Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
@@ -20,10 +19,10 @@ use windows::{
                 CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW,
                 HWND_TOPMOST, IDC_ARROW, LoadCursorW, MA_NOACTIVATE, RegisterClassW,
                 SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetCursor,
-                SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, WM_LBUTTONUP,
-                WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSW,
-                WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-                WS_POPUP,
+                SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP,
+                WM_SETCURSOR, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
+                WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
             },
         },
     },
@@ -35,10 +34,34 @@ const WM_MOUSELEAVE: u32 = 0x02A3; // Not exported by this Windows metadata vers
 #[derive(Clone, Copy, PartialEq)]
 pub struct Key {
     pub placement: Placement,
+    pub screen: RECT,
     pub look: Look,
     pub scale: f32,
     pub revision: u64,
     pub language: muelle_config::Language,
+}
+
+impl Key {
+    pub fn visible_bounds(self) -> Option<RECT> {
+        let r = self.placement.bounds;
+        let visible = RECT {
+            left: r.left.max(self.screen.left),
+            top: r.top.max(self.screen.top),
+            right: r.right.min(self.screen.right),
+            bottom: r.bottom.min(self.screen.bottom),
+        };
+        (visible.left < visible.right && visible.top < visible.bottom).then_some(visible)
+    }
+    pub fn same_surface(self, other: Self) -> bool {
+        let a = self.placement.bounds;
+        let b = other.placement.bounds;
+        a.right - a.left == b.right - b.left
+            && a.bottom - a.top == b.bottom - b.top
+            && self.placement.compact == other.placement.compact
+            && self.scale == other.scale
+            && self.revision == other.revision
+            && self.language == other.language
+    }
 }
 
 pub struct Model {
@@ -57,7 +80,10 @@ pub struct Card {
 impl Card {
     pub fn new(gfx: &Gfx, key: Key, model: &Model) -> Result<Self> {
         let root = surface(gfx, key, model)?;
-        let hwnd = create(key.placement)?;
+        let visible = key
+            .visible_bounds()
+            .ok_or_else(|| anyhow::anyhow!("weather outside monitor"))?;
+        let hwnd = create(visible)?;
         let target = unsafe {
             gfx.compositor
                 .cast::<ICompositorDesktopInterop>()?
@@ -74,6 +100,7 @@ impl Card {
         };
         let view = Self { hwnd, target, key };
         view.target.SetRoot(&root)?;
+        view.crop(key)?;
         view.caption(model)?;
         unsafe {
             let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -82,10 +109,27 @@ impl Card {
     }
 
     pub fn update(&mut self, gfx: &Gfx, key: Key, model: &Model) -> Result<()> {
-        let root = surface(gfx, key, model)?;
-        self.target.SetRoot(&root)?;
-        let r = key.placement.bounds;
-        if self.key.placement != key.placement {
+        if !self.key.same_surface(key) {
+            let previous = self.target.Root()?.cast()?;
+            self.target.SetRoot(&surface(gfx, key, model)?)?;
+            super::close_tree(&previous);
+            self.crop(key)?;
+        }
+        if self.key.revision != key.revision || self.key.language != key.language {
+            self.caption(model)?;
+        }
+        self.reposition(key)
+    }
+
+    /// Only translate the retained window during the Dock's existing animation.
+    pub fn reposition(&mut self, key: Key) -> Result<()> {
+        if self.key.placement != key.placement || self.key.screen != key.screen {
+            let r = key
+                .visible_bounds()
+                .ok_or_else(|| anyhow::anyhow!("weather outside monitor"))?;
+            // Crop the actual HWND too: no transparent input area or pixels
+            // may slide onto a different monitor across this screen's edge.
+            self.crop(key)?;
             unsafe {
                 SetWindowPos(
                     self.hwnd,
@@ -98,8 +142,19 @@ impl Card {
                 )?;
             }
         }
-        self.caption(model)?;
         self.key = key;
+        Ok(())
+    }
+    fn crop(&self, key: Key) -> Result<()> {
+        let visible = key
+            .visible_bounds()
+            .ok_or_else(|| anyhow::anyhow!("weather outside monitor"))?;
+        let full = key.placement.bounds;
+        self.target.Root()?.SetOffset(Vector3::new(
+            (full.left - visible.left) as f32,
+            (full.top - visible.top) as f32,
+            0.0,
+        ))?;
         Ok(())
     }
     fn caption(&self, model: &Model) -> Result<()> {
@@ -162,6 +217,18 @@ impl Card {
 
 impl Drop for Card {
     fn drop(&mut self) {
+        let previous = self
+            .target
+            .Root()
+            .and_then(|v| v.cast::<ContainerVisual>())
+            .ok();
+        let _ = self
+            .target
+            .SetRoot(None::<&windows::UI::Composition::Visual>);
+        let _ = self.target.Close();
+        if let Some(root) = previous {
+            super::close_tree(&root);
+        }
         unsafe {
             let _ = DestroyWindow(self.hwnd);
         }
@@ -204,94 +271,112 @@ fn label(
 fn surface(gfx: &Gfx, key: Key, model: &Model) -> Result<ContainerVisual> {
     let r = key.placement.bounds;
     let (width, height) = ((r.right - r.left) as f32, (r.bottom - r.top) as f32);
-    let s = key.scale;
-    let root =
-        Theme::for_popup_look(key.look).panel(gfx, Vector2::new(width, height), 18.0 * s, s)?;
+    let root = gfx.compositor.CreateContainerVisual()?;
+    root.SetSize(Vector2::new(width, height))?;
+    let radius = (height.min(width) * 0.28).min(18.0 * key.scale);
     let round = gfx.compositor.CreateRoundedRectangleGeometry()?;
     round.SetSize(Vector2::new(width, height))?;
-    round.SetCornerRadius(Vector2::new(18.0 * s, 18.0 * s))?;
+    round.SetCornerRadius(Vector2::new(radius, radius))?;
     root.SetClip(&gfx.compositor.CreateGeometricClipWithGeometry(&round)?)?;
-    let ink = if key.look.light {
-        Ink::Dark
-    } else {
-        Ink::Light
-    };
-    // A small static sky tint; it never replaces the selected material or
-    // introduces another backdrop, texture capture or animated gradient.
+    // A deliberate opaque blue weather tile inside the Dock's chosen glass:
+    // one static gradient, no extra backdrop, capture, shaders or animation.
     let tint = gfx.compositor.CreateLinearGradientBrush()?;
     tint.SetStartPoint(Vector2::new(0.0, 0.0))?;
     tint.SetEndPoint(Vector2::new(1.0, 1.0))?;
-    let colors = tint.ColorStops()?;
-    for (at, a) in [(0.0, 34), (1.0, 0)] {
-        colors.Append(&gfx.compositor.CreateColorGradientStopWithOffsetAndColor(
-            at,
-            Color {
-                A: a,
-                R: 72,
-                G: 156,
-                B: 244,
-            },
-        )?)?;
+    let night = matches!(model.glyph, WeatherGlyph::Moon | WeatherGlyph::NightCloud);
+    let colors = if night {
+        [(0.0, (54, 105, 174)), (1.0, (28, 53, 112))]
+    } else {
+        [(0.0, (81, 174, 233)), (1.0, (39, 112, 211))]
+    };
+    for (at, (red, green, blue)) in colors {
+        tint.ColorStops()?
+            .Append(&gfx.compositor.CreateColorGradientStopWithOffsetAndColor(
+                at,
+                Color {
+                    A: 255,
+                    R: red,
+                    G: green,
+                    B: blue,
+                },
+            )?)?;
     }
     let sky = gfx.compositor.CreateSpriteVisual()?;
     sky.SetSize(Vector2::new(width, height))?;
     sky.SetBrush(&tint)?;
-    // Clip the accent too, not just the material's own backdrop.
     root.Children()?.InsertAtTop(&sky)?;
-    let icon = gfx.weather_icon(model.glyph, s)?;
-    let icon_x = width - 44.0 * s;
-    add(
-        gfx,
-        &root,
-        &icon,
-        icon_x,
-        (height - 40.0 * s) / 2.0,
-        40.0 * s,
-        40.0 * s,
-    )?;
-    let degrees_x = if key.placement.compact {
-        10.0 * s
+    if key.placement.compact {
+        // A side Dock remains narrow: upright degrees above an illustration,
+        // rather than rotated text or an external floating weather window.
+        let u = width / 48.0;
+        let degrees = gfx.text_brush_fitted(
+            &model.degrees,
+            u,
+            24.0,
+            false,
+            Ink::Light,
+            (width - 8.0 * u).max(1.0),
+        )?;
+        let x = ((width - degrees.width) / 2.0).max(0.0);
+        label(gfx, &root, degrees, x, 6.0 * u, 1.0)?;
+        let side = width * 1.1;
+        let icon = gfx.weather_icon(model.glyph, side / 40.0)?;
+        add(
+            gfx,
+            &root,
+            &icon,
+            (width - side) / 2.0,
+            (height - side - 3.0 * u).max(0.0),
+            side,
+            side,
+        )?;
     } else {
-        width - 104.0 * s
-    };
-    let font = match model.degrees.chars().count() {
-        5.. => 20.0,
-        4 => 26.0,
-        _ => 28.0,
-    };
-    let degrees = gfx.text_brush_fitted(
-        &model.degrees,
-        s,
-        font,
-        false,
-        ink,
-        (icon_x - degrees_x - 2.0 * s).max(1.0),
-    )?;
-    let degrees_y = (height - degrees.height) / 2.0;
-    label(gfx, &root, degrees, degrees_x, degrees_y, 1.0)?;
-    if !key.placement.compact {
-        let text_width = (degrees_x - 21.0 * s).max(1.0);
+        let u = height / 48.0;
+        let degrees_x = width - 104.0 * u;
+        let text_width = (degrees_x - 18.0 * u).max(1.0);
         label(
             gfx,
             &root,
-            gfx.text_brush_fitted(&model.title, s, 12.0, true, ink, text_width)?,
-            13.0 * s,
-            10.0 * s,
+            gfx.text_brush_fitted(&model.title, u, 11.5, true, Ink::Light, text_width)?,
+            12.0 * u,
+            7.0 * u,
             1.0,
         )?;
         label(
             gfx,
             &root,
-            gfx.text_brush_fitted(&model.subtitle, s, 10.0, false, ink, text_width)?,
-            13.0 * s,
-            31.0 * s,
-            0.67,
+            gfx.text_brush_fitted(&model.subtitle, u, 10.5, false, Ink::Light, text_width)?,
+            12.0 * u,
+            27.0 * u,
+            0.82,
+        )?;
+        let font = match model.degrees.chars().count() {
+            5.. => 23.0,
+            4 => 29.0,
+            _ => 36.0,
+        };
+        let degrees =
+            gfx.text_brush_fitted(&model.degrees, u, font, false, Ink::Light, 63.0 * u)?;
+        let y = ((height - degrees.height) / 2.0).max(0.0);
+        label(gfx, &root, degrees, degrees_x, y, 1.0)?;
+        // Art can bleed into the rounded right edge, as in the reference.
+        // It is clipped by the tile, never by the neighboring app's bounds.
+        let side = height * 1.22;
+        let icon = gfx.weather_icon(model.glyph, side / 40.0)?;
+        add(
+            gfx,
+            &root,
+            &icon,
+            width - side * 0.82,
+            (height - side) * 0.5,
+            side,
+            side,
         )?;
     }
     Ok(root)
 }
 
-fn create(place: Placement) -> Result<HWND> {
+fn create(r: RECT) -> Result<HWND> {
     static CLASS: OnceLock<()> = OnceLock::new();
     unsafe {
         let instance = GetModuleHandleW(None)?;
@@ -304,7 +389,6 @@ fn create(place: Placement) -> Result<HWND> {
                 ..Default::default()
             });
         });
-        let r = place.bounds;
         let hwnd = CreateWindowExW(
             WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
             class,
@@ -328,7 +412,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
     match msg {
         WM_MOUSEACTIVATE => return LRESULT(MA_NOACTIVATE as isize),
         WM_MOUSEMOVE => unsafe {
-            if GetWindowLongPtrW(hwnd, GWLP_USERDATA) == 0 {
+            if GetWindowLongPtrW(hwnd, GWLP_USERDATA) & 1 == 0 {
                 let mut tracked = TRACKMOUSEEVENT {
                     cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
                     dwFlags: TME_LEAVE,
@@ -336,7 +420,11 @@ unsafe extern "system" fn procedure(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
                     dwHoverTime: 0,
                 };
                 if TrackMouseEvent(&mut tracked).is_ok() {
-                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 1);
+                    SetWindowLongPtrW(
+                        hwnd,
+                        GWLP_USERDATA,
+                        GetWindowLongPtrW(hwnd, GWLP_USERDATA) | 1,
+                    );
                     crate::app::weather_signal(hwnd, 1);
                 }
             }
@@ -345,7 +433,24 @@ unsafe extern "system" fn procedure(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             crate::app::weather_signal(hwnd, 0);
         },
-        WM_LBUTTONUP | WM_RBUTTONUP => crate::app::weather_signal(hwnd, 2),
+        WM_LBUTTONDOWN | WM_RBUTTONDOWN => unsafe {
+            let bit = if msg == WM_LBUTTONDOWN { 2 } else { 4 };
+            SetWindowLongPtrW(
+                hwnd,
+                GWLP_USERDATA,
+                GetWindowLongPtrW(hwnd, GWLP_USERDATA) | bit,
+            );
+        },
+        WM_LBUTTONUP | WM_RBUTTONUP => unsafe {
+            let bit = if msg == WM_LBUTTONUP { 2 } else { 4 };
+            let flags = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, flags & !bit);
+            // An outside click can dismiss the popup on button-down. Its
+            // later release over the card must not immediately reopen it.
+            if flags & bit != 0 {
+                crate::app::weather_signal(hwnd, if bit == 2 { 2 } else { 3 });
+            }
+        },
         WM_SETCURSOR => {
             unsafe {
                 if let Ok(cursor) = LoadCursorW(None, IDC_ARROW) {
@@ -371,7 +476,7 @@ mod tests {
                 CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
                 DispatcherQueueOptions,
             },
-            UI::WindowsAndMessaging::{GetForegroundWindow, IsWindow},
+            UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowRect, IsWindow},
         },
     };
 
@@ -402,21 +507,27 @@ mod tests {
             })?
         };
         let gfx = Gfx::new()?;
-        let foreground = unsafe { GetForegroundWindow() };
         for scale in [1.0, 1.25, 1.5, 2.0] {
             for material in Material::ALL {
                 for light in [false, true] {
                     for glass in [false, true] {
                         for compact in [false, true] {
-                            let width = if compact { 104.0 } else { 240.0 };
+                            let width = if compact { 48.0 } else { 220.8 };
+                            let height = if compact { 105.6 } else { 48.0 };
                             let bounds = RECT {
                                 left: -32000,
                                 top: -32000,
                                 right: -32000 + (width * scale) as i32,
-                                bottom: -32000 + (58.0 * scale) as i32,
+                                bottom: -32000 + (height * scale) as i32,
                             };
                             let key = Key {
                                 placement: Placement { bounds, compact },
+                                screen: RECT {
+                                    left: -33000,
+                                    top: -33000,
+                                    right: -30000,
+                                    bottom: -30000,
+                                },
                                 look: Look {
                                     material,
                                     light,
@@ -434,19 +545,54 @@ mod tests {
                             };
                             let mut card = Card::new(&gfx, key, &model)?;
                             let hwnd = card.hwnd();
+                            assert_ne!(
+                                unsafe { GetForegroundWindow() },
+                                hwnd,
+                                "the non-activating card must not take focus"
+                            );
                             let root: ContainerVisual = card.target.Root()?.cast()?;
-                            assert_eq!(backdrops(&root)?, usize::from(glass));
+                            assert_eq!(backdrops(&root)?, 0, "the blue tile adds no backdrop");
                             assert!(root.Clip().is_ok());
-                            let size = root.Size()?;
-                            for visual in root.Children()? {
-                                let offset = visual.Offset()?;
-                                let child = visual.Size()?;
-                                assert!(offset.X >= 0.0 && offset.Y >= 0.0);
-                                assert!(
-                                    offset.X + child.X <= size.X + 0.5
-                                        && offset.Y + child.Y <= size.Y + 0.5
-                                );
-                            }
+                            // The weather illustration deliberately bleeds past
+                            // the right edge; the root's rounded clip bounds it.
+                            let retained = root.clone();
+                            let moved = Key {
+                                placement: Placement {
+                                    bounds: RECT {
+                                        left: bounds.left + 1,
+                                        right: bounds.right + 1,
+                                        ..bounds
+                                    },
+                                    compact,
+                                },
+                                ..key
+                            };
+                            card.update(&gfx, moved, &model)?;
+                            assert!(
+                                card.target.Root()?
+                                    == retained.cast::<windows::UI::Composition::Visual>()?,
+                                "moving the Dock must not rasterize weather text or art"
+                            );
+                            let clipped = Key {
+                                screen: RECT {
+                                    left: bounds.left + 10,
+                                    ..key.screen
+                                },
+                                ..key
+                            };
+                            card.update(&gfx, clipped, &model)?;
+                            let mut native_bounds = RECT::default();
+                            unsafe { GetWindowRect(hwnd, &mut native_bounds)? };
+                            assert_eq!(
+                                Some(native_bounds),
+                                clipped.visible_bounds(),
+                                "the input window must not leak onto an adjacent monitor"
+                            );
+                            assert_eq!(card.target.Root()?.Offset()?.X, -10.0);
+                            assert!(
+                                card.target.Root()?
+                                    == retained.cast::<windows::UI::Composition::Visual>()?
+                            );
                             card.update(
                                 &gfx,
                                 Key { revision: 1, ..key },
@@ -463,6 +609,11 @@ mod tests {
                                 "a data update must keep the input window"
                             );
                             assert!(unsafe { IsWindow(Some(hwnd)) }.as_bool());
+                            assert_ne!(
+                                unsafe { GetForegroundWindow() },
+                                hwnd,
+                                "updating or moving the card must not take focus"
+                            );
                             drop(card);
                             assert!(!unsafe { IsWindow(Some(hwnd)) }.as_bool());
                         }
@@ -470,7 +621,6 @@ mod tests {
                 }
             }
         }
-        assert_eq!(unsafe { GetForegroundWindow() }, foreground);
         Ok(())
     }
 }

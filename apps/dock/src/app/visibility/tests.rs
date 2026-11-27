@@ -29,12 +29,12 @@ impl Drop for Window {
         }
     }
 }
-struct Fixture {
-    app: App,
+pub(in crate::app) struct Fixture {
+    pub(in crate::app) app: App,
     _windows: [Window; 2],
 }
 impl Fixture {
-    fn new() -> Result<Self> {
+    pub(in crate::app) fn new() -> Result<Self> {
         let create = || unsafe {
             CreateWindowExW(
                 WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW,
@@ -149,7 +149,7 @@ impl Fixture {
         })
     }
 }
-fn queue() -> windows::core::Result<windows::System::DispatcherQueueController> {
+pub(in crate::app) fn queue() -> windows::core::Result<windows::System::DispatcherQueueController> {
     unsafe {
         CreateDispatcherQueueController(DispatcherQueueOptions {
             dwSize: size_of::<DispatcherQueueOptions>() as u32,
@@ -320,6 +320,12 @@ fn native_weather_hover_keeps_the_dock_open_and_disabling_releases_it() -> Resul
             },
             compact: false,
         },
+        screen: RECT {
+            left: -33000,
+            top: -33000,
+            right: -30000,
+            bottom: -30000,
+        },
         look: Look {
             material: Material::Standard,
             light: false,
@@ -372,5 +378,68 @@ fn native_weather_hover_keeps_the_dock_open_and_disabling_releases_it() -> Resul
     app.sync_weather();
     assert!(app.weather.card.is_none());
     assert!(!app.weather_holds_open());
+    Ok(())
+}
+
+#[test]
+#[ignore = "Hidden owned forecast popup: no focus, capture, network request or live Dock changes"]
+fn native_forecast_popup_holds_autohide_ignores_foreign_events_and_closes() -> Result<()> {
+    use crate::{
+        appearance::{Look, Material},
+        weather::popup::{CLOSE, Context, Popup, data::Data},
+    };
+    use muelle_core::frame::DockEdge;
+    use windows::Win32::Foundation::RECT;
+    let _queue = queue()?;
+    let mut fixture = Fixture::new()?;
+    let app = &mut fixture.app;
+    app.config.auto_hide = true;
+    app.config.smart_hide = false;
+    let context = Context {
+        anchor: RECT {
+            left: -32000,
+            top: -31000,
+            right: -31780,
+            bottom: -30952,
+        },
+        screen: RECT {
+            left: -33000,
+            top: -33000,
+            right: -30000,
+            bottom: -30000,
+        },
+        edge: DockEdge::Bottom,
+        scale: 1.0,
+        look: Look {
+            material: Material::Frosted,
+            light: false,
+            glass: false,
+        },
+        language: muelle_config::Language::Es,
+        revision: 0,
+        hour: 0,
+        has_data: false,
+    };
+    let data = Data::new(None, context.language, 0, Default::default());
+    let popup = Popup::new(&app.gfx, context, &data)?;
+    let source = popup.hwnd();
+    app.weather.popup = Some(popup);
+    app.hide_if_unused()?;
+    assert_eq!(
+        app.slide.target, 0.0,
+        "an open forecast must keep the Dock visible"
+    );
+    app.weather_popup_event(app.input, CLOSE)?;
+    assert!(
+        app.weather.popup.is_some(),
+        "a foreign or obsolete popup event is ignored"
+    );
+    app.weather_popup_event(source, CLOSE)?;
+    assert!(app.weather.popup.is_none());
+    app.hide_if_unused()?;
+    assert_eq!(
+        app.slide.target, 1.0,
+        "closing the forecast releases the autohide hold"
+    );
     Ok(())
 }

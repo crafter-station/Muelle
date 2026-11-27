@@ -543,7 +543,7 @@ impl App {
 }
 
 #[cfg(test)]
-mod tests;
+pub(in crate::app) mod tests;
 
 #[cfg(test)]
 mod display_tests {

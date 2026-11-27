@@ -30,6 +30,8 @@ pub struct Cached<'a> {
     pub forecast: &'a Forecast,
     pub age: Duration,
     pub stale: bool,
+    /// Stable UI deadline: freshness or expiry, not recomputed from render time.
+    pub next_change: Instant,
 }
 
 /// Single-city memory cache and scheduling only: no timer, worker, DNS, disk
@@ -144,6 +146,29 @@ impl Refresh {
         true
     }
 
+    /// Reconcile a resume/clock-change with the observation's wall clock.
+    /// Preserve rate limits, errors and the single request already in flight.
+    pub fn revalidate(&mut self, now: Instant, unix: i64) -> bool {
+        let Some((forecast, fetched)) = &mut self.cached else {
+            return false;
+        };
+        let age = unix.saturating_sub(forecast.current.time);
+        if !(-900..=7200).contains(&age) {
+            self.cached = None;
+            return true;
+        }
+        if age >= 1800 {
+            let observed = now
+                .checked_sub(Duration::from_secs(age as u64))
+                .unwrap_or(now);
+            if observed < *fetched {
+                *fetched = observed;
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn cached(&self, now: Instant) -> Option<Cached<'_>> {
         if !self.enabled {
             return None;
@@ -154,6 +179,9 @@ impl Refresh {
             forecast,
             age,
             stale: age >= NORMAL,
+            next_change: *fetched
+                + if age >= NORMAL { MAX_AGE } else { NORMAL }
+                + Duration::from_millis(1),
         })
     }
 }
@@ -370,5 +398,55 @@ mod tests {
                 .begin(now + Duration::from_secs(7200), demand())
                 .is_some()
         );
+    }
+    #[test]
+    fn resume_expires_old_wall_clock_data_without_overlapping_a_request() {
+        let now = Instant::now();
+        let mut state = Refresh::default();
+        state.configure(true, Some(coordinates()));
+        let ticket = state.begin(now, demand()).unwrap_or_else(|| unreachable!());
+        let snapshot = forecast();
+        let unix = snapshot.current.time;
+        assert!(state.finish(ticket, Ok(snapshot), now));
+        assert!(!state.revalidate(now, unix + 60));
+        assert!(state.begin(now, demand()).is_none());
+        assert!(state.revalidate(now, unix + 3 * 3600));
+        assert!(state.cached(now).is_none());
+        let ticket = state.begin(now, demand()).unwrap_or_else(|| unreachable!());
+        state.revalidate(now, unix + 4 * 3600);
+        assert!(state.begin(now, demand()).is_none());
+        assert!(state.finish(
+            ticket,
+            Err(Error::RateLimited {
+                retry_after: Duration::from_secs(7200)
+            }),
+            now
+        ));
+        state.revalidate(now, unix - 24 * 3600);
+        assert!(
+            state
+                .begin(now + Duration::from_secs(7199), demand())
+                .is_none()
+        );
+    }
+    #[test]
+    fn cache_ui_deadlines_are_stable_across_animation_frames() {
+        let now = Instant::now();
+        let mut state = Refresh::default();
+        state.configure(true, Some(coordinates()));
+        let ticket = state.begin(now, demand()).unwrap_or_else(|| unreachable!());
+        assert!(state.finish(ticket, Ok(forecast()), now));
+        let initial = state
+            .cached(now)
+            .unwrap_or_else(|| unreachable!())
+            .next_change;
+        for frame in 1..120 {
+            let cached = state
+                .cached(now + Duration::from_millis(frame * 16))
+                .unwrap_or_else(|| unreachable!());
+            assert_eq!(cached.next_change, initial);
+        }
+        let stale = state.cached(now + NORMAL).unwrap_or_else(|| unreachable!());
+        assert!(stale.stale && stale.next_change > initial);
     }
 }

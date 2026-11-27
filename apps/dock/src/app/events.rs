@@ -604,6 +604,10 @@ pub(super) unsafe extern "system" fn wndproc(
             }
         }
         WM_SETTINGCHANGE | WM_DISPLAYCHANGE | WM_DPICHANGED => {
+            with_app("entorno del popup del clima", |app| {
+                app.weather_environment_changed(matches!(msg, WM_DISPLAYCHANGE | WM_DPICHANGED));
+                Ok(())
+            });
             if matches!(msg, WM_DISPLAYCHANGE | WM_DPICHANGED) {
                 DISPLAYS_CHANGED.store(true, Ordering::Relaxed);
                 with_app("pantalla de la mascota", |app| {
@@ -684,6 +688,9 @@ pub(super) unsafe extern "system" fn wndproc(
         WM_TIMER if w.0 == MASCOT_TIMER => with_app("mascota", App::mascot_tick),
         super::weather::READY => with_app("datos del clima", App::weather_ready),
         super::weather::NETWORK => with_app("red del clima", App::weather_network),
+        super::weather::POPUP_EVENT => with_app_then("popup del clima", |app| {
+            app.weather_popup_event(HWND(w.0 as *mut _), l.0)
+        }),
         super::weather::EVENT => with_app_then("tarjeta del clima", |app| {
             app.weather_event(HWND(l.0 as *mut _), w.0)
         }),
@@ -707,6 +714,7 @@ pub(super) unsafe extern "system" fn wndproc(
             with_app("desbloqueo", |app| {
                 app.companion_locked(false);
                 app.weather_locked(false);
+                app.weather_resumed()?;
                 app.arm_welcome();
                 Ok(())
             });
@@ -768,9 +776,19 @@ pub(super) unsafe extern "system" fn wndproc(
         TASKBAR_TAKEN => with_app("reserva de espacio", |app| {
             app.taskbar_taken(w.0 != 0, l.0 != 0)
         }),
+        0x001E => with_app("horario del clima", App::weather_resumed), // WM_TIMECHANGE
+        WM_POWERBROADCAST if w.0 == 4 => {
+            // PBT_APMSUSPEND
+            with_app("suspender clima", |app| {
+                app.weather_suspended(true);
+                Ok(())
+            });
+        }
         WM_POWERBROADCAST if w.0 == PBT_APMRESUMEAUTOMATIC => {
             with_app("reanudar reserva de espacio", |app| {
                 app.taskbar_attempts = 0;
+                app.weather_suspended(false);
+                app.weather_resumed()?;
                 // Asleep was a pause; awake may be the first time today.
                 app.suspend_companion();
                 app.sync_companion();

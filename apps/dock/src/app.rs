@@ -29,6 +29,7 @@ mod previews;
 mod rendering;
 mod visibility;
 mod weather;
+pub(crate) use weather::popup_signal as weather_popup_signal;
 pub(crate) use weather::signal as weather_signal;
 
 use std::{
@@ -563,6 +564,7 @@ struct StageKey {
     density: DockDensity,
     max_scale: f32,
     indicators: bool,
+    weather: bool,
     entries: Vec<Entry>,
 }
 
@@ -580,6 +582,7 @@ struct Stage {
     scene: Scene,
     reorder: Option<ReorderMotion>,
     layout: Layout,
+    weather_place: Option<crate::weather::Placement>,
     magnifier: Magnifier,
     icon: f32,
     gap: f32,

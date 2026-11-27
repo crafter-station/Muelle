@@ -18,6 +18,7 @@ impl App {
     pub(super) fn preview_target(&self) -> Option<(&str, usize)> {
         if !self.hovering
             || self.menu_open
+            || self.weather.popup.is_some()
             || self.press.is_some()
             || self.drag.is_some()
             || self.drag_over

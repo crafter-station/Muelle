@@ -10,12 +10,24 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
-- Optional weather card beside the Dock, with current conditions, temperature
-  and a compact layout on crowded displays. Follows the selected material and
-  Dock visibility. Settings requests an approximate Windows location with
-  consent; no continuous tracking. Refreshes every 30 min (60 in energy saver)
-  while visible, with caching and bounded workers. Hourly/daily popup UI is
-  reserved for the next phase.
+- Weather explicitly releases its private Composition targets, brushes and
+  drawing surfaces when closing/updating, and keeps pixel size stable during
+  fractional motion to avoid redundant rasterization.
+- Weather recovers after sleep, clock changes and temporary visual/network
+  subscription failures, retaining backoff and one request at a time. Stable
+  deadlines avoid rearming timers during animation. High contrast/screen-reader
+  users get a native textual forecast; popup buttons require a matching press
+  and release. Failure diagnostics omit location, URLs and response content.
+
+- Optional blue weather card inside the Dock, with current conditions,
+  temperature and static sun/cloud illustrations. Reserves its own space,
+  follows magnification and hiding, and adapts to a side Dock. Settings requests
+  an approximate Windows location with consent; no continuous tracking.
+  Refreshes every 30 min (60 in energy saver)
+  while visible, with caching and bounded workers. Clicking opens a themed
+  forecast popup with up to six hourly columns, five days, rain chance, wind
+  and sunrise/sunset. Supports outside-click, Escape and keyboard controls;
+  opening reuses cached data without forcing a request or starting UI polling.
 
 - Optional persistent mascot for all six characters: rests on the visible Dock,
   blinks and takes short walks between events. Yields to Dock interactions and
@@ -67,11 +79,24 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
-- Tarjeta de clima opcional junto al Dock, con condición, temperatura y formato
-  compacto si falta espacio. Sigue el material y la visibilidad del Dock.
+- El clima libera expresamente sus targets, brushes y superficies de dibujo
+  privados al cerrar/actualizar. Su tamaño en píxeles se mantiene estable
+  durante el movimiento fraccional para evitar rasterizaciones innecesarias.
+- El clima se recupera tras suspensión, cambios de hora y fallos temporales de
+  vista/suscripción de red, respetando backoff y una única petición. Los plazos
+  estables evitan rearmar timers durante las animaciones. Alto contraste/lector
+  de pantalla usa un pronóstico nativo de texto; los botones exigen pulsar y
+  soltar sobre el mismo control. Diagnóstico sin ubicación, URL ni contenido.
+
+- Tarjeta azul de clima opcional dentro del Dock, con condición, temperatura
+  e ilustraciones estáticas de sol y nubes. Reserva su propio espacio, acompaña
+  la ampliación y ocultación y se adapta a los docks laterales.
   Ajustes solicita una ubicación aproximada de Windows con permiso, sin
   seguimiento continuo. Actualiza cada 30 min (60 en ahorro) mientras es visible,
-  con caché y trabajador acotado. El popup por horas y días llega en la siguiente fase.
+  con caché y trabajador acotado. Al pulsar abre un popup del tema elegido, con
+  hasta seis columnas horarias, cinco días, lluvia, viento y amanecer/atardecer.
+  Cierra con clic fuera o Escape y admite teclado; abrirlo reutiliza la caché
+  sin forzar consultas ni añadir sondeos de interfaz.
 
 - Mascota permanente opcional para los seis personajes: descansa sobre el Dock
   visible, parpadea y da paseos cortos entre eventos. Cede ante la interacción

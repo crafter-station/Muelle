@@ -92,3 +92,31 @@ fn unknown_codes_have_a_neutral_fallback_instead_of_inventing_sunshine() {
         assert_eq!(Condition::from_wmo(code), expected);
     }
 }
+
+#[test]
+fn forecast_rejects_invalid_offset_and_out_of_range_calendar_timestamps()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut raw = fixture()?;
+    raw["utc_offset_seconds"] = serde_json::json!(1000000);
+    assert!(decode(&serde_json::to_vec(&raw)?).is_err());
+    let mut raw = fixture()?;
+    raw["daily"]["time"][1] = serde_json::json!(i64::MAX);
+    assert!(decode(&serde_json::to_vec(&raw)?).is_err());
+    Ok(())
+}
+
+#[test]
+fn diagnostics_never_include_payloads_locations_or_urls() {
+    assert_eq!(
+        Error::Payload("private payload with coordinates").diagnostic_code(),
+        "payload"
+    );
+    assert_eq!(Error::Http(403).diagnostic_code(), "http_status");
+    assert_eq!(
+        Error::RateLimited {
+            retry_after: std::time::Duration::from_secs(300)
+        }
+        .diagnostic_code(),
+        "rate_limited"
+    );
+}
