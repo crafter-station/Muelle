@@ -179,9 +179,11 @@ impl App {
         if !self.can_perform() {
             return;
         }
+        self.suspend_companion();
         let scale = self.stage.as_ref().map_or(1.0, |stage| stage.scale);
         let character = self.config.mascot_character;
         let Some(mascot) = mascot::Mascot::play(&self.gfx, character, act, place, scale) else {
+            self.sync_companion();
             return;
         };
         self.mascot = Some(mascot);
@@ -214,6 +216,7 @@ impl App {
     }
 
     pub(super) fn stop_mascot(&mut self) {
+        self.suspend_companion();
         let active = self.mascot.take().is_some();
         // SAFETY: These timers belong to this UI window. Always clear a stale
         // mascot timer, and resume the usual dock hiding delay after an act.
@@ -285,6 +288,7 @@ impl App {
             || self.mascot.as_ref().is_none_or(mascot::Mascot::finished)
         {
             self.stop_mascot();
+            self.sync_companion();
             return Ok(());
         }
         let mut point = POINT::default();
@@ -322,6 +326,7 @@ impl App {
     /// The charger plugged in or out, or energy saver turned on: the crab walks
     /// along the dock. Only on the change itself, never at startup.
     pub(super) fn power_moment(&mut self) {
+        self.refresh_companion_motion();
         let now = (
             muelle_shell::system::battery().map(|battery| battery.charging),
             muelle_shell::system::energy_saver_on(),

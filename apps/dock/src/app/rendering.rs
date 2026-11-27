@@ -512,6 +512,7 @@ impl App {
     }
 
     pub(super) fn render(&mut self) -> Result<()> {
+        self.sync_companion();
         let Some(stage) = &mut self.stage else {
             return Ok(());
         };

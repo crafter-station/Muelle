@@ -52,7 +52,8 @@
 - A top menu bar with the app in front, clock, network, volume and battery, the
   input language, microphone/camera in use, the hidden tray icons, plus
   the Search and Task View buttons if enabled on the Windows taskbar. The
-  Widgets button is off by default and can be enabled in Settings.
+  Widgets button is off by default and can be enabled in Settings. With more
+  than one display, each display shows the bar.
 - A curved island in the menu bar for usage limits from Claude Code, Codex,
   OpenCode Go, Z.ai GLM Coding Plan, Gemini CLI, and Antigravity. Z.ai shows
   its 5-hour and weekly limits; Gemini Pro and Flash quotas appear separately

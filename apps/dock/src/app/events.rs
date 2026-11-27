@@ -18,7 +18,8 @@ use windows::Win32::{
             SetTimer, WM_CAPTURECHANGED, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
             WM_DWMCOLORIZATIONCOLORCHANGED, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
             WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_RBUTTONUP,
-            WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WM_WTSSESSION_CHANGE, WTS_SESSION_UNLOCK,
+            WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK,
+            WTS_SESSION_UNLOCK,
         },
     },
 };
@@ -27,15 +28,15 @@ use crate::{edge_watch, folder_menu, multi_window_view::MultiWindowAction};
 
 use super::{
     APPBAR_CALLBACK, ASSETS_DELAY_MS, ASSETS_READY, ASSETS_TIMER, App, BIN_CHANGED, BIN_DELAY_MS,
-    BIN_STATE, BIN_TIMER, BREAK_TIMER, CONFIG_CHANGED, DRAG_CANCELLED, DRAG_TIMER, DROP_RUN,
-    EDGE_TIMER, FULLSCREEN_TIMER, HEALTH_CHECK, HIDE_TIMER, HSHELL_FLASH, HSHELL_LANGUAGE,
-    HSHELL_REDRAW, HSHELL_RUDEAPPACTIVATED, HSHELL_WINDOWACTIVATED, HSHELL_WINDOWDESTROYED,
-    LAST_FRONT, LEAVE_TIMER, MASCOT_TIMER, Outside, PBT_APMPOWERSTATUSCHANGE,
-    PBT_APMRESUMEAUTOMATIC, PBT_POWERSETTINGCHANGE, PINS_CHANGED, PINS_DELAY_MS, PINS_TIMER,
-    PREVIEW_TIMER, REFRESH_DELAY_MS, REFRESH_TIMER, SHELL_HOOK, SPI_SETWORKAREA, SPRING_TIMER,
-    SWITCHER_TIMER, SYNC_DELAY_MS, SYNC_TIMER, TASKBAR_CREATED, TASKBAR_DELAY_MS,
-    TASKBAR_PREFS_CHANGED, TASKBAR_TAKEN, TASKBAR_TIMER, TRIM_TIMER, UPDATE_TIMER, WELCOME_TIMER,
-    WM_MOUSELEAVE, WM_POWERBROADCAST,
+    BIN_STATE, BIN_TIMER, BREAK_TIMER, CONFIG_CHANGED, DOCK_MOVED, DRAG_CANCELLED, DRAG_TIMER,
+    DROP_RUN, EDGE_TIMER, FULLSCREEN_TIMER, HEALTH_CHECK, HIDE_TIMER, HSHELL_FLASH,
+    HSHELL_LANGUAGE, HSHELL_REDRAW, HSHELL_RUDEAPPACTIVATED, HSHELL_WINDOWACTIVATED,
+    HSHELL_WINDOWDESTROYED, LAST_FRONT, LEAVE_TIMER, MASCOT_TIMER, Outside,
+    PBT_APMPOWERSTATUSCHANGE, PBT_APMRESUMEAUTOMATIC, PBT_POWERSETTINGCHANGE, PINS_CHANGED,
+    PINS_DELAY_MS, PINS_TIMER, PREVIEW_TIMER, REFRESH_DELAY_MS, REFRESH_TIMER, SHELL_HOOK,
+    SPI_SETWORKAREA, SPRING_TIMER, SWITCHER_TIMER, SYNC_DELAY_MS, SYNC_TIMER, TASKBAR_CREATED,
+    TASKBAR_DELAY_MS, TASKBAR_PREFS_CHANGED, TASKBAR_TAKEN, TASKBAR_TIMER, TRIM_TIMER,
+    UPDATE_TIMER, WELCOME_TIMER, WM_MOUSELEAVE, WM_POWERBROADCAST,
     feedback::query_bin_in_background,
     lifecycle::{is_tracked, main_window},
     with_app, with_app_then,
@@ -139,6 +140,38 @@ pub fn menu_bar_clicked(x: f32, y: f32) {
                 }));
             }
             bar.click(&app.gfx, x, y)?;
+        }
+        Ok(None)
+    });
+}
+
+/// The pointer or a timer on a copy of the menu bar on another display.
+pub fn menu_bar_mirror_event(hwnd: HWND, event: crate::menubar::MirrorEvent) {
+    use crate::menubar::MirrorEvent;
+    with_app_then("barra superior en otra pantalla", |app| {
+        let menu_open = app.menu_open;
+        let Some(bar) = app
+            .menubar
+            .as_mut()
+            .and_then(|bar| bar.bar_mut(hwnd.0 as isize))
+        else {
+            return Ok(None);
+        };
+        match event {
+            MirrorEvent::Click(x, y) => {
+                if let Some(anchor) = bar.input_switcher_anchor(x, y) {
+                    return Ok(Some(Outside::InputMenu {
+                        gfx: app.gfx.clone(),
+                        anchor,
+                        look: crate::appearance::menu_bar(),
+                    }));
+                }
+                bar.click(&app.gfx, x, y)?;
+            }
+            MirrorEvent::PointerMoved(x, y) => bar.pointer_moved(&app.gfx, x, y)?,
+            MirrorEvent::CheckPointer if !menu_open => bar.check_pointer(&app.gfx)?,
+            MirrorEvent::CheckPointer => {}
+            MirrorEvent::FinishHide(epoch) => bar.finish_hide(&app.gfx, epoch)?,
         }
         Ok(None)
     });
@@ -497,6 +530,10 @@ pub(super) unsafe extern "system" fn wndproc(
         }
         WM_MOUSEMOVE => with_app("movimiento del ratón", App::on_mouse_move),
         WM_MOUSELEAVE => with_app("salida del ratón", App::on_tracked_mouse_leave),
+        DOCK_MOVED => with_app("cambio de pantalla", |app| {
+            app.set_moving(false);
+            Ok(())
+        }),
         WM_LBUTTONDOWN => with_app("pulsación", App::on_press),
         WM_LBUTTONUP => with_app_then("clic", App::on_release),
         WM_MBUTTONUP => with_app_then("clic central", App::on_middle_click),
@@ -621,11 +658,21 @@ pub(super) unsafe extern "system" fn wndproc(
             with_app_then("arrastre sobre una app", App::spring_open);
         }
         WM_TIMER if w.0 == MASCOT_TIMER => with_app("mascota", App::mascot_tick),
+        WM_TIMER if w.0 == super::COMPANION_TIMER => {
+            with_app("mascota en reposo", App::companion_tick)
+        }
         WM_TIMER if w.0 == WELCOME_TIMER => with_app("bienvenida", App::welcome),
         WM_TIMER if w.0 == BREAK_TIMER => with_app("descanso", App::break_tick),
         // Unlocked: maybe the first time today (see `App::welcome`).
+        WM_WTSSESSION_CHANGE if w.0 == WTS_SESSION_LOCK as usize => {
+            with_app("pausar mascota", |app| {
+                app.companion_locked(true);
+                Ok(())
+            });
+        }
         WM_WTSSESSION_CHANGE if w.0 == WTS_SESSION_UNLOCK as usize => {
             with_app("desbloqueo", |app| {
+                app.companion_locked(false);
                 app.arm_welcome();
                 Ok(())
             });
@@ -665,6 +712,7 @@ pub(super) unsafe extern "system" fn wndproc(
             match w.0 {
                 REFRESH_TIMER => with_app("recomposición del dock", |app| {
                     app.apply_edge_settings();
+                    app.sync_menu_bar_displays();
                     if DISPLAYS_CHANGED.swap(false, Ordering::Relaxed) {
                         app.rebuild()?;
                     } else {
@@ -690,6 +738,8 @@ pub(super) unsafe extern "system" fn wndproc(
             with_app("reanudar reserva de espacio", |app| {
                 app.taskbar_attempts = 0;
                 // Asleep was a pause; awake may be the first time today.
+                app.suspend_companion();
+                app.sync_companion();
                 app.moments.rested();
                 app.arm_welcome();
                 Ok(())

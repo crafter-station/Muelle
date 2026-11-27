@@ -10,13 +10,18 @@ use muelle_shell::{
     system::{Monitor, monitor_at, monitor_rects, primary_monitor},
     taskbar, tracker,
 };
-use windows::Win32::{
-    Foundation::{HWND, POINT, RECT},
-    UI::{
-        Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON},
-        WindowsAndMessaging::{GetCursorPos, KillTimer, SetTimer},
+use windows::{
+    Win32::{
+        Foundation::{HWND, LPARAM, POINT, RECT, WPARAM},
+        Graphics::Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute},
+        UI::{
+            Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON},
+            WindowsAndMessaging::{GetCursorPos, KillTimer, PostMessageW, SetTimer},
+        },
     },
+    core::BOOL,
 };
+use windows_future::AsyncActionCompletedHandler;
 
 use crate::{
     edge_watch::{self, EdgeWatch, Reveal, Target as EdgeTarget},
@@ -24,8 +29,8 @@ use crate::{
 };
 
 use super::{
-    App, EDGE_TIMER, FULLSCREEN_RECHECK_MS, FULLSCREEN_TIMER, HIDE_DELAY_MS, HIDE_TIMER,
-    HOVER_OMEGA, millis,
+    App, DOCK_MOVED, EDGE_TIMER, FULLSCREEN_RECHECK_MS, FULLSCREEN_TIMER, HIDE_DELAY_MS,
+    HIDE_TIMER, HOVER_OMEGA, millis,
 };
 
 /// Whether intelligent hiding keeps the dock away, from what is in front:
@@ -119,9 +124,18 @@ impl App {
         if !self.config.menu_bar || self.config.menu_bar_auto_hide {
             return 0;
         }
-        primary_monitor()
-            .filter(|primary| primary.screen == screen)
-            .map_or(0, |primary| MenuBar::strip_height(primary.scale))
+        // With a copy of the bar on every display, each display has one.
+        let display = if self.config.menu_bar_all_displays {
+            monitor_at(POINT {
+                x: screen.left + (screen.right - screen.left) / 2,
+                y: screen.top + (screen.bottom - screen.top) / 2,
+            })
+        } else {
+            primary_monitor()
+        };
+        display
+            .filter(|display| display.screen == screen)
+            .map_or(0, |display| MenuBar::strip_height(display.scale))
     }
 
     pub(super) fn dock_monitor(&self) -> Option<Monitor> {
@@ -226,8 +240,8 @@ impl App {
         unsafe { GetCursorPos(&mut point)? };
         match edge_watch::poll(point) {
             Reveal::Wait(wait) => self.arm_edge_timer(Some(wait)),
-            Reveal::Ready(EdgeTarget::MenuBar) => {
-                if let Some(bar) = &mut self.menubar {
+            Reveal::Ready(EdgeTarget::MenuBar(id)) => {
+                if let Some(bar) = self.menubar.as_mut().and_then(|bar| bar.bar_mut(id)) {
                     bar.edge_rested(&self.gfx, point)?;
                 }
             }
@@ -297,7 +311,15 @@ impl App {
             self.amount = Spring::at(0.0, HOVER_OMEGA);
             self.slide = Spring::at(1.0, self.config.dock_auto_hide_speed.omega());
             self.fullscreen = false;
-            self.refresh()?;
+            // Windows moves the window at once but shows its new content a
+            // few frames later: meanwhile the old dock, at the other
+            // display's scale, flashed at the new place before sliding in.
+            // Keep the window out of view until the new content is there.
+            self.set_moving(true);
+            if let Err(error) = self.refresh().and_then(|()| self.on_commit(DOCK_MOVED)) {
+                self.set_moving(false);
+                return Err(error);
+            }
         }
         if self
             .stage
@@ -315,6 +337,42 @@ impl App {
         }
         self.place_windows()?;
         self.render()
+    }
+
+    /// Keeps the dock's window out of view, or shows it again. Cloaking
+    /// leaves the window where it is and still taking the pointer.
+    pub(super) fn set_moving(&mut self, moving: bool) {
+        if self.moving_since.is_some() == moving {
+            return;
+        }
+        self.moving_since = moving.then(Instant::now);
+        let cloak = BOOL::from(moving);
+        // SAFETY: Our own window; the value outlives the call.
+        unsafe {
+            let _ = DwmSetWindowAttribute(
+                self.visual,
+                DWMWA_CLOAK,
+                (&raw const cloak).cast(),
+                size_of::<BOOL>() as u32,
+            );
+        }
+    }
+
+    /// Posts `message` to the dock once the compositor has taken everything
+    /// changed so far.
+    fn on_commit(&self, message: u32) -> Result<()> {
+        let input = self.input.0 as isize;
+        self.gfx.compositor.RequestCommitAsync()?.SetCompleted(
+            &AsyncActionCompletedHandler::new(move |_, _| {
+                // SAFETY: Only a message with no data is posted to our window.
+                unsafe {
+                    let _ =
+                        PostMessageW(Some(HWND(input as *mut _)), message, WPARAM(0), LPARAM(0));
+                }
+                Ok(())
+            }),
+        )?;
+        Ok(())
     }
 
     pub(super) fn update_smart_hiding(&mut self) -> Result<()> {
@@ -367,6 +425,7 @@ impl App {
             return Ok(());
         };
         let bar_fullscreen = tracker::foreground_is_fullscreen(monitor.screen);
+        let mut mirror_fullscreen = false;
         let fullscreen = self.dock_monitor().map_or(bar_fullscreen, |dock| {
             if dock.screen == monitor.screen {
                 bar_fullscreen
@@ -382,7 +441,7 @@ impl App {
             }
             // Runs when a window comes to the front and once it stops moving:
             // its title bar must not open, or be dropped, under the bar.
-            if let Some(strip) = bar.reserved_strip() {
+            for strip in bar.reserved_strips() {
                 tracker::keep_below(front, strip);
             }
             // Intelligent hiding (issue #61): the same test as the dock's,
@@ -394,12 +453,30 @@ impl App {
             if let Err(error) = bar.set_covered(&self.gfx, covered) {
                 muelle_shell::log::line(&format!("ocultación inteligente de la barra: {error:#}"));
             }
+            // The copies on the other displays, each for its own display.
+            let front_rect = (self.config.menu_bar_smart_hide
+                && self.windows.iter().any(|window| window.hwnd == front))
+            .then(|| tracker::visible_rect(front))
+            .flatten();
+            for (display, mirror) in bar.mirrors_mut() {
+                let full = tracker::foreground_is_fullscreen(display);
+                mirror_fullscreen |= full;
+                let result = mirror.set_visible(!full).and_then(|()| {
+                    mirror.set_covered(
+                        &self.gfx,
+                        front_rect.is_some_and(|rect| rects_overlap(mirror.bounds(), rect)),
+                    )
+                });
+                if let Err(error) = result {
+                    muelle_shell::log::line(&format!("barra superior en otra pantalla: {error:#}"));
+                }
+            }
         }
         // Windows sometimes omits the shell event when a full-screen app
         // closes or switches desktops. Poll only while our UI is hidden.
         // SAFETY: `self.input` is a live window on this UI thread.
         unsafe {
-            if fullscreen || (bar_fullscreen && self.menubar.is_some()) {
+            if fullscreen || ((bar_fullscreen || mirror_fullscreen) && self.menubar.is_some()) {
                 SetTimer(
                     Some(self.input),
                     FULLSCREEN_TIMER,
@@ -444,6 +521,7 @@ impl App {
         if let Err(error) = self.update_menu_bar_app() {
             eprintln!("muelle: nombre de la barra superior: {error:#}");
         }
+        self.sync_companion();
         Ok(())
     }
 

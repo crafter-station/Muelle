@@ -220,6 +220,7 @@ pub fn run() -> Result<()> {
             taskbar_attempts: 0,
             fullscreen: false,
             smart_hidden: false,
+            moving_since: None,
             roster,
             tracker: WindowTracker::default(),
             windows: Vec::new(),
@@ -277,6 +278,7 @@ pub fn run() -> Result<()> {
             ghost: None,
             menu_open: false,
             mascot: None,
+            companion: super::companion::State::default(),
             // Initial registration notifications establish the baseline after
             // the queue starts, without playing a startup charging/saver act.
             power_seen: None,
@@ -532,6 +534,12 @@ impl App {
         self.amount.step(dt);
         self.slide.step(dt);
         self.last_frame = now;
+        if self
+            .moving_since
+            .is_some_and(|since| since.elapsed() >= super::DOCK_MOVED_LIMIT)
+        {
+            self.set_moving(false);
+        }
 
         self.bounces.retain(|_, bounce| {
             let elapsed = now.duration_since(bounce.start).as_secs_f32();
@@ -608,5 +616,6 @@ impl App {
                 .is_some_and(|stage| stage.reorder.is_some())
             || !self.bounces.is_empty()
             || !self.flights.is_empty()
+            || self.moving_since.is_some()
     }
 }

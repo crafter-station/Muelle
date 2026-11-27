@@ -16,6 +16,7 @@
 
 mod activation;
 mod assets;
+mod companion;
 mod drag;
 mod events;
 mod feedback;
@@ -91,12 +92,12 @@ pub use events::{
     group_view_press, group_view_press_lost, group_view_release, group_view_tick,
     menu_bar_accessories_changed, menu_bar_accessories_reset, menu_bar_audio_changed,
     menu_bar_bluetooth_changed, menu_bar_check_pointer, menu_bar_clicked, menu_bar_dismiss_island,
-    menu_bar_finish_hide, menu_bar_media_changed, menu_bar_monitor_tick, menu_bar_music_focus_lost,
-    menu_bar_music_key, menu_bar_pointer_moved, menu_bar_progress_tick, menu_bar_registry_changed,
-    menu_bar_scrolled, menu_bar_slider_press, menu_bar_slider_release, menu_bar_tick,
-    menu_bar_volume_flush, multi_window_view_dismiss, multi_window_view_middle_click,
-    multi_window_view_press, multi_window_view_release, multi_window_view_scroll,
-    multi_window_view_tick,
+    menu_bar_finish_hide, menu_bar_media_changed, menu_bar_mirror_event, menu_bar_monitor_tick,
+    menu_bar_music_focus_lost, menu_bar_music_key, menu_bar_pointer_moved, menu_bar_progress_tick,
+    menu_bar_registry_changed, menu_bar_scrolled, menu_bar_slider_press, menu_bar_slider_release,
+    menu_bar_tick, menu_bar_volume_flush, multi_window_view_dismiss,
+    multi_window_view_middle_click, multi_window_view_press, multi_window_view_release,
+    multi_window_view_scroll, multi_window_view_tick,
 };
 pub(crate) use input::primary_button_down;
 pub use lifecycle::{request_quit, run};
@@ -138,6 +139,11 @@ const PINS_CHANGED: u32 = WM_APP + 7;
 const ASSETS_READY: u32 = WM_APP + 8;
 /// The guard also checks graphics health while the scene is otherwise idle.
 pub(crate) const HEALTH_CHECK: u32 = WM_APP + 9;
+/// The dock's content for its new display has reached the compositor, so its
+/// window can show again (see `App::reveal_dock`).
+const DOCK_MOVED: u32 = WM_APP + 13;
+/// Shows the dock's window anyway if that word never comes.
+const DOCK_MOVED_LIMIT: std::time::Duration = std::time::Duration::from_millis(400);
 const TASKBAR_PREFS_CHANGED: u32 = WM_APP + 10;
 
 /// Magnification range, in icons on either side of the cursor.
@@ -212,6 +218,7 @@ const PREVIEW_TIMER: usize = 13;
 /// While the crab is out (a few seconds): is its act over, is the pointer on it.
 const MASCOT_TIMER: usize = 14;
 const MASCOT_POLL_MS: u32 = 50;
+const COMPANION_TIMER: usize = 20;
 const EDGE_TIMER: usize = 15;
 /// The charger act at most this often, however many times it is plugged.
 const CHARGING_AGAIN: std::time::Duration = std::time::Duration::from_secs(10 * 60);
@@ -676,6 +683,9 @@ pub(crate) struct App {
     taskbar_attempts: u8,
     fullscreen: bool,
     smart_hidden: bool,
+    /// Since when the dock's window is kept out of view while it moves to
+    /// another display (see `App::reveal_dock`).
+    moving_since: Option<Instant>,
     roster: Roster,
     tracker: WindowTracker,
     windows: Vec<TrackedWindow>,
@@ -765,6 +775,7 @@ pub(crate) struct App {
     menu_open: bool,
     /// The crab, while it is out (see `perform`).
     mascot: Option<mascot::Mascot>,
+    companion: companion::State,
     /// Charging and energy saver at the last power change.
     power_seen: Option<(Option<bool>, bool)>,
     /// When the charger act last played.

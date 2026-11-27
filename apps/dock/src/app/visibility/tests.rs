@@ -73,6 +73,7 @@ impl Fixture {
             taskbar_attempts: 0,
             fullscreen: false,
             smart_hidden: false,
+            moving_since: None,
             roster: Roster::default(),
             tracker: WindowTracker::default(),
             windows: Vec::new(),
@@ -130,6 +131,7 @@ impl Fixture {
             ghost: None,
             menu_open: false,
             mascot: None,
+            companion: super::super::companion::State::default(),
             // Initial registration notifications establish the baseline after
             // the queue starts, without playing a startup charging/saver act.
             power_seen: None,

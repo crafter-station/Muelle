@@ -255,6 +255,9 @@ struct Look {
     /// See `system::transparency_enabled`.
     glass: bool,
     app_name: String,
+    /// The app in front is on another display: its name shows dimmed here,
+    /// as macOS does on the menu bars of the other displays.
+    dim_app: bool,
     clock: String,
     /// The input language indicator, when more than one is installed.
     input: Option<String>,
@@ -629,8 +632,70 @@ pub struct MenuBar {
     /// Search uses its own Windows preference key.
     search_watch: Option<RegistryWatch>,
     /// Energy saver on or off arrives as `WM_POWERBROADCAST`; glass follows.
-    _saver_watch: muelle_shell::power::SaverWatch,
+    _saver_watch: Option<muelle_shell::power::SaverWatch>,
     audio: Option<AudioWatch>,
+    /// Set on a copy of the bar for another display (see `create_mirror`):
+    /// it draws what the primary bar reads and reads nothing itself.
+    mirror: Option<Mirror>,
+    /// The copies on the other displays, kept in step by `apply_look`.
+    mirrors: Vec<MenuBar>,
+    /// The display of the window in front, when known: the app name is
+    /// dimmed on the bars of the other displays.
+    active_display: Option<RECT>,
+}
+
+/// What a copy of the bar on another display needs of its own.
+struct Mirror {
+    /// The display it is on, as its screen rectangle.
+    display: RECT,
+    /// What it last drew, from the primary bar's look: redrawn as is when
+    /// it shows again, without reading anything.
+    source: Option<Look>,
+}
+
+/// What reaches a copy of the bar on another display (see `mirror_proc`).
+pub enum MirrorEvent {
+    Click(f32, f32),
+    PointerMoved(f32, f32),
+    CheckPointer,
+    FinishHide(Option<usize>),
+}
+
+/// The window of a copy of the bar on another display: no popups, media,
+/// audio or keyboard there, only the bar, its clicks and its hiding.
+unsafe extern "system" fn mirror_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    let at = || ((l.0 & 0xFFFF) as i16 as f32, (l.0 >> 16) as i16 as f32);
+    let event = match msg {
+        WM_CLOSE => return LRESULT(0),
+        WM_LBUTTONDOWN => {
+            launcher::note_menu_bar_press();
+            return LRESULT(0);
+        }
+        WM_LBUTTONUP => {
+            let (x, y) = at();
+            MirrorEvent::Click(x, y)
+        }
+        WM_MOUSEMOVE => {
+            let (x, y) = at();
+            MirrorEvent::PointerMoved(x, y)
+        }
+        WM_MOUSELEAVE => MirrorEvent::CheckPointer,
+        WM_TIMER if w.0 == POINTER_TIMER => MirrorEvent::CheckPointer,
+        WM_TIMER if w.0 == HIDE_ANIMATION_TIMER => MirrorEvent::FinishHide(None),
+        HIDE_ANIMATION_DONE => MirrorEvent::FinishHide(Some(w.0)),
+        WM_SETCURSOR => {
+            // SAFETY: Keep the standard arrow throughout the bar.
+            if let Ok(arrow) = unsafe { LoadCursorW(None, IDC_ARROW) } {
+                unsafe { SetCursor(Some(arrow)) };
+                return LRESULT(1);
+            }
+            return unsafe { DefWindowProcW(hwnd, msg, w, l) };
+        }
+        // SAFETY: Standard forwarding of unhandled messages.
+        _ => return unsafe { DefWindowProcW(hwnd, msg, w, l) },
+    };
+    app::menu_bar_mirror_event(hwnd, event);
+    LRESULT(0)
 }
 
 unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -1216,14 +1281,51 @@ impl MenuBar {
         auto_hide: bool,
         widgets: MenuBarWidgets,
     ) -> Result<Self> {
-        let class = w!("MuelleMenuBar");
+        Self::new(gfx, usage_enabled, media_enabled, auto_hide, widgets, None)
+    }
+
+    /// A copy of the bar for `display`: its own window and reserved strip,
+    /// drawn from the primary bar (see `follow`), with no watchers.
+    fn create_mirror(
+        gfx: &Gfx,
+        display: RECT,
+        auto_hide: bool,
+        widgets: MenuBarWidgets,
+    ) -> Result<Self> {
+        let mirror = Mirror {
+            display,
+            source: None,
+        };
+        Self::new(gfx, false, false, auto_hide, widgets, Some(mirror))
+    }
+
+    fn new(
+        gfx: &Gfx,
+        usage_enabled: bool,
+        media_enabled: bool,
+        auto_hide: bool,
+        widgets: MenuBarWidgets,
+        mirror: Option<Mirror>,
+    ) -> Result<Self> {
+        let primary = mirror.is_none();
+        let (class, procedure) = if primary {
+            (
+                w!("MuelleMenuBar"),
+                bar_proc as unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
+            )
+        } else {
+            (
+                w!("MuelleMenuBarMirror"),
+                mirror_proc as unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
+            )
+        };
         // SAFETY: Standard class registration and window creation on the UI
         // thread; the window is destroyed in `Drop`.
         let hwnd = unsafe {
             let instance = GetModuleHandleW(None)?;
             // Registering an existing class fails harmlessly.
             RegisterClassW(&WNDCLASSW {
-                lpfnWndProc: Some(bar_proc),
+                lpfnWndProc: Some(procedure),
                 hInstance: instance.into(),
                 hCursor: LoadCursorW(None, IDC_ARROW)?,
                 lpszClassName: class,
@@ -1327,19 +1429,37 @@ impl MenuBar {
             island_hits: Vec::new(),
             outside_click_hook: None,
             keyboard: None,
-            bluetooth: bluetooth::Monitor::new(hwnd.0 as isize, BLUETOOTH_CHANGED).ok(),
+            bluetooth: primary
+                .then(|| bluetooth::Monitor::new(hwnd.0 as isize, BLUETOOTH_CHANGED).ok())
+                .flatten(),
             volume_row_span: Span::default(),
-            _network: NetworkWatch::new(hwnd.0 as isize, STATUS_CHANGED),
-            privacy_watch: status::watch_privacy(hwnd.0 as isize, REGISTRY_CHANGED),
-            settings_watch: status::watch_taskbar_settings(hwnd.0 as isize, REGISTRY_CHANGED),
-            search_watch: status::watch_search_settings(hwnd.0 as isize, REGISTRY_CHANGED),
-            _saver_watch: muelle_shell::power::SaverWatch::new(hwnd.0 as isize),
-            audio: AudioWatch::new(hwnd.0 as isize, AUDIO_CHANGED),
+            _network: primary
+                .then(|| NetworkWatch::new(hwnd.0 as isize, STATUS_CHANGED))
+                .flatten(),
+            privacy_watch: primary
+                .then(|| status::watch_privacy(hwnd.0 as isize, REGISTRY_CHANGED))
+                .flatten(),
+            settings_watch: primary
+                .then(|| status::watch_taskbar_settings(hwnd.0 as isize, REGISTRY_CHANGED))
+                .flatten(),
+            search_watch: primary
+                .then(|| status::watch_search_settings(hwnd.0 as isize, REGISTRY_CHANGED))
+                .flatten(),
+            _saver_watch: primary.then(|| muelle_shell::power::SaverWatch::new(hwnd.0 as isize)),
+            audio: primary
+                .then(|| AudioWatch::new(hwnd.0 as isize, AUDIO_CHANGED))
+                .flatten(),
+            mirror,
+            mirrors: Vec::new(),
+            active_display: None,
         };
-        AUDIO_TICK_PENDING.store(false, Ordering::Relaxed);
-        bar.update_status();
-        bar.refresh(gfx)?;
-        bar.schedule_next_minute();
+        // A copy draws once the primary bar gives it something to draw.
+        if primary {
+            AUDIO_TICK_PENDING.store(false, Ordering::Relaxed);
+            bar.update_status();
+            bar.refresh(gfx)?;
+            bar.schedule_next_minute();
+        }
         Ok(bar)
     }
 
@@ -1384,6 +1504,9 @@ impl MenuBar {
     }
 
     pub fn set_auto_hide(&mut self, auto_hide: bool) -> Result<()> {
+        for mirror in &mut self.mirrors {
+            mirror.set_auto_hide(auto_hide)?;
+        }
         if self.hide_setting == auto_hide {
             return Ok(());
         }
@@ -1393,6 +1516,9 @@ impl MenuBar {
 
     /// Intelligent hiding on or off (see `smart`).
     pub fn set_smart_hide(&mut self, smart: bool) -> Result<()> {
+        for mirror in &mut self.mirrors {
+            mirror.set_smart_hide(smart)?;
+        }
         if self.smart == smart {
             return Ok(());
         }
@@ -1419,6 +1545,101 @@ impl MenuBar {
     /// Where the bar is on screen, shown or not.
     pub fn bounds(&self) -> RECT {
         self.bounds
+    }
+
+    /// The other displays that show a copy of the bar: copies for displays
+    /// no longer listed go, new ones are made and drawn at once.
+    pub fn set_displays(&mut self, gfx: &Gfx, displays: &[RECT]) -> Result<()> {
+        self.mirrors.retain(|bar| {
+            bar.mirror
+                .as_ref()
+                .is_some_and(|mirror| displays.contains(&mirror.display))
+        });
+        for &display in displays {
+            if self.mirrors.iter().any(|bar| {
+                bar.mirror
+                    .as_ref()
+                    .is_some_and(|mirror| mirror.display == display)
+            }) {
+                continue;
+            }
+            let mut bar = Self::create_mirror(gfx, display, self.hide_setting, self.widgets)?;
+            bar.set_smart_hide(self.smart)?;
+            bar.set_clock_target(self.clock_target.as_deref());
+            bar.visible = self.visible;
+            self.mirrors.push(bar);
+        }
+        // The name dims on the other displays only while there are some.
+        self.refresh(gfx)
+    }
+
+    /// The display of the window in front changed: the app name dims on
+    /// the bars of the others.
+    pub fn set_active_display(&mut self, gfx: &Gfx, display: Option<RECT>) -> Result<()> {
+        if self.active_display == display {
+            return Ok(());
+        }
+        self.active_display = display;
+        self.refresh(gfx)
+    }
+
+    /// The copies, with the display each is on.
+    pub fn mirrors_mut(&mut self) -> impl Iterator<Item = (RECT, &mut MenuBar)> {
+        self.mirrors.iter_mut().filter_map(|bar| {
+            let display = bar.mirror.as_ref()?.display;
+            Some((display, bar))
+        })
+    }
+
+    /// This bar or its copy whose window is `hwnd`.
+    pub fn bar_mut(&mut self, hwnd: isize) -> Option<&mut MenuBar> {
+        if self.hwnd.0 as isize == hwnd {
+            return Some(self);
+        }
+        self.mirrors
+            .iter_mut()
+            .find(|bar| bar.hwnd.0 as isize == hwnd)
+    }
+
+    /// The strips the bar and its copies keep for themselves.
+    pub fn reserved_strips(&self) -> Vec<RECT> {
+        std::iter::once(self)
+            .chain(&self.mirrors)
+            .filter_map(MenuBar::reserved_strip)
+            .collect()
+    }
+
+    /// Draws the primary bar's `look` on this copy's display.
+    fn follow(&mut self, gfx: &Gfx, primary: &Look, active: Option<RECT>) -> Result<()> {
+        let Some(mirror) = &mut self.mirror else {
+            return Ok(());
+        };
+        let display = mirror.display;
+        let Some(monitor) = system::monitor_at(POINT {
+            x: display.left + (display.right - display.left) / 2,
+            y: display.top + (display.bottom - display.top) / 2,
+        }) else {
+            return Ok(());
+        };
+        let mut look = primary.clone();
+        look.screen = monitor.screen;
+        look.scale = monitor.scale;
+        // Popups open on the primary bar only.
+        look.panel = None;
+        look.dim_app = active.is_some_and(|active| active != display);
+        mirror.source = Some(look.clone());
+        self.apply_look(gfx, look)
+    }
+
+    fn sync_mirrors(&mut self, gfx: &Gfx) {
+        let Some(look) = &self.look else {
+            return;
+        };
+        for bar in &mut self.mirrors {
+            if let Err(error) = bar.follow(gfx, look, self.active_display) {
+                muelle_shell::log::line(&format!("barra superior en otra pantalla: {error:#}"));
+            }
+        }
     }
 
     /// Intelligent hiding: whether the window in front reaches under the
@@ -1554,6 +1775,9 @@ impl MenuBar {
 
     /// What clicking the clock opens; `None` for the notification center.
     pub fn set_clock_target(&mut self, target: Option<&str>) {
+        for mirror in &mut self.mirrors {
+            mirror.set_clock_target(target);
+        }
         if self.clock_target.as_deref() != target {
             self.clock_target = target.map(str::to_owned);
         }
@@ -1881,7 +2105,7 @@ impl MenuBar {
                 );
             }
         }
-        edge_watch::set_menu_bar((self.visible && hidden).then_some(bounds));
+        edge_watch::set_menu_bar(self.hwnd, (self.visible && hidden).then_some(bounds));
         self.release_music_if_hidden();
         self.sync_outside_click_hook()
     }
@@ -1890,7 +2114,7 @@ impl MenuBar {
     pub fn edge_rested(&mut self, gfx: &Gfx, point: POINT) -> Result<()> {
         if self.visible && self.auto_hide && !self.revealed {
             if muelle_shell::tracker::caption_button_at(point, self.bounds) {
-                edge_watch::retry_on_move(edge_watch::Target::MenuBar);
+                edge_watch::retry_on_move(edge_watch::Target::MenuBar(self.hwnd.0 as isize));
             } else {
                 self.hover(gfx, true)?;
             }
@@ -2059,6 +2283,10 @@ impl MenuBar {
     }
 
     pub fn click(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<()> {
+        // A copy on another display has no popups: its island only shows.
+        if self.mirror.is_some() && self.island_hits.iter().any(|hit| hit.at(x, y)) {
+            return Ok(());
+        }
         if let Some(action) = self
             .island_hits
             .iter()
@@ -2144,6 +2372,8 @@ impl MenuBar {
             Some(Action::Network) => launcher::open_network_list(),
             // Without an output device there is nothing to slide: Windows'
             // own sound page says why.
+            // A copy has no volume popup: Windows' quick settings have one.
+            Some(Action::Sound) if self.mirror.is_some() => launcher::open_quick_settings(),
             Some(Action::Sound) if self.status.volume.is_none() => launcher::open_sound(),
             Some(Action::Sound) => {
                 if !volume_was_open {
@@ -2194,6 +2424,12 @@ impl MenuBar {
 
     /// Redraws the bar if anything it shows has changed.
     pub fn refresh(&mut self, gfx: &Gfx) -> Result<()> {
+        if let Some(mirror) = &self.mirror {
+            return match mirror.source.clone() {
+                Some(look) => self.apply_look(gfx, look),
+                None => Ok(()),
+            };
+        }
         let Some(monitor) = system::primary_monitor() else {
             return Ok(());
         };
@@ -2232,6 +2468,10 @@ impl MenuBar {
             light: appearance.light,
             glass: appearance.glass,
             app_name: self.app_name.clone(),
+            dim_app: !self.mirrors.is_empty()
+                && self
+                    .active_display
+                    .is_some_and(|display| display != monitor.screen),
             clock: system::clock_text(),
             input: system::input_language(),
             battery: system::battery(),
@@ -2253,7 +2493,8 @@ impl MenuBar {
     /// Samples only while the monitor is on and the bar shows; a hidden or
     /// auto-hidden bar costs nothing (issue #64).
     fn sync_monitor(&mut self, shown: bool) {
-        let wanted = self.widgets.system_monitor && shown;
+        // A copy shows the primary bar's readings.
+        let wanted = self.widgets.system_monitor && shown && self.mirror.is_none();
         if wanted == self.monitor.is_some() {
             return;
         }
@@ -2385,6 +2626,7 @@ impl MenuBar {
             self.cancel_progress();
         }
         if self.look.as_ref() == Some(&look) {
+            self.sync_mirrors(gfx);
             return Ok(());
         }
         let moment = self
@@ -2400,6 +2642,7 @@ impl MenuBar {
             self.build(gfx, &look)?;
         }
         self.look = Some(look);
+        self.sync_mirrors(gfx);
         self.progress_tick(gfx)?;
         if let Some((provider, act)) = moment
             && let Some(&(_, x)) = self.usage_anchors.iter().find(|(p, _)| *p == provider)
@@ -2571,7 +2814,10 @@ impl MenuBar {
                 ink,
                 px(220.0).min(width * 0.22),
             )?;
-            place(&layers, &name, px(SIDE_MARGIN))?;
+            let visual = place(&layers, &name, px(SIDE_MARGIN))?;
+            if look.dim_app {
+                visual.SetOpacity(0.45)?;
+            }
             left_end += name.width;
         }
 
@@ -2779,8 +3025,10 @@ impl MenuBar {
         // While the slider is open, a click on the speaker reaches the bar
         // (to close it) instead of dismissing it first from the hook.
         let (speaker_left, speaker_right) = speaker_zone.unwrap_or_default();
-        SPEAKER_LEFT.store(screen.left + speaker_left as i32, Ordering::Relaxed);
-        SPEAKER_RIGHT.store(screen.left + speaker_right as i32, Ordering::Relaxed);
+        if self.mirror.is_none() {
+            SPEAKER_LEFT.store(screen.left + speaker_left as i32, Ordering::Relaxed);
+            SPEAKER_RIGHT.store(screen.left + speaker_right as i32, Ordering::Relaxed);
+        }
         if let Some(drag) = self.volume_drag {
             let new_span = self.island_hits.iter().find_map(|hit| match hit.action {
                 IslandAction::Volume(span) => Some(span),
@@ -2814,6 +3062,11 @@ impl MenuBar {
             bottom: screen.top + height as i32,
             ..screen
         };
+        // The popup's hit tests and hook read these: the primary bar's, the
+        // only one with popups.
+        if self.mirror.is_some() {
+            return self.place();
+        }
         TRIGGERS_LEFT.store(
             screen.left + self.triggers_span.left as i32,
             Ordering::Relaxed,
@@ -4739,8 +4992,10 @@ impl Drop for MenuBar {
         self.accessories = None;
         self.exit_animation = None;
         self.media = None;
-        ISLAND_HOOK_WINDOW.store(0, Ordering::Relaxed);
-        edge_watch::set_menu_bar(None);
+        if self.mirror.is_none() {
+            ISLAND_HOOK_WINDOW.store(0, Ordering::Relaxed);
+        }
+        edge_watch::set_menu_bar(self.hwnd, None);
         if let Some(hook) = self.outside_click_hook.take() {
             // SAFETY: Do not leave a callback pointing at a destroyed window.
             unsafe {

@@ -370,11 +370,15 @@ test("the mascot is Claude's crab unless the cat is chosen, and only while it is
     const reminder = [...elements(view.body())].find((node) =>
       node.props.label === texts.en.mascotBreak && "checked" in node.props);
     assert.equal(reminder.props.checked, false);
+    const companion = [...elements(view.body())].find((node) =>
+      node.props.label === texts.en.mascotAlwaysVisible && "checked" in node.props);
+    assert.equal(companion.props.checked, false);
     view.change(texts.en.mascotCharacter, "cat");
+    view.change(texts.en.mascotAlwaysVisible, true);
     view.change(texts.en.mascotBreak, true);
     view.fire(60);
     await settle();
-    assert.deepEqual(view.calls, [{ mascotCharacter: "cat", mascotBreakReminder: true }]);
+    assert.deepEqual(view.calls, [{ mascotCharacter: "cat", mascotAlwaysVisible: true, mascotBreakReminder: true }]);
   } finally { unmount(); }
 });
 

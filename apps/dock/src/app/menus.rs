@@ -97,6 +97,7 @@ pub(super) fn run_outside(outside: Outside) {
             let owner = main_window();
             with_app("abrir selector de teclado", |app| {
                 app.menu_open = true;
+                app.suspend_companion();
                 Ok(())
             });
             let chosen = menu::show_below(&gfx, owner, &items, anchor, look);

@@ -46,11 +46,14 @@ export interface Config {
   menuBarClockTarget: string | null;
   accessoryBattery: boolean;
   menuBarSystemMonitor?: boolean;
+  /** The menu bar on every display, not only the primary one. */
+  menuBarAllDisplays?: boolean;
   showIndicators: boolean;
   showRecents: boolean;
   bounceOnOpen: boolean;
   mascot: boolean;
   mascotCharacter?: MascotCharacter;
+  mascotAlwaysVisible?: boolean;
   mascotBreakReminder?: boolean;
   checkUpdates: boolean;
   autoUpdate: boolean;

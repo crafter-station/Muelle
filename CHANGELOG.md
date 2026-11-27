@@ -10,6 +10,11 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Optional persistent mascot for all six characters: rests on the visible Dock,
+  blinks and takes short walks between events. Yields to Dock interactions and
+  full-screen apps, pauses on lock, and stays static in energy saver/reduced
+  motion. Cached poses and sparse timers replace continuous idle polling.
+
 - Dock context menus now inherit the full Dock material, and the language menu
   inherits the menu bar's appearance. Window previews already follow the Dock;
   open groups now dismiss when their material or display context changes.
@@ -34,8 +39,23 @@ copia la sección de la versión que se publica a la release de GitHub.
   percentage and a mute button, as the music panel shows them; another click
   closes it. Without an output device it still opens Windows' sound page
   (issue #55).
+- The menu bar shows on every display, as on macOS: each display has the same
+  bar at its own scale, keeps its own strip for maximized windows and hides on
+  its own (full screen, automatic or intelligent hiding, revealed at its own
+  top edge). The app name is dimmed on the displays where that app is not. The
+  copies read nothing themselves: they draw what the primary bar reads, and
+  popups open on the primary bar. Settings → Menu bar → *On every display*, on
+  by default.
+- Moving the Dock to another display with the pointer no longer flashes the
+  old Dock, at the other display's scale, before it slides in: the Dock's
+  window stays out of view until its new content is on screen.
 
 ### Español
+
+- Mascota permanente opcional para los seis personajes: descansa sobre el Dock
+  visible, parpadea y da paseos cortos entre eventos. Cede ante la interacción
+  y pantalla completa, se pausa al bloquear y queda estática en ahorro de energía
+  o movimiento reducido. Poses en caché y temporizadores espaciados, sin sondeo continuo.
 
 - Los menús de clic derecho heredan el material completo del Dock y el selector
   de idioma sigue la apariencia de la barra superior. Las previsualizaciones ya
@@ -62,6 +82,18 @@ copia la sección de la versión que se publica a la release de GitHub.
   con el porcentaje y un botón de silencio, como en el panel de música; otro
   clic lo cierra. Sin dispositivo de salida sigue abriendo la página de sonido
   de Windows (issue #55).
+- La barra superior aparece en todas las pantallas, como en macOS: cada una
+  tiene la misma barra a su escala, reserva su propia franja para las ventanas
+  maximizadas y se oculta por su cuenta (pantalla completa, ocultación
+  automática o inteligente, y se revela en su propio borde superior). El
+  nombre de la app se atenúa en las pantallas donde no está. Las copias no
+  leen nada por sí mismas: dibujan lo que lee la barra principal, y los
+  paneles se abren en la principal. Ajustes → Barra superior → *En todas las
+  pantallas*, activado por defecto.
+- Al llevar el Dock a otra pantalla con el puntero ya no destella el Dock
+  anterior, a la escala de la otra pantalla, antes de entrar deslizándose: la
+  ventana del Dock queda fuera de la vista hasta que su contenido nuevo está
+  en pantalla.
 
 ## [0.1.26]
 

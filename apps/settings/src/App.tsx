@@ -514,6 +514,13 @@ export function App() {
                     onReselect={(mascotCharacter) => update({ mascotCharacter }, true)}
                   />
                 </SubRow>
+                <SubRow label={t.mascotAlwaysVisible} hint={t.mascotAlwaysVisibleHint} open={config.mascot}>
+                  <Toggle
+                    label={t.mascotAlwaysVisible}
+                    checked={config.mascotAlwaysVisible ?? false}
+                    onChange={(mascotAlwaysVisible) => update({ mascotAlwaysVisible })}
+                  />
+                </SubRow>
                 <SubRow label={t.mascotBreak} hint={t.mascotBreakHint} open={config.mascot}>
                   <Toggle
                     label={t.mascotBreak}
@@ -642,6 +649,13 @@ export function App() {
                       { value: "intelligent", label: t.dockHidingIntelligent },
                     ]}
                     onChange={(mode) => update({ menuBarAutoHide: mode === "automatic", menuBarSmartHide: mode === "intelligent" })}
+                  />
+                </SubRow>
+                <SubRow label={t.menuBarAllDisplays} hint={t.menuBarAllDisplaysHint} open={config.menuBar}>
+                  <Toggle
+                    label={t.menuBarAllDisplays}
+                    checked={config.menuBarAllDisplays ?? true}
+                    onChange={(menuBarAllDisplays) => update({ menuBarAllDisplays })}
                   />
                 </SubRow>
                 <SubRow label={t.menuBarMusic} hint={t.menuBarMusicHint} open={config.menuBar}>

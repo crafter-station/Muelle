@@ -114,6 +114,10 @@ pub struct Config {
     /// default: off, nothing is sampled; on, every 2 s only while the bar
     /// is on screen.
     pub menu_bar_system_monitor: bool,
+    /// The menu bar on every display, as macOS draws it, not only on the
+    /// primary one. On by default; the other displays show the same bar,
+    /// with the app name dimmed where that app is not.
+    pub menu_bar_all_displays: bool,
     /// Opt-in peripheral monitoring. Off means no accessory reader or queries.
     pub accessory_battery: bool,
     /// The dot under apps that have windows open.
@@ -128,6 +132,9 @@ pub struct Config {
     /// Which one: Claude's crab by default, the cat, the fox, the capybara,
     /// the mochi or the girl.
     pub mascot_character: MascotCharacter,
+    /// Keep a quiet companion on the visible Dock between events. Opt-in;
+    /// does not prevent automatic hiding or animate in energy saver.
+    pub mascot_always_visible: bool,
     /// The mascot also suggests a break after 90 minutes of work without a
     /// pause. Off by default: a reminder is only welcome when asked for.
     pub mascot_break_reminder: bool,
@@ -385,6 +392,7 @@ impl Default for Config {
             menu_bar_island_style: IslandStyle::Notch,
             menu_bar_notifications: false,
             menu_bar_system_monitor: false,
+            menu_bar_all_displays: true,
             menu_bar_clock_target: None,
             accessory_battery: false,
             show_indicators: true,
@@ -392,6 +400,7 @@ impl Default for Config {
             bounce_on_open: true,
             mascot: true,
             mascot_character: MascotCharacter::Crab,
+            mascot_always_visible: false,
             mascot_break_reminder: false,
             check_updates: true,
             auto_update: true,
@@ -953,6 +962,9 @@ mod tests {
         assert!(!Config::default().mascot_break_reminder);
         let older: Config = serde_json::from_str("{}")?;
         assert_eq!(older.mascot_character, MascotCharacter::Crab);
+        assert!(!older.mascot_always_visible);
+        let persistent: Config = serde_json::from_str(r#"{"mascotAlwaysVisible":true}"#)?;
+        assert!(persistent.mascot_always_visible);
         let cat: Config = serde_json::from_str(r#"{"mascotCharacter":"cat"}"#)?;
         assert_eq!(cat.mascot_character, MascotCharacter::Cat);
         let fox: Config = serde_json::from_str(r#"{"mascotCharacter":"fox"}"#)?;
@@ -967,6 +979,16 @@ mod tests {
         let newer: Config = serde_json::from_str(r#"{"mascotCharacter":"owl"}"#)?;
         assert_eq!(newer.mascot_character, MascotCharacter::Crab);
         assert_eq!(serde_json::to_value(MascotCharacter::Cat)?, "cat");
+        Ok(())
+    }
+
+    #[test]
+    fn the_menu_bar_is_on_every_display_unless_turned_off() -> Result<(), serde_json::Error> {
+        assert!(Config::default().menu_bar_all_displays);
+        let older: Config = serde_json::from_str("{}")?;
+        assert!(older.menu_bar_all_displays);
+        let chosen: Config = serde_json::from_str(r#"{"menuBarAllDisplays":false}"#)?;
+        assert!(!chosen.menu_bar_all_displays);
         Ok(())
     }
 
