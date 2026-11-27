@@ -33,6 +33,11 @@ copia la sección de la versión que se publica a la release de GitHub.
   backup. The uninstaller can restore it even if muelle.exe is missing. Failed
   verification stops uninstall before removing recovery data; an existing user
   preference for autohide remains enabled.
+- Four more selectable wallpapers: a lakeside sunset, the Golden Gate Bridge,
+  misty green hills and blue abstract waves. Small previews are bundled; full
+  images are downloaded and integrity-checked when selected.
+- Eight wallpaper choices now use refreshed images without changing their IDs.
+  Their originals remain available at the old URLs for earlier app versions.
 
 ### Español
 
@@ -59,6 +64,11 @@ copia la sección de la versión que se publica a la release de GitHub.
   original de Windows y comprueba el resultado antes de borrar el respaldo.
   Puede restaurarlo aunque falte muelle.exe. Si no se confirma, se detiene antes
   de eliminar datos de recuperación; conserva el autohide si el usuario ya lo tenía.
+- Cuatro fondos más para elegir: un atardecer junto al lago, el puente Golden
+  Gate, colinas verdes con niebla y ondas abstractas azules. Se incluyen
+  miniaturas; la imagen completa se descarga y verifica al seleccionarla.
+- Ocho fondos muestran imágenes renovadas sin cambiar sus IDs. Las imágenes
+  originales siguen disponibles en sus rutas anteriores para versiones previas.
 
 ## [0.1.25]
 

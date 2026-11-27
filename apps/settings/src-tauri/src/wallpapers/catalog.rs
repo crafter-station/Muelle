@@ -11,6 +11,7 @@ pub(super) const ORIGIN: &str =
 pub(super) struct Wallpaper {
     pub id: u8,
     pub name: String,
+    pub source: String,
     pub bytes: u64,
     pub sha256: String,
     width: u32,
@@ -28,6 +29,8 @@ pub(super) fn all() -> Result<&'static [Wallpaper], String> {
                 || catalog.iter().enumerate().any(|(index, asset)| {
                     usize::from(asset.id) != index + 1
                         || asset.name != format!("desktop-{:02}.jpg", asset.id)
+                        || (asset.source != asset.name
+                            && asset.source != format!("replacements/{}", asset.name))
                         || !(1..=MAX_BYTES).contains(&asset.bytes)
                         || asset.width == 0
                         || asset.height == 0

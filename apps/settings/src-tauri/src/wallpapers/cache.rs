@@ -70,7 +70,7 @@ pub(super) fn download(asset: &Wallpaper, file: &mut fs::File) -> Result<(), Str
         .build()
         .map_err(|error| error.to_string())?;
     let response = client
-        .get(format!("{ORIGIN}/{}", asset.name))
+        .get(format!("{ORIGIN}/{}", asset.source))
         .send()
         .map_err(|error| error.to_string())?;
     if response.status() != reqwest::StatusCode::OK {

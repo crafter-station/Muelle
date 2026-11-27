@@ -19,6 +19,10 @@ import preview17 from "./assets/wallpapers/desktop-17.jpg";
 import preview18 from "./assets/wallpapers/desktop-18.jpg";
 import preview19 from "./assets/wallpapers/desktop-19.jpg";
 import preview20 from "./assets/wallpapers/desktop-20.jpg";
+import preview21 from "./assets/wallpapers/desktop-21.jpg";
+import preview22 from "./assets/wallpapers/desktop-22.jpg";
+import preview23 from "./assets/wallpapers/desktop-23.jpg";
+import preview24 from "./assets/wallpapers/desktop-24.jpg";
 
 export const WALLPAPERS = [
   { id: 1, preview: preview1, width: 400, height: 225 },
@@ -41,4 +45,8 @@ export const WALLPAPERS = [
   { id: 18, preview: preview18, width: 400, height: 225 },
   { id: 19, preview: preview19, width: 400, height: 225 },
   { id: 20, preview: preview20, width: 400, height: 225 },
+  { id: 21, preview: preview21, width: 400, height: 225 },
+  { id: 22, preview: preview22, width: 400, height: 211 },
+  { id: 23, preview: preview23, width: 400, height: 222 },
+  { id: 24, preview: preview24, width: 400, height: 225 },
 ] as const;

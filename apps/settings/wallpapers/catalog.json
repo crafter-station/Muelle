@@ -2,6 +2,7 @@
   {
     "id": 1,
     "name": "desktop-01.jpg",
+    "source": "desktop-01.jpg",
     "bytes": 60977,
     "sha256": "1f1fbbf15e3b8ba121efaad287d0911abdf2db3bbf50f721caa881675facc7be",
     "width": 3840,
@@ -10,22 +11,25 @@
   {
     "id": 2,
     "name": "desktop-02.jpg",
-    "bytes": 29143,
-    "sha256": "320209461acba7b71beed1a79151842530df83cf20cc6b33e5f457f1db1f09f5",
-    "width": 1671,
-    "height": 941
+    "source": "replacements/desktop-02.jpg",
+    "bytes": 144898,
+    "sha256": "00526e782eeaea20132b7bb65da8c4f77964ed7c02aaa6fcb7e38c159331f3de",
+    "width": 1920,
+    "height": 1080
   },
   {
     "id": 3,
     "name": "desktop-03.jpg",
-    "bytes": 192588,
-    "sha256": "5e99e172fe4b545f8fa2c743659b577e6380967d242f884c975ae95d9c7bf468",
-    "width": 1663,
-    "height": 946
+    "source": "replacements/desktop-03.jpg",
+    "bytes": 2492611,
+    "sha256": "511e766702a38926d6b57bb1a6baaf2bb2148c6cd6028d808f4195ebb9fe1648",
+    "width": 3326,
+    "height": 1892
   },
   {
     "id": 4,
     "name": "desktop-04.jpg",
+    "source": "desktop-04.jpg",
     "bytes": 44823,
     "sha256": "c64f72dd33fafe6ab61dc5d6a92cea88f672db2b3f88b284683c8e468012b8d2",
     "width": 1920,
@@ -34,38 +38,43 @@
   {
     "id": 5,
     "name": "desktop-05.jpg",
-    "bytes": 50568,
-    "sha256": "b971d046074fa05c3f342f29d5af14e4548032b0ffffc76db4b7f4a1094d0d13",
-    "width": 1672,
-    "height": 941
+    "source": "replacements/desktop-05.jpg",
+    "bytes": 430361,
+    "sha256": "5bd13d7e471b3bc9fd564ae12c758654e96ad64c1df97c7e876c4c332dbb87c4",
+    "width": 2400,
+    "height": 1350
   },
   {
     "id": 6,
     "name": "desktop-06.jpg",
-    "bytes": 99249,
-    "sha256": "a54a14a885b0c4ee275c927894b93d0eb9467aa71447283e5387ef30c84d3fa4",
-    "width": 1609,
-    "height": 941
+    "source": "replacements/desktop-06.jpg",
+    "bytes": 747688,
+    "sha256": "13291f01dbeabcd274e9930ea93c32fef131712b94e565a4531f14126327b180",
+    "width": 3218,
+    "height": 1882
   },
   {
     "id": 7,
     "name": "desktop-07.jpg",
-    "bytes": 63567,
-    "sha256": "4165d8fc4c3056ffe2842ebcae8bee680a9b40f010ec4142e4534625e5b6b59a",
-    "width": 1672,
-    "height": 941
+    "source": "replacements/desktop-07.jpg",
+    "bytes": 825828,
+    "sha256": "84f9d7536c3f0b7541794370666bfb1dc7655f778621955be2c9159412f63823",
+    "width": 3344,
+    "height": 1882
   },
   {
     "id": 8,
     "name": "desktop-08.jpg",
-    "bytes": 54208,
-    "sha256": "6eb2aef247a73be1c576d0d0d8ecd3c2957ad6365bf11e2068e67b63971d35fa",
-    "width": 1672,
-    "height": 941
+    "source": "replacements/desktop-08.jpg",
+    "bytes": 156983,
+    "sha256": "61450e831d4ca2c236f3415123717addca02f1a7c8cca595e49c45848b799865",
+    "width": 3344,
+    "height": 1882
   },
   {
     "id": 9,
     "name": "desktop-09.jpg",
+    "source": "desktop-09.jpg",
     "bytes": 136765,
     "sha256": "cbeba7964d5850f9dc53787069b091fe6b55e5064d607e89fc431e961fc7eccf",
     "width": 1672,
@@ -74,14 +83,16 @@
   {
     "id": 10,
     "name": "desktop-10.jpg",
-    "bytes": 1034545,
-    "sha256": "4c8456065b5f51ed43a30271c7c6c3c8c4ccfbcaa0d8859d15c2b9537ee4b4b9",
-    "width": 1672,
-    "height": 941
+    "source": "replacements/desktop-10.jpg",
+    "bytes": 582622,
+    "sha256": "0c8d34965afc80caef2b1b87016963e2e5bc1305d7212816e66611438aadb7fa",
+    "width": 3344,
+    "height": 1882
   },
   {
     "id": 11,
     "name": "desktop-11.jpg",
+    "source": "desktop-11.jpg",
     "bytes": 17350,
     "sha256": "55496164efe3f7dceba85b0f7a742007c76bcd95c7da47bf2796b58a631c5919",
     "width": 1672,
@@ -90,14 +101,16 @@
   {
     "id": 12,
     "name": "desktop-12.jpg",
-    "bytes": 805497,
-    "sha256": "d64ec224c1a6b3c2aa5360f6deb8fab6706523c1d09110c612846b7e1b0bc17c",
-    "width": 1672,
-    "height": 941
+    "source": "replacements/desktop-12.jpg",
+    "bytes": 255542,
+    "sha256": "a7b6b1e7920ad48bdc3c5c2f08ddc2d270683c0ae997d41c1128a792aa373063",
+    "width": 3344,
+    "height": 1882
   },
   {
     "id": 13,
     "name": "desktop-13.jpg",
+    "source": "desktop-13.jpg",
     "bytes": 1116810,
     "sha256": "3e562bda256553446d31296ef8d3f3b64b3e35169bee99f33c2ab9ca57e66cc5",
     "width": 3840,
@@ -106,6 +119,7 @@
   {
     "id": 14,
     "name": "desktop-14.jpg",
+    "source": "desktop-14.jpg",
     "bytes": 781334,
     "sha256": "9a5eeccc2af619fccc3f2c2323fdd22efeb47b9b07a1f4ddde618b3cfb442af7",
     "width": 3840,
@@ -114,6 +128,7 @@
   {
     "id": 15,
     "name": "desktop-15.jpg",
+    "source": "desktop-15.jpg",
     "bytes": 447496,
     "sha256": "509e5ea32487225983934872d16c5f7759d6e15ff1800fc358f6192c0b8e474a",
     "width": 3840,
@@ -122,6 +137,7 @@
   {
     "id": 16,
     "name": "desktop-16.jpg",
+    "source": "desktop-16.jpg",
     "bytes": 1659618,
     "sha256": "bda1763944c7d81812c0ab8e4ba625bd172e1cce967baa7e91df444f1f86dbc6",
     "width": 3840,
@@ -130,6 +146,7 @@
   {
     "id": 17,
     "name": "desktop-17.jpg",
+    "source": "desktop-17.jpg",
     "bytes": 773773,
     "sha256": "10034d79cf1ed2fc560d080e647f103de19750483fd70a616a01bd9d2cc7792a",
     "width": 3840,
@@ -138,6 +155,7 @@
   {
     "id": 18,
     "name": "desktop-18.jpg",
+    "source": "desktop-18.jpg",
     "bytes": 1128899,
     "sha256": "017f35b04eb39b997f74957395ec439ae3f583b94df491cfb13c8b39e51212aa",
     "width": 3840,
@@ -146,6 +164,7 @@
   {
     "id": 19,
     "name": "desktop-19.jpg",
+    "source": "desktop-19.jpg",
     "bytes": 1203432,
     "sha256": "f1e0922fedac9fd5c060cf2eabaff40cf369ab65f10ea0ffb3db65e91c46a60b",
     "width": 3840,
@@ -154,9 +173,46 @@
   {
     "id": 20,
     "name": "desktop-20.jpg",
+    "source": "desktop-20.jpg",
     "bytes": 413070,
     "sha256": "37c2fc28a43e784690e9aa35626e42750ad58505fc60b01302df06f8e414aa38",
     "width": 1920,
     "height": 1080
+  },
+  {
+    "id": 21,
+    "name": "desktop-21.jpg",
+    "source": "desktop-21.jpg",
+    "bytes": 2009789,
+    "sha256": "521071811482fda9bf72b843f7a3dab5444cbfd53422ffcd028216a1f0eaadf0",
+    "width": 1920,
+    "height": 1080
+  },
+  {
+    "id": 22,
+    "name": "desktop-22.jpg",
+    "source": "desktop-22.jpg",
+    "bytes": 1649287,
+    "sha256": "182c95ad5be67fbbf8e4520d0654cf686f838bd470e1325b31ae7b9f31067aa7",
+    "width": 7396,
+    "height": 3900
+  },
+  {
+    "id": 23,
+    "name": "desktop-23.jpg",
+    "source": "desktop-23.jpg",
+    "bytes": 489699,
+    "sha256": "a28ab3d3ebc53f01eb36f1c857956d7de5cea59512e8e1827e45b3c550f82be5",
+    "width": 2834,
+    "height": 1576
+  },
+  {
+    "id": 24,
+    "name": "desktop-24.jpg",
+    "source": "desktop-24.jpg",
+    "bytes": 963496,
+    "sha256": "c9db2f8fc150856a0e1c0f802596cdcc5034f6257ac07cb4f83b85815e4e55f6",
+    "width": 2000,
+    "height": 1125
   }
 ]

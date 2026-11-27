@@ -14,6 +14,7 @@ from PIL import Image, ImageOps
 
 ROOT = Path(__file__).resolve().parents[1]
 ORIGINALS = ROOT / "apps/settings/wallpapers"
+REPLACEMENTS = ORIGINALS / "replacements"
 PREVIEWS = ROOT / "apps/settings/src/assets/wallpapers"
 CATALOG = ROOT / "apps/settings/src/wallpaper-catalog.ts"
 LIMIT = 32 * 1024 * 1024
@@ -23,9 +24,14 @@ def originals():
     return sorted(ORIGINALS.glob("desktop-[0-9][0-9].jpg"))
 
 
+def source_for(original):
+    replacement = REPLACEMENTS / original.name
+    return replacement if replacement.is_file() else original
+
+
 def import_images(directory):
     files = originals()
-    hashes = {hashlib.sha256(p.read_bytes()).digest() for p in files}
+    hashes = {hashlib.sha256(source_for(p).read_bytes()).digest() for p in files}
     next_id = len(files) + 1
     for source in sorted(directory.iterdir()):
         if not source.is_file() or source.suffix.lower() not in {".jpg", ".jpeg"}:
@@ -70,12 +76,22 @@ def generate(check):
     for index, source in enumerate(files, 1):
         if source.name != f"desktop-{index:02}.jpg":
             raise ValueError("Original IDs must be contiguous; append, never renumber")
-        if not 0 < source.stat().st_size <= LIMIT:
-            raise ValueError(f"Original size out of bounds: {source.name}")
-        data = source.read_bytes()
+        selected_source = source_for(source)
+        if not 0 < selected_source.stat().st_size <= LIMIT:
+            raise ValueError(f"Original size out of bounds: {selected_source.name}")
+        data = selected_source.read_bytes()
         digest = hashlib.sha256(data).hexdigest()
-        if index in previous and previous[index]['sha256'] != digest:
-            raise ValueError(f"Append a new ID instead of changing a published original: {source.name}")
+        source_name = selected_source.relative_to(ORIGINALS).as_posix()
+        if index in previous:
+            previous_source = previous[index].get("source", source.name)
+            previous_digest = previous[index]["sha256"]
+            previous_path = ORIGINALS / previous_source
+            if previous_source == source_name:
+                if previous_digest != digest:
+                    raise ValueError(f"Append a new ID instead of changing a published original: {source.name}")
+            elif (not previous_path.is_file()
+                  or hashlib.sha256(previous_path.read_bytes()).hexdigest() != previous_digest):
+                raise ValueError(f"Keep the previous published source unchanged: {previous_source}")
         with Image.open(io.BytesIO(data)) as image:
             if image.format != "JPEG" or image.width * image.height > 40_000_000:
                 raise ValueError(f"Unsupported original: {source.name}")
@@ -85,8 +101,8 @@ def generate(check):
             encoded = io.BytesIO()
             preview.save(encoded, "JPEG", quality=82, optimize=True, progressive=True)
             output(PREVIEWS / source.name, encoded.getvalue())
-            records.append({"id": index, "name": source.name, "bytes": len(data),
-                            "sha256": digest,
+            records.append({"id": index, "name": source.name, "source": source_name,
+                            "bytes": len(data), "sha256": digest,
                             "width": width, "height": height})
             imports.append(f'import preview{index} from "./assets/wallpapers/{source.name}";')
             entries.append(f"  {{ id: {index}, preview: preview{index}, width: {preview.width}, height: {preview.height} }},")

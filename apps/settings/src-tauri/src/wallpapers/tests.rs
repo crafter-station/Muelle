@@ -32,7 +32,7 @@ fn original(asset: &catalog::Wallpaper) -> Result<Vec<u8>, String> {
     fs::read(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../wallpapers")
-            .join(&asset.name),
+            .join(&asset.source),
     )
     .map_err(|error| error.to_string())
 }
