@@ -6,6 +6,23 @@ copies the section of the version being published into the GitHub release.
 Cada versión lista sus cambios en inglés y en español. El flujo de publicación
 copia la sección de la versión que se publica a la release de GitHub.
 
+## [Unreleased]
+
+### English
+
+- With intelligent hiding, opening Windows Search, the notification center,
+  quick settings, the notification area flyout or a launcher from the menu bar
+  no longer brings the Dock up over the app in front: such windows keep the
+  Dock as it was. The desktop still shows it.
+
+### Español
+
+- Con la ocultación inteligente, abrir desde la barra superior la búsqueda de
+  Windows, el centro de notificaciones, la configuración rápida, el menú del
+  área de notificación o un lanzador ya no hace aparecer el Dock sobre la app
+  del frente: esas ventanas lo dejan como estaba. El escritorio sigue
+  mostrándolo.
+
 ## [0.1.26]
 
 ### English
