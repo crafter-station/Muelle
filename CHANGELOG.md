@@ -10,6 +10,21 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Music, AI-usage and volume popups now follow the menu bar's complete material,
+  including Frosted, Clear and Liquid Glass, while keeping readable text surfaces
+  and the opaque fallback when Windows disables transparency.
+
+- Space pauses or resumes playback while the explicitly opened music popup has
+  keyboard focus. Closing it restores the previous app; switching apps dismisses
+  the popup. Held keys do not repeat, and no global shortcut is registered.
+- Dock groups use larger mini-icons, a subtle glass highlight and a finer rim,
+  following the Dock's selected material and transparency policy. Cached tiles
+  also refresh when the material changes within the same light/dark palette.
+
+- Click or drag the music panel's progress bar to seek in compatible audio and
+  video players. Dragging previews the time locally and submits on release;
+  track changes, lost capture and Escape cancel an unfinished gesture. Slow
+  players keep only the latest pending destination, without extra polling.
 - The volume icon in the menu bar opens a volume slider under it, with the
   percentage and a mute button, as the music panel shows them; another click
   closes it. Without an output device it still opens Windows' sound page
@@ -17,6 +32,22 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
+- Los popups de música, uso de IA y volumen siguen el material completo de la
+  barra superior: esmerilado, transparente y Liquid Glass, manteniendo la lectura
+  del texto y el fondo opaco cuando Windows desactiva la transparencia.
+
+- Espacio pausa o reanuda mientras el popup musical abierto con un clic tenga
+  el foco. Cerrarlo devuelve el foco a la app anterior; cambiar de app cierra
+  el popup. Mantener la tecla no repite la acción y no hay un atajo global.
+- Los grupos del Dock tienen miniiconos mayores, reflejo suave y borde fino,
+  siguiendo el material y la transparencia elegidos para el Dock. La caché
+  también se renueva al cambiar de material sin cambiar la paleta clara/oscura.
+
+- Pulsa o arrastra el progreso del panel multimedia para adelantar o retroceder
+  en reproductores de audio y vídeo compatibles. El arrastre previsualiza el
+  tiempo y envía el cambio al soltar; cambiar de pista, perder captura o Escape
+  cancela un gesto sin terminar. Solo se conserva el último destino pendiente,
+  sin consultas periódicas adicionales.
 - El icono de volumen de la barra superior abre un control deslizante debajo,
   con el porcentaje y un botón de silencio, como en el panel de música; otro
   clic lo cierra. Sin dispositivo de salida sigue abriendo la página de sonido
@@ -90,6 +121,16 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Fixed the Dock jumping back to a display it had been brought to after the
+  displays changed: with Windows+P switching between "PC screen only" and
+  "Extend", or a monitor unplugged or rearranged, a hiding Dock now goes back
+  to the primary display until the pointer brings it elsewhere, instead of
+  reappearing on the other one (or on whatever display took its place). After
+  displays change, or Windows rescales the Dock between displays with different
+  scaling, the Dock is rebuilt at once: it no longer showed for a while smaller
+  and off centre, unresponsive to hover. The log notes display changes, when the
+  Dock moves to another display, and why it did not when the pointer rested on
+  another display's edge.
 - Store apps show their logo without the coloured square behind it, as their
   taskbar button does (issue #73): Muelle uses the package's own logo, its light
   form on a light taskbar, and the shell's image only for apps without one.
@@ -107,6 +148,16 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
+- Corregido el Dock que volvía solo a una pantalla a la que se había llevado
+  después de cambiar las pantallas: al alternar con Windows+P entre «Solo
+  pantalla de PC» y «Ampliar», o al desconectar o reordenar un monitor, un Dock
+  que se oculta vuelve a la pantalla principal hasta que el puntero lo lleve a
+  otra, en vez de reaparecer en la otra (o en la que ocupara su lugar). Tras un
+  cambio de pantallas, o cuando Windows reescala el Dock entre pantallas con
+  distinta escala, el Dock se reconstruye al momento: ya no se veía un rato más
+  pequeño y descentrado, sin responder al puntero. El registro anota los
+  cambios de pantallas, cuándo el Dock pasa a otra y por qué no lo hizo al
+  dejar el puntero en el borde de otra pantalla.
 - Las apps de la Tienda muestran su logo sin el cuadrado de color detrás, como
   su botón de la barra de tareas (issue #73): Muelle usa el logo del paquete,
   su forma clara con la barra clara y la imagen del shell solo para las apps

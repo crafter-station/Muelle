@@ -13,12 +13,19 @@ use super::{
 
 impl App {
     /// `wanted` is the pixel side icons are drawn at: their magnified size.
-    pub(super) fn prepare_assets(&mut self, wanted: u32, scale: f32, light: bool, edge: DockEdge) {
-        if self.assets_for != (scale, light, wanted, edge) {
+    pub(super) fn prepare_assets(
+        &mut self,
+        wanted: u32,
+        scale: f32,
+        look: crate::appearance::Look,
+        edge: DockEdge,
+    ) {
+        let light = look.light;
+        if self.assets_for != Some((scale, look, wanted, edge)) {
             self.assets.clear();
             self.remove_label = None;
             self.placeholder = None;
-            self.assets_for = (scale, light, wanted, edge);
+            self.assets_for = Some((scale, look, wanted, edge));
         }
         if self.remove_label.is_none() {
             self.remove_label = self.gfx.label_brush(text().remove, scale, light, edge).ok();
@@ -51,7 +58,12 @@ impl App {
                     .collect();
                 let icon = self
                     .gfx
-                    .group_brush(wanted, &images, entry.members.len(), light)
+                    .group_brush(
+                        wanted,
+                        &images,
+                        entry.members.len(),
+                        crate::scene::Theme::new(look).group_style(),
+                    )
                     .inspect_err(|error| eprintln!("muelle: icono del grupo `{id}`: {error:#}"))
                     .ok()
                     .or_else(|| self.placeholder.clone());

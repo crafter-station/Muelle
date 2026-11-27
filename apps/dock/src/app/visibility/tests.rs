@@ -3,7 +3,7 @@ use super::super::{ASSETS_READY, App, HOVER_OMEGA, Press, PreviewOrder};
 use crate::{assets::Visuals, gfx::Gfx, thumbnails::Thumbnails};
 use anyhow::Result;
 use muelle_config::Config;
-use muelle_core::{attention::Attention, frame::DockEdge, roster::Roster, spring::Spring};
+use muelle_core::{attention::Attention, roster::Roster, spring::Spring};
 use muelle_shell::{power, tracker::WindowTracker};
 use std::{collections::HashMap, time::Instant};
 use windows::{
@@ -89,7 +89,7 @@ impl Fixture {
             attention: Attention::default(),
             attention_enabled: false,
             assets: HashMap::new(),
-            assets_for: (0.0, false, 0, DockEdge::Bottom),
+            assets_for: None,
             placeholder: None,
             remove_label: None,
             config,

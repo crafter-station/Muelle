@@ -3,7 +3,7 @@
 use std::{collections::HashMap, env, sync::atomic::Ordering, thread, time::Instant};
 
 use anyhow::Result;
-use muelle_core::{attention::Attention, frame::DockEdge, spring::Spring};
+use muelle_core::{attention::Attention, spring::Spring};
 use muelle_shell::{
     appbar::AppBar,
     power,
@@ -236,7 +236,7 @@ pub fn run() -> Result<()> {
             attention: Attention::default(),
             attention_enabled: status::taskbar_badges_enabled(),
             assets: HashMap::new(),
-            assets_for: (0.0, false, 0, DockEdge::Bottom),
+            assets_for: None,
             placeholder: None,
             remove_label: None,
             config,

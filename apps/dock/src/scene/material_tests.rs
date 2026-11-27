@@ -1,6 +1,112 @@
 use super::*;
 
 #[test]
+fn bar_popups_preserve_explicit_materials_and_readable_solid_fallbacks() {
+    for material in Material::ALL {
+        for light in [false, true] {
+            for glass in [false, true] {
+                let look = Look {
+                    material,
+                    light,
+                    glass,
+                };
+                let popup = Theme::for_bar_popup(look);
+                let expected = if material == Material::Standard {
+                    Theme::for_popup(light, glass)
+                } else {
+                    Theme::new(look)
+                };
+                assert_eq!(popup.light, light);
+                assert_eq!(popup.glass, glass);
+                assert_eq!(popup.panel_tint, expected.panel_tint);
+                assert_eq!(popup.rim, expected.rim);
+                assert_eq!(popup.sheen, expected.sheen);
+                assert_eq!(popup.lens, material == Material::LiquidGlass && glass);
+                if !glass {
+                    assert_eq!(popup.panel_tint.A, 255);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn group_tiles_use_the_dock_material_and_stay_opaque_without_transparency() {
+    for material in Material::ALL {
+        for light in [false, true] {
+            for glass in [false, true] {
+                let theme = Theme::new(Look {
+                    material,
+                    light,
+                    glass,
+                });
+                let group = theme.group_style();
+                assert_eq!(group.fill, theme.tint);
+                assert_eq!(group.sheen.A, theme.sheen);
+                assert_eq!(group.rim_top.A, theme.rim[0]);
+                assert_eq!(group.fill.A == 255, !glass);
+                assert_eq!(group.ink.R < 100, light);
+            }
+        }
+    }
+    let palette = |material| {
+        Theme::new(Look {
+            material,
+            light: false,
+            glass: true,
+        })
+        .group_style()
+    };
+    assert_ne!(palette(Material::Frosted), palette(Material::Clear));
+    assert_ne!(palette(Material::Frosted), palette(Material::LiquidGlass));
+}
+
+#[test]
+#[ignore = "Offscreen compositor surfaces only; no desktop, input or settings changes"]
+fn native_group_tiles_draw_themed_icons_loading_cells_and_overflow_at_each_scale() -> Result<()> {
+    use windows::Win32::System::WinRT::{
+        CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+        DispatcherQueueOptions,
+    };
+    let _queue = unsafe {
+        CreateDispatcherQueueController(DispatcherQueueOptions {
+            dwSize: size_of::<DispatcherQueueOptions>() as u32,
+            threadType: DQTYPE_THREAD_CURRENT,
+            apartmentType: DQTAT_COM_STA,
+        })?
+    };
+    let gfx = Gfx::new()?;
+    let icon = IconImage {
+        width: 2,
+        height: 2,
+        bgra: [80, 130, 190, 255].repeat(4),
+    };
+    for material in Material::ALL {
+        for light in [false, true] {
+            for glass in [false, true] {
+                let style = Theme::new(Look {
+                    material,
+                    light,
+                    glass,
+                })
+                .group_style();
+                for side in [32, 48, 96, 144] {
+                    for (icons, count) in [
+                        ([None; 4], 1),
+                        ([Some(&icon); 4], 4),
+                        ([Some(&icon); 4], 12),
+                    ] {
+                        let brush = gfx.group_brush(side, &icons, count, style)?;
+                        assert!(brush.Surface().is_ok());
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn frosted_keeps_the_backdrop_visible_and_its_text_panels_denser() {
     for light in [false, true] {
         let look = Look {
@@ -79,7 +185,11 @@ fn glass_materials_build_bounded_backdrop_layers_only_when_windows_allows_them()
                     light,
                     glass,
                 };
-                for theme in [Theme::new(look), Theme::for_bar(look)] {
+                for theme in [
+                    Theme::new(look),
+                    Theme::for_bar(look),
+                    Theme::for_bar_popup(look),
+                ] {
                     let fills = theme.fills(&gfx)?;
                     let backdrops = fills
                         .iter()

@@ -17,6 +17,8 @@
 //! and volume changes arrive through separate notifications; nothing polls.
 
 use anyhow::Result;
+#[path = "menubar/keyboard.rs"]
+mod keyboard;
 use muelle_config::{IslandStyle, Language};
 use muelle_shell::{
     accessories::{Kind as AccessoryKind, Snapshot as AccessorySnapshot},
@@ -58,11 +60,11 @@ use windows::{
             HWND_TOPMOST, IDC_ARROW, KillTimer, LoadCursorW, MSLLHOOKSTRUCT,
             PBT_POWERSETTINGCHANGE, PostMessageW, RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE,
             SWP_SHOWWINDOW, SetCursor, SetTimer, SetWindowPos, SetWindowsHookExW,
-            UnhookWindowsHookEx, WH_MOUSE_LL, WM_APP, WM_CAPTURECHANGED, WM_LBUTTONDOWN,
-            WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST,
-            WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMECHANGE, WM_TIMER,
-            WM_XBUTTONDOWN, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+            UnhookWindowsHookEx, WH_MOUSE_LL, WM_ACTIVATE, WM_APP, WM_CAPTURECHANGED, WM_CHAR,
+            WM_CLOSE, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE,
+            WM_MOUSEWHEEL, WM_NCHITTEST, WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETTINGCHANGE,
+            WM_TIMECHANGE, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW, WS_EX_NOACTIVATE,
+            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
     core::{BOOL, Interface, h, w},
@@ -95,6 +97,7 @@ const VOLUME_CAPTURE_LOST: u32 = WM_APP + 31;
 const AUDIO_CHANGED: u32 = WM_APP + 32;
 const AUDIO_TICK: u32 = WM_APP + 33;
 const BLUETOOTH_CHANGED: u32 = WM_APP + 34;
+const MUSIC_FOCUS_LOST: u32 = WM_APP + 35;
 const VOLUME_TIMER: usize = 4;
 const PROGRESS_TIMER: usize = 5;
 /// The system monitor's samples (issue #64): every 2 s while it shows, and
@@ -283,6 +286,13 @@ fn accessory_readings(snapshot: &AccessorySnapshot) -> [Option<AccessoryReading>
 }
 
 impl Look {
+    fn popup_theme(&self) -> Theme {
+        Theme::for_bar_popup(appearance::Look {
+            material: self.material,
+            light: self.light,
+            glass: self.glass,
+        })
+    }
     fn panel_content_height(&self) -> f32 {
         match self.panel {
             Some(Island::Music | Island::Volume) => 180.0,
@@ -330,6 +340,37 @@ impl Span {
     fn width(self) -> f32 {
         self.right - self.left
     }
+    fn fraction(self, x: f32) -> Option<f64> {
+        (x.is_finite() && self.width() > 0.0)
+            .then(|| f64::from(((x - self.left) / self.width()).clamp(0.0, 1.0)))
+    }
+}
+
+struct SeekGesture {
+    span: Span,
+    track: Track,
+    fraction: f64,
+    pending: Option<(u64, Instant)>,
+}
+
+impl SeekGesture {
+    fn settled(&self, current: Option<&Track>, result: Option<bool>, now: Instant) -> bool {
+        match result {
+            None => false,
+            Some(false) => true,
+            Some(true) => self
+                .track
+                .timeline
+                .zip(current.and_then(|track| track.timeline))
+                .is_some_and(|(target, actual)| {
+                    target
+                        .preview(self.fraction)
+                        .position_at(now)
+                        .abs_diff(actual.position_at(now))
+                        <= Duration::from_secs(3)
+                }),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -344,6 +385,7 @@ enum IslandAction {
     Toggle(Island),
     Media(MediaControl),
     Volume(VolumeTrack),
+    Seek(Span),
     Mute,
     Refresh,
     ScrollUsage(i8),
@@ -561,6 +603,8 @@ pub struct MenuBar {
         CompositionSurfaceBrush,
     )>,
     volume_drag: Option<VolumeTrack>,
+    seek_gesture: Option<SeekGesture>,
+    suppress_seek_release: bool,
     pending_volume: Option<u8>,
     volume_target: Option<u8>,
     volume_controls: Option<VolumeControls>,
@@ -575,6 +619,7 @@ pub struct MenuBar {
     panel_span: Span,
     island_hits: Vec<IslandHit>,
     outside_click_hook: Option<HHOOK>,
+    keyboard: Option<keyboard::MusicKeyboard>,
     /// Held for their callbacks; dropping them unsubscribes.
     _network: Option<NetworkWatch>,
     /// Hears when apps start or stop using the microphone or camera.
@@ -590,14 +635,32 @@ pub struct MenuBar {
 
 unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match msg {
+        WM_CLOSE => {
+            // Alt+F4 closes the focused popup, never the persistent bar window.
+            app::menu_bar_dismiss_island();
+            return LRESULT(0);
+        }
+        WM_KEYDOWN => {
+            app::menu_bar_music_key(w.0 as u16, l.0 as usize & (1 << 30) != 0);
+            return LRESULT(0);
+        }
+        WM_CHAR if w.0 == 0x20 || w.0 == 0x1b => return LRESULT(0),
+        WM_ACTIVATE if w.0 & 0xffff == 0 => {
+            // Activation messages can arrive inside our own focus changes.
+            // Defer the app borrow until SetForegroundWindow has returned.
+            unsafe {
+                let _ = PostMessageW(Some(hwnd), MUSIC_FOCUS_LOST, WPARAM(0), LPARAM(0));
+            }
+        }
+        MUSIC_FOCUS_LOST => app::menu_bar_music_focus_lost(),
         WM_LBUTTONDOWN => {
             launcher::note_menu_bar_press();
-            app::menu_bar_volume_press((l.0 & 0xFFFF) as i16 as f32, (l.0 >> 16) as i16 as f32);
+            app::menu_bar_slider_press((l.0 & 0xFFFF) as i16 as f32, (l.0 >> 16) as i16 as f32);
         }
         WM_LBUTTONUP => {
             let x = (l.0 & 0xFFFF) as i16;
             let y = (l.0 >> 16) as i16;
-            if !app::menu_bar_volume_release(Some(f32::from(y))) {
+            if !app::menu_bar_slider_release(Some((f32::from(x), f32::from(y)))) {
                 app::menu_bar_clicked(f32::from(x), f32::from(y));
             }
         }
@@ -631,7 +694,7 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         VOLUME_CAPTURE_LOST => {
             // A delayed notification must not cancel a newer drag.
             if unsafe { GetCapture() } != hwnd {
-                app::menu_bar_volume_release(None);
+                app::menu_bar_slider_release(None);
             }
         }
         WM_TIMER if w.0 == HIDE_ANIMATION_TIMER => app::menu_bar_finish_hide(None),
@@ -1247,6 +1310,8 @@ impl MenuBar {
             media_enabled,
             cover: None,
             volume_drag: None,
+            seek_gesture: None,
+            suppress_seek_release: false,
             pending_volume: None,
             volume_target: None,
             volume_controls: None,
@@ -1261,6 +1326,7 @@ impl MenuBar {
             panel_span: Span::default(),
             island_hits: Vec::new(),
             outside_click_hook: None,
+            keyboard: None,
             bluetooth: bluetooth::Monitor::new(hwnd.0 as isize, BLUETOOTH_CHANGED).ok(),
             volume_row_span: Span::default(),
             _network: NetworkWatch::new(hwnd.0 as isize, STATUS_CHANGED),
@@ -1278,6 +1344,15 @@ impl MenuBar {
     }
 
     pub fn set_app_name(&mut self, gfx: &Gfx, name: &str) -> Result<()> {
+        // The transient music popup is keyboard-active, not a new document
+        // app. Keep the app name that was shown when the user opened it.
+        if self
+            .keyboard
+            .as_ref()
+            .is_some_and(keyboard::MusicKeyboard::owns_focus)
+        {
+            return Ok(());
+        }
         if self.app_name == name {
             return Ok(());
         }
@@ -1294,6 +1369,8 @@ impl MenuBar {
 
     pub fn set_visible(&mut self, visible: bool) -> Result<()> {
         if !visible {
+            self.keyboard = None;
+            self.cancel_progress();
             self.release_volume(None)?;
         }
         if self.visible == visible {
@@ -1484,7 +1561,7 @@ impl MenuBar {
 
     /// The pointer reached the top edge or left the bar.
     pub fn hover(&mut self, gfx: &Gfx, inside: bool) -> Result<()> {
-        if self.volume_drag.is_some() && !inside {
+        if (self.volume_drag.is_some() || self.seeking()) && !inside {
             return Ok(());
         }
         if !inside && self.panel.take().is_some() {
@@ -1656,21 +1733,20 @@ impl MenuBar {
 
     fn pointer_left_at(&mut self, gfx: &Gfx, point: POINT) -> Result<()> {
         let x = (point.x - self.bounds.left) as f32;
+        if self.seeking() {
+            self.move_progress(x);
+            if !primary_button_pressed() {
+                self.release_progress(Some(x));
+            }
+            return self.progress_tick(gfx);
+        }
         if let Some(span) = self.volume_drag {
             let y = (point.y - self.bounds.top) as f32;
             self.queue_volume(span, y);
             // A nonactivating background window may not receive mouse-up
             // outside its visible bounds. Reuse the existing popup pointer
             // check to finish the gesture without ever stealing app focus.
-            let pressed = unsafe {
-                use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON};
-                let primary = if GetSystemMetrics(SM_SWAPBUTTON) == 0 {
-                    0x01
-                } else {
-                    0x02
-                };
-                windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(primary) < 0
-            };
+            let pressed = primary_button_pressed();
             if pressed {
                 return self.paint_volume_preview(gfx);
             }
@@ -1697,6 +1773,10 @@ impl MenuBar {
 
     /// Leaving the island sideways still stays inside the full-width bar window.
     pub fn pointer_moved(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<()> {
+        if self.seeking() {
+            self.move_progress(x);
+            return self.progress_tick(gfx);
+        }
         if let Some(span) = self.volume_drag {
             self.queue_volume(span, y);
             return self.paint_volume_preview(gfx);
@@ -1717,6 +1797,7 @@ impl MenuBar {
     }
 
     pub fn dismiss_island(&mut self, gfx: &Gfx) -> Result<()> {
+        self.cancel_progress();
         self.release_volume(None)?;
         if self.panel.take().is_some() {
             self.refresh(gfx)?;
@@ -1801,6 +1882,7 @@ impl MenuBar {
             }
         }
         edge_watch::set_menu_bar((self.visible && hidden).then_some(bounds));
+        self.release_music_if_hidden();
         self.sync_outside_click_hook()
     }
 
@@ -1977,8 +2059,13 @@ impl MenuBar {
     }
 
     pub fn click(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<()> {
-        if let Some(hit) = self.island_hits.iter().find(|hit| hit.at(x, y)) {
-            match hit.action {
+        if let Some(action) = self
+            .island_hits
+            .iter()
+            .find(|hit| hit.at(x, y))
+            .map(|hit| hit.action)
+        {
+            match action {
                 IslandAction::Toggle(island) => {
                     self.panel = toggle_panel(self.panel, island);
                     if self.panel.is_some() {
@@ -1998,14 +2085,17 @@ impl MenuBar {
                     }
                 }
                 IslandAction::Media(control) => {
+                    if matches!(control, MediaControl::Previous | MediaControl::Next) {
+                        self.cancel_progress();
+                    }
                     if let Some(media) = &self.media
                         && let Some(track) = self.look.as_ref().and_then(|look| look.track.as_ref())
                     {
                         media.send(track, control);
                     }
-                    return Ok(());
+                    return self.progress_tick(gfx);
                 }
-                IslandAction::Volume(_) => return Ok(()), // Handled on press/drag.
+                IslandAction::Volume(_) | IslandAction::Seek(_) => return Ok(()), // Handled on press/drag.
                 IslandAction::Mute => {
                     if let Some(audio) = &mut self.audio {
                         audio.toggle_mute()?;
@@ -2017,7 +2107,11 @@ impl MenuBar {
                     return Ok(());
                 }
             }
-            return self.refresh(gfx);
+            self.refresh(gfx)?;
+            if matches!(action, IslandAction::Toggle(Island::Music)) {
+                self.focus_music();
+            }
+            return Ok(());
         }
         if y >= (self.bounds.bottom - self.bounds.top) as f32 {
             return Ok(());
@@ -2280,6 +2374,16 @@ impl MenuBar {
         if !matches!(look.panel, Some(Island::Music | Island::Volume)) || moved {
             self.release_volume(None)?;
         }
+        if look.panel != Some(Island::Music)
+            || moved
+            || self.seek_gesture.as_ref().is_some_and(|gesture| {
+                look.track
+                    .as_ref()
+                    .is_none_or(|track| !track.same_seek_target(&gesture.track))
+            })
+        {
+            self.cancel_progress();
+        }
         if self.look.as_ref() == Some(&look) {
             return Ok(());
         }
@@ -2296,7 +2400,7 @@ impl MenuBar {
             self.build(gfx, &look)?;
         }
         self.look = Some(look);
-        self.sync_progress_watch();
+        self.progress_tick(gfx)?;
         if let Some((provider, act)) = moment
             && let Some(&(_, x)) = self.usage_anchors.iter().find(|(p, _)| *p == provider)
         {
@@ -2656,7 +2760,7 @@ impl MenuBar {
         {
             let span = volume_span_under((left + right) / 2.0, width, look.scale);
             let geometry = IslandGeometry::new(span, height + px(PANEL_GAP), look);
-            let theme = Theme::for_popup(look.light, look.glass);
+            let theme = look.popup_theme();
             let content = popup_surface(
                 gfx,
                 theme,
@@ -2685,6 +2789,14 @@ impl MenuBar {
             if new_span != Some(drag) {
                 self.release_volume(None)?;
             }
+        }
+        if let Some(gesture) = &self.seek_gesture
+            && !self
+                .island_hits
+                .iter()
+                .any(|hit| matches!(hit.action, IslandAction::Seek(span) if span == gesture.span))
+        {
+            self.cancel_progress();
         }
         self.surface.SetSize(Vector2 {
             X: width,
@@ -2916,7 +3028,7 @@ impl MenuBar {
             };
             let geometry = IslandGeometry::new(self.panel_span, bar_height + px(PANEL_GAP), look);
             let height = px(look.panel_height());
-            let theme = Theme::for_popup(look.light, look.glass);
+            let theme = look.popup_theme();
             let content = popup_surface(gfx, theme, layers, geometry, height, px(PANEL_RADIUS))?;
             match kind {
                 Island::Music => {
@@ -3381,6 +3493,18 @@ impl MenuBar {
             .SetOpacity(0.55)?;
             return Ok(());
         };
+        if track.seekable() {
+            self.island_hits.push(geometry.hit(
+                px(26.0),
+                px(130.0),
+                width,
+                px(20.0),
+                IslandAction::Seek(Span {
+                    left: geometry.left + px(26.0),
+                    right: geometry.left + px(26.0) + width,
+                }),
+            ));
+        }
         add_rounded_box(
             c,
             layers,
@@ -3450,12 +3574,16 @@ impl MenuBar {
         }
         let ticking = shown
             && self.progress_controls.is_some()
-            && self
-                .look
+            && (self
+                .seek_gesture
                 .as_ref()
-                .and_then(|look| look.track.as_ref())
-                .and_then(|track| track.timeline)
-                .is_some_and(|timeline| timeline.advancing(Instant::now()));
+                .is_some_and(|gesture| gesture.pending.is_some())
+                || self
+                    .look
+                    .as_ref()
+                    .and_then(|look| look.track.as_ref())
+                    .and_then(|track| track.timeline)
+                    .is_some_and(|timeline| timeline.advancing(Instant::now())));
         if ticking != self.progress_timer {
             // This timer only advances cached position/time labels while the
             // player popup is visible. No API calls, artwork reads or polling.
@@ -3471,6 +3599,25 @@ impl MenuBar {
     }
 
     pub fn progress_tick(&mut self, gfx: &Gfx) -> Result<()> {
+        let stale = self.seek_gesture.as_ref().is_some_and(|gesture| {
+            self.look
+                .as_ref()
+                .and_then(|look| look.track.as_ref())
+                .is_none_or(|track| !track.same_seek_target(&gesture.track))
+                || gesture.pending.is_some_and(|(serial, until)| {
+                    Instant::now() >= until
+                        || self.media.as_ref().is_none_or(|watch| {
+                            gesture.settled(
+                                self.look.as_ref().and_then(|look| look.track.as_ref()),
+                                watch.seek_result(serial),
+                                Instant::now(),
+                            )
+                        })
+                })
+        });
+        if stale {
+            self.cancel_progress();
+        }
         if let Some(timeline) = self
             .look
             .as_ref()
@@ -3478,10 +3625,103 @@ impl MenuBar {
             .and_then(|track| track.timeline)
             && let Some(controls) = &mut self.progress_controls
         {
-            controls.paint(gfx, timeline, Instant::now())?;
+            let preview = self
+                .seek_gesture
+                .as_ref()
+                .and_then(|gesture| {
+                    gesture
+                        .track
+                        .timeline
+                        .map(|timeline| timeline.preview(gesture.fraction))
+                })
+                .unwrap_or(timeline);
+            controls.paint(gfx, preview, Instant::now())?;
         }
         self.sync_progress_watch();
         Ok(())
+    }
+
+    fn seeking(&self) -> bool {
+        self.seek_gesture
+            .as_ref()
+            .is_some_and(|gesture| gesture.pending.is_none())
+    }
+    pub fn press_progress(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<bool> {
+        self.suppress_seek_release = false;
+        let Some(span) = self.island_hits.iter().find_map(|hit| match hit.action {
+            IslandAction::Seek(span) if hit.at(x, y) => Some(span),
+            _ => None,
+        }) else {
+            return Ok(false);
+        };
+        let Some(track) = self
+            .look
+            .as_ref()
+            .and_then(|look| look.track.as_ref())
+            .filter(|track| track.seekable())
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        let Some(fraction) = span.fraction(x) else {
+            return Ok(false);
+        };
+        self.release_volume(None)?;
+        self.seek_gesture = Some(SeekGesture {
+            span,
+            track,
+            fraction,
+            pending: None,
+        });
+        unsafe {
+            SetCapture(self.hwnd);
+        }
+        self.progress_tick(gfx)?;
+        Ok(true)
+    }
+    fn move_progress(&mut self, x: f32) {
+        if let Some(gesture) = &mut self.seek_gesture
+            && gesture.pending.is_none()
+            && let Some(fraction) = gesture.span.fraction(x)
+        {
+            gesture.fraction = fraction;
+        }
+    }
+    pub fn release_progress(&mut self, x: Option<f32>) -> bool {
+        if !self.seeking() {
+            return x.is_some() && std::mem::take(&mut self.suppress_seek_release);
+        }
+        if let Some(x) = x {
+            self.move_progress(x);
+        }
+        let gesture = self.seek_gesture.take();
+        self.suppress_seek_release = true;
+        // Clear the gesture before ReleaseCapture can notify its owner.
+        unsafe {
+            if GetCapture() == self.hwnd {
+                let _ = ReleaseCapture();
+            }
+        }
+        if x.is_some_and(f32::is_finite)
+            && let Some(mut gesture) = gesture
+            && self
+                .look
+                .as_ref()
+                .and_then(|look| look.track.as_ref())
+                .is_some_and(|track| track.same_seek_target(&gesture.track))
+            && let Some(serial) = self
+                .media
+                .as_ref()
+                .and_then(|watch| watch.seek(&gesture.track, gesture.fraction))
+        {
+            gesture.pending = Some((serial, Instant::now() + Duration::from_secs(5)));
+            self.seek_gesture = Some(gesture);
+        }
+        true
+    }
+    fn cancel_progress(&mut self) {
+        self.release_progress(None);
+        self.seek_gesture = None;
     }
 
     pub fn press_volume(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<()> {
@@ -3625,6 +3865,18 @@ impl MenuBar {
         }
         self.volume_target = None;
         Ok(true)
+    }
+}
+
+fn primary_button_pressed() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON};
+    unsafe {
+        let primary = if GetSystemMetrics(SM_SWAPBUTTON) == 0 {
+            0x01
+        } else {
+            0x02
+        };
+        windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(primary) < 0
     }
 }
 
@@ -4478,6 +4730,8 @@ fn draw_bubble_player(
 
 impl Drop for MenuBar {
     fn drop(&mut self) {
+        self.keyboard = None;
+        self.cancel_progress();
         self.search_watch = None;
         self.settings_watch = None;
         self.privacy_watch = None;
@@ -4505,6 +4759,126 @@ impl Drop for MenuBar {
 #[cfg(test)]
 mod island_tests {
     use super::*;
+
+    #[test]
+    fn progress_coordinates_clamp_outside_the_track_and_ignore_invalid_input() {
+        let span = Span {
+            left: 20.0,
+            right: 220.0,
+        };
+        assert_eq!(span.fraction(20.0), Some(0.0));
+        assert_eq!(span.fraction(120.0), Some(0.5));
+        assert_eq!(span.fraction(220.0), Some(1.0));
+        assert_eq!(span.fraction(-100.0), Some(0.0));
+        assert_eq!(span.fraction(500.0), Some(1.0));
+        assert_eq!(span.fraction(f32::NAN), None);
+        assert_eq!(Span::default().fraction(0.0), None);
+    }
+
+    #[test]
+    fn accepted_seek_keeps_its_preview_until_the_player_updates_its_timeline() {
+        let track = Track::test_fixture();
+        let gesture = SeekGesture {
+            span: Span {
+                left: 0.0,
+                right: 100.0,
+            },
+            track: track.clone(),
+            fraction: 0.8,
+            pending: None,
+        };
+        assert!(!gesture.settled(Some(&track), None, Instant::now()));
+        assert!(!gesture.settled(Some(&track), Some(true), Instant::now()));
+        assert!(gesture.settled(Some(&track), Some(false), Instant::now()));
+        let mut confirmed = track;
+        confirmed.timeline = confirmed.timeline.map(|timeline| timeline.preview(0.8));
+        assert!(gesture.settled(Some(&confirmed), Some(true), Instant::now()));
+    }
+
+    #[test]
+    #[ignore = "Hidden compositor fixture; synthetic media, no player commands or capture"]
+    fn native_progress_gesture_previews_commits_and_cancels_without_player_io() -> Result<()> {
+        use anyhow::Context;
+        use windows::Win32::System::WinRT::{
+            CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+            DispatcherQueueOptions,
+        };
+        let _queue = unsafe {
+            CreateDispatcherQueueController(DispatcherQueueOptions {
+                dwSize: size_of::<DispatcherQueueOptions>() as u32,
+                threadType: DQTYPE_THREAD_CURRENT,
+                apartmentType: DQTAT_COM_STA,
+            })?
+        };
+        let gfx = Gfx::new()?;
+        let mut bar = MenuBar::create(&gfx, false, false, true, MenuBarWidgets::default())?;
+        bar.set_visible(false)?;
+        bar.audio = None;
+        let track = Track::test_fixture();
+        bar.media = Some(media::Watch::test_snapshot(track.clone()));
+        let mut look = bar.look.clone().context("look")?;
+        look.panel = Some(Island::Music);
+        look.track = Some(track.clone());
+        bar.build(&gfx, &look)?;
+        bar.look = Some(look);
+        bar.panel = Some(Island::Music);
+        let span = bar
+            .island_hits
+            .iter()
+            .find_map(|hit| match hit.action {
+                IslandAction::Seek(span) => Some(span),
+                _ => None,
+            })
+            .context("seek hit area")?;
+        // Inject only test state; never capture the user's mouse or contact a player.
+        bar.seek_gesture = Some(SeekGesture {
+            span,
+            track: track.clone(),
+            fraction: 0.0,
+            pending: None,
+        });
+        bar.move_progress(span.left + span.width() / 2.0);
+        bar.progress_tick(&gfx)?;
+        assert_eq!(
+            bar.progress_controls
+                .as_ref()
+                .context("progress")?
+                .elapsed_seconds,
+            Some(120)
+        );
+        assert!(bar.release_progress(Some(span.right)));
+        assert!(
+            bar.seek_gesture
+                .as_ref()
+                .is_some_and(|gesture| gesture.pending.is_some())
+        );
+        bar.progress_tick(&gfx)?;
+        assert_eq!(
+            bar.progress_controls
+                .as_ref()
+                .context("progress")?
+                .elapsed_seconds,
+            Some(240)
+        );
+        // A pending result cannot leave a stuck preview, including on pause/rejection.
+        if let Some(gesture) = &mut bar.seek_gesture {
+            gesture.pending = Some((1, Instant::now()));
+        }
+        bar.progress_tick(&gfx)?;
+        assert!(bar.seek_gesture.is_none());
+        bar.seek_gesture = Some(SeekGesture {
+            span,
+            track,
+            fraction: 0.7,
+            pending: None,
+        });
+        assert!(bar.release_progress(None)); // Lost capture / Escape never commits.
+        assert!(bar.seek_gesture.is_none());
+        assert!(bar.release_progress(Some(span.left))); // Consume late mouse-up.
+        assert!(!bar.release_progress(Some(span.left)));
+        bar.set_visible(false)?;
+        Ok(())
+    }
 
     #[test]
     #[ignore = "Hidden compositor fixture; synthetic preferences, no Windows settings writes"]
@@ -5268,7 +5642,12 @@ mod island_tests {
             look.widgets.island_style = style;
             for scale in [1.0, 1.25, 1.5, 2.0] {
                 look.scale = scale;
-                for (light, glass) in [(true, true), (false, true), (true, false), (false, false)] {
+                for (material, light, glass) in Material::ALL.into_iter().flat_map(|material| {
+                    [(true, true), (false, true), (true, false), (false, false)]
+                        .into_iter()
+                        .map(move |(light, glass)| (material, light, glass))
+                }) {
+                    look.material = material;
                     look.light = light;
                     look.glass = glass;
                     bar.build(&gfx, &look)?;

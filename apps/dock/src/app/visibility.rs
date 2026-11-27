@@ -43,6 +43,15 @@ fn smart_covered(app_overlap: Option<bool>, desktop: bool, was_hidden: bool) -> 
     }
 }
 
+/// The display the dock was brought to, if it is still connected exactly as
+/// it was. Unplugged, turned off by Windows+P ("PC screen only") or moved in
+/// the arrangement, it is forgotten: the dock goes back to the primary display
+/// instead of jumping to it again, or to whatever display now covers its old
+/// place, when displays change.
+pub(super) fn remembered_display(remembered: Option<RECT>, monitors: &[RECT]) -> Option<RECT> {
+    remembered.filter(|screen| monitors.contains(screen))
+}
+
 pub(super) fn rects_overlap(a: RECT, b: RECT) -> bool {
     a.left < a.right
         && a.top < a.bottom
@@ -118,16 +127,31 @@ impl App {
     pub(super) fn dock_monitor(&self) -> Option<Monitor> {
         self.dock_display
             .filter(|_| self.config.hides_automatically())
-            .and_then(monitor_at)
+            .and_then(|screen| {
+                monitor_at(POINT {
+                    x: screen.left + (screen.right - screen.left) / 2,
+                    y: screen.top + (screen.bottom - screen.top) / 2,
+                })
+            })
+            // The same display, not another one now at its place.
+            .filter(|monitor| Some(monitor.screen) == self.dock_display)
             .or_else(primary_monitor)
     }
 
+    /// Runs after a settings change and after the displays change (Windows+P,
+    /// a monitor plugged in or out, a new arrangement).
     pub(super) fn apply_edge_settings(&mut self) {
-        if !self.config.hides_automatically() {
-            self.dock_display = None;
+        let monitors = monitor_rects();
+        let remembered = remembered_display(self.dock_display, &monitors);
+        if remembered != self.dock_display {
+            muelle_shell::log::line(&format!(
+                "pantallas: {}; el dock vuelve a la pantalla principal",
+                monitors.len()
+            ));
         }
+        self.dock_display = remembered.filter(|_| self.config.hides_automatically());
         let mut screens = if self.config.hides_automatically() {
-            monitor_rects()
+            monitors
         } else {
             Vec::new()
         };
@@ -218,18 +242,41 @@ impl App {
         let mouse_down = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
             .into_iter()
             .any(|key| unsafe { GetAsyncKeyState(i32::from(key.0)) < 0 });
-        if !self.config.hides_automatically()
-            || self.hovering
-            || self.menu_open
-            || self.press.is_some()
-            || self.drag_over
-            || self.drag.is_some()
-            || self.switching
-            || !self.flights.is_empty()
-            || mouse_down
-            || monitor_at(point).is_none_or(|monitor| monitor.screen != screen)
-            || tracker::foreground_is_fullscreen(screen)
-        {
+        // Why the dock stays away, if it does.
+        let refused = if !self.config.hides_automatically() {
+            Some("no se oculta")
+        } else if self.hovering {
+            Some("puntero sobre el dock")
+        } else if self.menu_open || self.press.is_some() || self.drag_over || self.drag.is_some() {
+            Some("menú o arrastre en curso")
+        } else if self.switching {
+            Some("Alt+Tab")
+        } else if !self.flights.is_empty() {
+            Some("animación de ventana")
+        } else if mouse_down {
+            Some("botón del ratón pulsado")
+        } else if monitor_at(point).is_none_or(|monitor| monitor.screen != screen) {
+            Some("el puntero ya no está en esa pantalla")
+        } else if tracker::foreground_is_fullscreen(screen) {
+            Some("pantalla completa")
+        } else {
+            None
+        };
+        if let Some(reason) = refused {
+            // Only for another display, where nothing else shows why the
+            // dock did not come: one line per rest of the pointer.
+            if self
+                .stage
+                .as_ref()
+                .is_some_and(|stage| stage.key.screen != screen)
+            {
+                muelle_shell::log::line(&format!(
+                    "el dock no pasa a la pantalla {},{}: {reason} (al frente: {})",
+                    screen.left,
+                    screen.top,
+                    tracker::foreground_class()
+                ));
+            }
             return Ok(());
         }
         let switched = self
@@ -239,10 +286,14 @@ impl App {
         if switched {
             self.close_preview();
             self.stop_mascot();
-            self.dock_display = Some(POINT {
-                x: screen.left + (screen.right - screen.left) / 2,
-                y: screen.top + (screen.bottom - screen.top) / 2,
-            });
+            self.dock_display = Some(screen);
+            muelle_shell::log::line(&format!(
+                "el dock pasa a la pantalla {},{} {}x{}",
+                screen.left,
+                screen.top,
+                screen.right - screen.left,
+                screen.bottom - screen.top
+            ));
             self.amount = Spring::at(0.0, HOVER_OMEGA);
             self.slide = Spring::at(1.0, self.config.dock_auto_hide_speed.omega());
             self.fullscreen = false;
@@ -410,3 +461,34 @@ impl App {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+
+    #[test]
+    fn a_display_that_is_gone_or_moved_is_forgotten() {
+        let rect = |left, top, right, bottom| RECT {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        let laptop = rect(0, 0, 1920, 1080);
+        let external = rect(1920, 0, 4480, 1440);
+        // Still connected: the dock stays on it.
+        assert_eq!(
+            remembered_display(Some(external), &[laptop, external]),
+            Some(external)
+        );
+        // Windows+P "PC screen only", or unplugged: back to the primary.
+        assert_eq!(remembered_display(Some(external), &[laptop]), None);
+        // Extended again later: the dock does not jump back by itself.
+        // Rearranged to the left of the laptop: another place, forgotten.
+        assert_eq!(
+            remembered_display(Some(external), &[laptop, rect(-2560, 0, 0, 1440)]),
+            None
+        );
+        assert_eq!(remembered_display(None, &[laptop, external]), None);
+    }
+}

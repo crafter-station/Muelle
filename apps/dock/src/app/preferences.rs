@@ -4,10 +4,7 @@ use std::{env, path::Path};
 
 use anyhow::{Context, Result};
 use muelle_config::{Config, DockGroup};
-use muelle_core::{
-    frame::DockEdge,
-    roster::{Group, Roster},
-};
+use muelle_core::roster::{Group, Roster};
 use muelle_shell::{
     pins::{app_exists, taskbar_pins, taskbar_pins_if_readable},
     system::primary_monitor,
@@ -178,7 +175,7 @@ impl App {
         if config.language != self.config.language {
             strings::set_language(config.language);
             // Labels are drawn text: redraw them in the new language.
-            self.assets_for = (0.0, false, 0, DockEdge::Bottom);
+            self.assets_for = None;
         }
         // The dock and the menu bar key their looks on it: `refresh` redraws both.
         crate::appearance::set(config.appearance);

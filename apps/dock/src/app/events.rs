@@ -43,6 +43,13 @@ use super::{
 
 const BACKDROP_REFRESH: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 11;
 static BACKDROP_PENDING: AtomicBool = AtomicBool::new(false);
+/// The displays or a dock window's scale changed since the dock was last
+/// rebuilt. Windows then moves and rescales the dock's windows itself, and
+/// until the dock is rebuilt it shows its old content at the wrong scale (a
+/// smaller dock off centre on a laptop at 125 % after a monitor at 100 %),
+/// even when its display and scale end up as before. Set without the app
+/// state: Windows also sends these while the dock is moving its windows.
+static DISPLAYS_CHANGED: AtomicBool = AtomicBool::new(false);
 
 fn queue_backdrop_refresh(hwnd: HWND) {
     if hwnd.0.is_null() || BACKDROP_PENDING.swap(true, Ordering::Relaxed) {
@@ -137,9 +144,11 @@ pub fn menu_bar_clicked(x: f32, y: f32) {
     });
 }
 
-pub fn menu_bar_volume_press(x: f32, y: f32) {
+pub fn menu_bar_slider_press(x: f32, y: f32) {
     with_app("volumen", |app| {
-        if let Some(bar) = &mut app.menubar {
+        if let Some(bar) = &mut app.menubar
+            && !bar.press_progress(&app.gfx, x, y)?
+        {
             bar.press_volume(&app.gfx, x, y)?;
         }
         Ok(())
@@ -153,9 +162,16 @@ pub fn menu_bar_scrolled(point: POINT, delta: i16) -> bool {
     })
 }
 
-pub fn menu_bar_volume_release(y: Option<f32>) -> bool {
-    with_app_value("volumen", |app| match &mut app.menubar {
-        Some(bar) => bar.release_volume(y),
+pub fn menu_bar_slider_release(point: Option<(f32, f32)>) -> bool {
+    with_app_value("control multimedia", |app| match &mut app.menubar {
+        Some(bar) => {
+            let seek = bar.release_progress(point.map(|point| point.0));
+            let volume = bar.release_volume(point.map(|point| point.1))?;
+            if seek {
+                bar.progress_tick(&app.gfx)?;
+            }
+            Ok(seek || volume)
+        }
         None => Ok(false),
     })
 }
@@ -163,6 +179,19 @@ pub fn menu_bar_volume_release(y: Option<f32>) -> bool {
 pub fn menu_bar_volume_flush() {
     with_app("volumen", |app| match &mut app.menubar {
         Some(bar) => bar.flush_volume(),
+        None => Ok(()),
+    });
+}
+
+pub fn menu_bar_music_key(key: u16, repeated: bool) {
+    with_app("teclado multimedia", |app| match &mut app.menubar {
+        Some(bar) => bar.music_key(&app.gfx, key, repeated),
+        None => Ok(()),
+    });
+}
+pub fn menu_bar_music_focus_lost() {
+    with_app("foco multimedia", |app| match &mut app.menubar {
+        Some(bar) => bar.music_focus_lost(&app.gfx),
         None => Ok(()),
     });
 }
@@ -515,9 +544,20 @@ pub(super) unsafe extern "system" fn wndproc(
         }
         WM_SETTINGCHANGE | WM_DISPLAYCHANGE | WM_DPICHANGED => {
             if matches!(msg, WM_DISPLAYCHANGE | WM_DPICHANGED) {
+                DISPLAYS_CHANGED.store(true, Ordering::Relaxed);
                 with_app("pantalla de la mascota", |app| {
                     app.stop_mascot();
                     Ok(())
+                });
+            }
+            if msg == WM_DPICHANGED {
+                // Windows rescaled a dock window: rebuild now rather than
+                // show it at the wrong scale while the displays settle. When
+                // the dock itself is moving its windows, the app is busy and
+                // this is skipped: its new stage already has the right scale.
+                with_app("escala de pantalla", |app| {
+                    DISPLAYS_CHANGED.store(false, Ordering::Relaxed);
+                    app.rebuild()
                 });
             }
             // SAFETY: `hwnd` is our window; scheduling the same timer resets it.
@@ -618,7 +658,11 @@ pub(super) unsafe extern "system" fn wndproc(
             match w.0 {
                 REFRESH_TIMER => with_app("recomposición del dock", |app| {
                     app.apply_edge_settings();
-                    app.refresh()?;
+                    if DISPLAYS_CHANGED.swap(false, Ordering::Relaxed) {
+                        app.rebuild()?;
+                    } else {
+                        app.refresh()?;
+                    }
                     app.update_fullscreen()?;
                     app.power_moment();
                     Ok(())

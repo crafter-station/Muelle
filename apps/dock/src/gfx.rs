@@ -57,6 +57,27 @@ use windows::{
 };
 use windows_numerics::{Matrix3x2, Vector2};
 
+/// Static coating for a cached group tile. The scene supplies its own palette;
+/// drawing also stays usable by diagnostics without app/theme globals.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GroupStyle {
+    pub fill: Color,
+    pub sheen: Color,
+    pub rim_top: Color,
+    pub rim_bottom: Color,
+    pub slot: Color,
+    pub ink: Color,
+}
+
+fn color_float(color: Color) -> D2D1_COLOR_F {
+    rgb(
+        f32::from(color.R) / 255.0,
+        f32::from(color.G) / 255.0,
+        f32::from(color.B) / 255.0,
+        f32::from(color.A) / 255.0,
+    )
+}
+
 /// Use the first letter, not the app language: media and window titles may
 /// use another script. Skip punctuation, numbers and bidi isolation marks.
 fn text_reads_rtl(text: &str) -> bool {
@@ -545,42 +566,27 @@ impl Gfx {
         side: u32,
         icons: &[Option<&IconImage>],
         count: usize,
-        light: bool,
+        style: GroupStyle,
     ) -> Result<CompositionSurfaceBrush> {
         let size = side as f32;
         let inset = size * 0.08;
         let tile = size - 2.0 * inset;
         let radius = tile * 0.225;
-        let pad = tile * 0.13;
-        let gap = tile * 0.08;
+        let pad = tile * 0.105;
+        let gap = tile * 0.065;
         let cell = (tile - 2.0 * pad - gap) / 2.0;
-        let stroke = (size * 0.022).max(1.0);
+        let stroke = (size * 0.012).max(0.8);
         let more = if count > 4 {
             Some(self.centered_text(&format!("+{}", count - 3), cell * 0.5, cell)?)
         } else {
             None
-        };
-        let (fill_color, rim_color, slot_color, ink_color) = if light {
-            (
-                rgb(1.0, 1.0, 1.0, 0.55),
-                rgb(0.0, 0.0, 0.0, 0.22),
-                rgb(0.0, 0.0, 0.0, 0.10),
-                rgb(0.0, 0.0, 0.0, 0.75),
-            )
-        } else {
-            (
-                rgb(0.30, 0.30, 0.33, 0.62),
-                rgb(1.0, 1.0, 1.0, 0.34),
-                rgb(1.0, 1.0, 1.0, 0.12),
-                rgb(1.0, 1.0, 1.0, 0.92),
-            )
         };
         self.draw(side, side, |dc| {
             let half = stroke / 2.0;
             // SAFETY: Brushes, the text layout and the images stay alive
             // through the drawing calls.
             unsafe {
-                let fill = dc.CreateSolidColorBrush(&fill_color, None)?;
+                let fill = dc.CreateSolidColorBrush(&color_float(style.fill), None)?;
                 dc.FillRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
                         rect: D2D_RECT_F {
@@ -594,7 +600,60 @@ impl Gfx {
                     },
                     &fill,
                 );
-                let rim = dc.CreateSolidColorBrush(&rim_color, None)?;
+                let gradient = |colors: &[(f32, Color)]| -> Result<_> {
+                    let stops: Vec<_> = colors
+                        .iter()
+                        .map(|(position, color)| D2D1_GRADIENT_STOP {
+                            position: *position,
+                            color: color_float(*color),
+                        })
+                        .collect();
+                    let collection = dc.CreateGradientStopCollection(
+                        &stops,
+                        D2D1_COLOR_SPACE_SRGB,
+                        D2D1_COLOR_SPACE_SRGB,
+                        D2D1_BUFFER_PRECISION_8BPC_UNORM,
+                        D2D1_EXTEND_MODE_CLAMP,
+                        D2D1_COLOR_INTERPOLATION_MODE_PREMULTIPLIED,
+                    )?;
+                    Ok(dc.CreateLinearGradientBrush(
+                        &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                            startPoint: Vector2::new(inset, inset),
+                            endPoint: Vector2::new(size - inset, size - inset),
+                        },
+                        None,
+                        &collection,
+                    )?)
+                };
+                let sheen = gradient(&[
+                    (0.0, style.sheen),
+                    (
+                        0.6,
+                        Color {
+                            A: 0,
+                            ..style.sheen
+                        },
+                    ),
+                    (1.0, style.sheen),
+                ])?;
+                dc.FillRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: D2D_RECT_F {
+                            left: inset,
+                            top: inset,
+                            right: size - inset,
+                            bottom: size - inset,
+                        },
+                        radiusX: radius,
+                        radiusY: radius,
+                    },
+                    &sheen,
+                );
+                let rim = gradient(&[
+                    (0.0, style.rim_top),
+                    (0.5, style.rim_bottom),
+                    (1.0, style.rim_top),
+                ])?;
                 dc.DrawRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
                         rect: D2D_RECT_F {
@@ -603,15 +662,15 @@ impl Gfx {
                             right: size - inset - half,
                             bottom: size - inset - half,
                         },
-                        radiusX: radius - half,
-                        radiusY: radius - half,
+                        radiusX: (radius - half).max(0.0),
+                        radiusY: (radius - half).max(0.0),
                     },
                     &rim,
                     stroke,
                     None,
                 );
-                let slot = dc.CreateSolidColorBrush(&slot_color, None)?;
-                let ink = dc.CreateSolidColorBrush(&ink_color, None)?;
+                let slot = dc.CreateSolidColorBrush(&color_float(style.slot), None)?;
+                let ink = dc.CreateSolidColorBrush(&color_float(style.ink), None)?;
                 for index in 0..count.min(4) {
                     let left = inset + pad + (index % 2) as f32 * (cell + gap);
                     let top = inset + pad + (index / 2) as f32 * (cell + gap);

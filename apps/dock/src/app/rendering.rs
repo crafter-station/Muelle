@@ -127,6 +127,13 @@ impl App {
     /// Recalculates sizes, positions, and scene for the current state. Does
     /// nothing if the scene inputs are unchanged, since many Windows notifications
     /// do not affect the dock.
+    /// Rebuilds the dock even if nothing it shows changed, and puts its
+    /// windows back in place: after the displays change (see `events`).
+    pub(super) fn rebuild(&mut self) -> Result<()> {
+        self.stage = None;
+        self.refresh()
+    }
+
     pub(super) fn refresh(&mut self) -> Result<()> {
         if let Some(bar) = &mut self.menubar
             && let Err(error) = bar.refresh(&self.gfx)
@@ -217,7 +224,7 @@ impl App {
         self.prepare_assets(
             (metrics.icon * max_scale).round().max(1.0) as u32,
             scale,
-            theme.light,
+            key.look,
             edge,
         );
 

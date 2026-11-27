@@ -63,6 +63,28 @@ const LENS_COATING: [(f32, Color); 5] = [
 ];
 
 impl Theme {
+    pub fn group_style(self) -> crate::gfx::GroupStyle {
+        crate::gfx::GroupStyle {
+            fill: self.tint,
+            sheen: rgba(255, 255, 255, self.sheen),
+            rim_top: rgba(255, 255, 255, self.rim[0]),
+            rim_bottom: if self.light {
+                rgba(0, 0, 0, 38)
+            } else {
+                rgba(255, 255, 255, self.rim[2])
+            },
+            slot: if self.light {
+                rgba(0, 0, 0, 20)
+            } else {
+                rgba(255, 255, 255, 22)
+            },
+            ink: if self.light {
+                rgba(20, 24, 30, 235)
+            } else {
+                rgba(245, 248, 252, 245)
+            },
+        }
+    }
     /// Without `look.glass` (Windows transparency off, or energy saver on)
     /// every material is solid, as macOS draws it with "Reduce transparency".
     pub fn new(look: Look) -> Self {
@@ -199,6 +221,16 @@ impl Theme {
                 light,
                 glass,
             })
+        }
+    }
+
+    /// Bar popups inherit its complete material. Auto/light/dark keep the
+    /// shared context-menu palette; explicit materials keep their coating and
+    /// denser text-panel tint, including the solid energy-saver fallback.
+    pub(crate) fn for_bar_popup(look: Look) -> Self {
+        match look.material {
+            Material::Standard => Self::for_popup(look.light, look.glass),
+            _ => Self::new(look),
         }
     }
 

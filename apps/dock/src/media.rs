@@ -41,6 +41,38 @@ pub struct Timeline {
     pub duration: Duration,
     recorded: Instant,
     rate: f64,
+    seek: Option<SeekRange>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SeekRange {
+    start: i64,
+    end: i64,
+    minimum: i64,
+    maximum: i64,
+}
+impl SeekRange {
+    fn new(start: i64, end: i64, minimum: i64, maximum: i64) -> Option<Self> {
+        end.checked_sub(start).filter(|length| *length > 0)?;
+        let (minimum, maximum) = (minimum.max(start), maximum.min(end));
+        (minimum < maximum).then_some(Self {
+            start,
+            end,
+            minimum,
+            maximum,
+        })
+    }
+    fn position(self, fraction: f64) -> Option<i64> {
+        if !fraction.is_finite() {
+            return None;
+        }
+        let offset = ((self.end - self.start) as f64 * fraction.clamp(0.0, 1.0)).round() as i64;
+        Some(
+            self.start
+                .saturating_add(offset)
+                .clamp(self.minimum, self.maximum),
+        )
+    }
 }
 
 impl Timeline {
@@ -56,6 +88,7 @@ impl Timeline {
             duration,
             recorded: Instant::now(),
             rate,
+            seek: None,
         })
     }
 
@@ -70,6 +103,22 @@ impl Timeline {
     pub fn advancing(self, now: Instant) -> bool {
         let position = self.position_at(now);
         (self.rate > 0.0 && position < self.duration) || (self.rate < 0.0 && !position.is_zero())
+    }
+    pub fn seekable(self) -> bool {
+        self.seek.is_some()
+    }
+    pub fn same_range(self, other: Self) -> bool {
+        self.duration == other.duration && self.seek == other.seek
+    }
+    /// Local drag feedback only; the authoritative player snapshot replaces it.
+    pub fn preview(mut self, fraction: f64) -> Self {
+        if let Some(position) = self.seek.and_then(|range| range.position(fraction)) {
+            let start = self.seek.map_or(0, |range| range.start);
+            self.position = Duration::from_secs_f64((position - start) as f64 / 10_000_000.0);
+            self.recorded = Instant::now();
+            self.rate = 0.0;
+        }
+        self
     }
 }
 
@@ -107,6 +156,20 @@ pub struct Track {
 }
 
 impl Track {
+    pub fn same_item(&self, other: &Self) -> bool {
+        self.generation == other.generation
+    }
+    pub fn seekable(&self) -> bool {
+        self.timeline.is_some_and(Timeline::seekable)
+    }
+    pub fn same_seek_target(&self, other: &Self) -> bool {
+        self.same_item(other)
+            && self.seekable()
+            && self
+                .timeline
+                .zip(other.timeline)
+                .is_some_and(|(a, b)| a.same_range(b))
+    }
     pub fn same_content(&self, other: &Self) -> bool {
         self.generation == other.generation
             && self.title == other.title
@@ -115,6 +178,7 @@ impl Track {
             && self.previous == other.previous
             && self.toggle == other.toggle
             && self.next == other.next
+            && self.seekable() == other.seekable()
             && match (&self.artwork, &other.artwork) {
                 (Some(a), Some(b)) => Arc::ptr_eq(a, b),
                 (None, None) => true,
@@ -133,7 +197,12 @@ impl Track {
             previous: true,
             toggle: true,
             next: true,
-            timeline: Timeline::new(0, 2_400_000_000, 420_000_000, Duration::ZERO, 1.0),
+            timeline: Timeline::new(0, 2_400_000_000, 420_000_000, Duration::ZERO, 1.0).map(
+                |mut timeline| {
+                    timeline.seek = SeekRange::new(0, 2_400_000_000, 0, 2_400_000_000);
+                    timeline
+                },
+            ),
             ..Default::default()
         }
     }
@@ -197,7 +266,25 @@ pub struct Watch {
     state: Arc<Mutex<Option<Track>>>,
     events: Events,
     commands: SyncSender<(u64, Control)>,
+    seek: Arc<Mutex<SeekMailbox>>,
     progress: Arc<AtomicBool>,
+}
+
+#[derive(Clone, Copy)]
+struct SeekRequest {
+    generation: u64,
+    fraction: f64,
+    serial: u64,
+}
+#[derive(Default)]
+struct SeekMailbox {
+    pending: Option<SeekRequest>,
+    serial: u64,
+    completed: Option<(u64, bool)>,
+}
+struct Requests {
+    buttons: Receiver<(u64, Control)>,
+    seek: Arc<Mutex<SeekMailbox>>,
 }
 
 impl Watch {
@@ -213,6 +300,7 @@ impl Watch {
                 dirty: Arc::new(AtomicU8::new(0)),
             },
             commands,
+            seek: Arc::new(Mutex::new(SeekMailbox::default())),
             progress: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -223,6 +311,11 @@ impl Watch {
         let progress = Arc::new(AtomicBool::new(false));
         let (wake, inbox) = mpsc::sync_channel(1);
         let (commands, requests) = mpsc::sync_channel(4);
+        let seek = Arc::new(Mutex::new(SeekMailbox::default()));
+        let requests = Requests {
+            buttons: requests,
+            seek: seek.clone(),
+        };
         let events = Events {
             wake,
             dirty: Arc::new(AtomicU8::new(0)),
@@ -249,6 +342,7 @@ impl Watch {
             state,
             events,
             commands,
+            seek,
             progress,
         })
     }
@@ -267,8 +361,41 @@ impl Watch {
 
     pub fn send(&self, track: &Track, control: Control) {
         if self.commands.try_send((track.generation, control)).is_ok() {
+            if matches!(control, Control::Previous | Control::Next)
+                && let Ok(mut mailbox) = self.seek.lock()
+            {
+                mailbox.pending = None;
+            }
             self.events.mark(0);
         }
+    }
+    pub fn seek(&self, track: &Track, fraction: f64) -> Option<u64> {
+        if !track.seekable() || !fraction.is_finite() {
+            return None;
+        }
+        let serial = {
+            let mut mailbox = self.seek.lock().ok()?;
+            // One pending destination replaces older seeks while a player is
+            // busy. No player API, artwork or allocation under this UI lock.
+            mailbox.serial = mailbox.serial.wrapping_add(1);
+            let serial = mailbox.serial;
+            mailbox.pending = Some(SeekRequest {
+                generation: track.generation,
+                fraction: fraction.clamp(0.0, 1.0),
+                serial,
+            });
+            serial
+        };
+        self.events.mark(0);
+        Some(serial)
+    }
+    pub fn seek_result(&self, serial: u64) -> Option<bool> {
+        self.seek
+            .lock()
+            .ok()
+            .and_then(|mailbox| mailbox.completed)
+            .filter(|(completed, _)| *completed >= serial)
+            .map(|(_, accepted)| accepted)
     }
 }
 
@@ -403,7 +530,7 @@ impl Current {
                 } else {
                     0.0
                 };
-                Timeline::new(
+                let mut result = Timeline::new(
                     timeline.StartTime().ok()?.Duration,
                     timeline.EndTime().ok()?.Duration,
                     timeline.Position().ok()?.Duration,
@@ -412,7 +539,18 @@ impl Current {
                         .map(|time| timeline_age(time.UniversalTime, SystemTime::now()))
                         .unwrap_or_default(),
                     rate,
-                )
+                )?;
+                if status != Status::Changing
+                    && controls.IsPlaybackPositionEnabled().unwrap_or(false)
+                {
+                    result.seek = SeekRange::new(
+                        timeline.StartTime().ok()?.Duration,
+                        timeline.EndTime().ok()?.Duration,
+                        timeline.MinSeekTime().ok()?.Duration,
+                        timeline.MaxSeekTime().ok()?.Duration,
+                    );
+                }
+                Some(result)
             })
             .flatten();
         Some(Track {
@@ -463,6 +601,35 @@ impl Current {
             let _ = complete(operation);
         }
     }
+    fn seek(&self, fraction: f64) -> bool {
+        // Revalidate capability and range on the media worker: both can change
+        // during an advert or live stream without replacing the session.
+        let position = (|| {
+            let info = self.session.GetPlaybackInfo().ok()?;
+            if info.PlaybackStatus().ok()? == Status::Changing {
+                return None;
+            }
+            if !info.Controls().ok()?.IsPlaybackPositionEnabled().ok()? {
+                return None;
+            }
+            let timeline = self.session.GetTimelineProperties().ok()?;
+            SeekRange::new(
+                timeline.StartTime().ok()?.Duration,
+                timeline.EndTime().ok()?.Duration,
+                timeline.MinSeekTime().ok()?.Duration,
+                timeline.MaxSeekTime().ok()?.Duration,
+            )?
+            .position(fraction)
+        })();
+        position
+            .and_then(|position| {
+                self.session
+                    .TryChangePlaybackPositionAsync(position)
+                    .ok()
+                    .and_then(complete)
+            })
+            .unwrap_or(false)
+    }
 }
 
 impl Drop for Current {
@@ -485,7 +652,7 @@ fn run(
     state: &Mutex<Option<Track>>,
     events: &Events,
     inbox: &Receiver<()>,
-    requests: &Receiver<(u64, Control)>,
+    requests: &Requests,
     progress: &AtomicBool,
 ) {
     let Some(manager) = Manager::RequestAsync().ok().and_then(complete) else {
@@ -513,7 +680,6 @@ fn run(
         if dirty & SESSION != 0 {
             let session = manager.GetCurrentSession().ok();
             if session.as_ref() != current.as_ref().map(|active| &active.session) {
-                generation = generation.wrapping_add(1);
                 current = session.map(|session| Current::new(session, events));
                 dirty |= TRACK;
             }
@@ -526,6 +692,7 @@ fn run(
             if dirty & TRACK != 0
                 && let Some(current) = &mut current
             {
+                generation = generation.wrapping_add(1);
                 current.update_track();
             }
             let latest = current
@@ -547,16 +714,43 @@ fn run(
                 }
             }
         }
-        for (target, control) in requests.try_iter().take(4) {
+        let mut navigated = false;
+        for (target, control) in requests.buttons.try_iter().take(4) {
             if window.load(Ordering::Acquire) == 0 {
                 break;
             }
             if target == generation
+                && events.dirty.load(Ordering::Acquire) & (SESSION | TRACK) == 0
                 && let Some(active) = &current
                 && manager.GetCurrentSession().ok().as_ref() == Some(&active.session)
             {
                 active.command(control);
+                navigated |= matches!(control, Control::Previous | Control::Next);
             }
+        }
+        let seek = requests
+            .seek
+            .lock()
+            .ok()
+            .and_then(|mut mailbox| mailbox.pending.take());
+        if let Some(seek) = seek {
+            let accepted = if window.load(Ordering::Acquire) != 0
+                && !navigated
+                && seek.generation == generation
+                && events.dirty.load(Ordering::Acquire) & (SESSION | TRACK) == 0
+                && let Some(active) = &current
+                && manager.GetCurrentSession().ok().as_ref() == Some(&active.session)
+            {
+                active.seek(seek.fraction)
+            } else {
+                false
+            };
+            if let Ok(mut mailbox) = requests.seek.lock() {
+                mailbox.completed = Some((seek.serial, accepted));
+            }
+            // Read once after this user action, including rejection or a player
+            // that omits the timeline event. Never add a polling timer.
+            events.mark(TIMELINE);
         }
     }
     if let Some(token) = sessions_event {
@@ -571,6 +765,111 @@ fn run(
 mod native_probe {
     use super::*;
     use anyhow::Context;
+
+    #[test]
+    fn seeking_respects_nonzero_origins_player_limits_and_invalid_ranges() -> anyhow::Result<()> {
+        let range = SeekRange::new(100, 1100, 300, 900).context("seek range")?;
+        assert_eq!(range.position(0.0), Some(300));
+        assert_eq!(range.position(0.5), Some(600));
+        assert_eq!(range.position(1.0), Some(900));
+        assert_eq!(range.position(-10.0), Some(300));
+        assert_eq!(range.position(10.0), Some(900));
+        assert_eq!(range.position(f64::NAN), None);
+        assert_eq!(range.position(f64::INFINITY), None);
+        for (start, end, min, max) in [
+            (0, 0, 0, 0),
+            (10, 0, 0, 10),
+            (0, 100, 0, 0),
+            (0, 100, 90, 20),
+            (i64::MIN, i64::MAX, 0, 1),
+        ] {
+            assert!(SeekRange::new(start, end, min, max).is_none());
+        }
+        let timeline = Track::test_fixture().timeline.context("fixture")?;
+        let preview = timeline.preview(0.5);
+        assert_eq!(
+            preview.position_at(Instant::now() + Duration::from_secs(90)),
+            Duration::from_secs(120)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn seek_mailbox_keeps_only_the_latest_destination_and_rejects_unavailable_progress()
+    -> anyhow::Result<()> {
+        let track = Track::test_fixture();
+        let watch = Watch::test_snapshot(track.clone());
+        let first = watch.seek(&track, 0.2).context("first seek")?;
+        let last = watch.seek(&track, 0.8).context("last seek")?;
+        assert!(last > first);
+        assert!(watch.seek(&track, f64::NAN).is_none());
+        assert!(watch.seek(&Track::default(), 0.5).is_none());
+        let mut mailbox = watch
+            .seek
+            .lock()
+            .map_err(|_| anyhow::anyhow!("mailbox poisoned"))?;
+        let request = mailbox.pending.take().context("latest destination")?;
+        assert_eq!(request.serial, last);
+        assert_eq!(request.fraction, 0.8);
+        assert_eq!(request.generation, track.generation);
+        assert!(mailbox.pending.is_none());
+        mailbox.completed = Some((last, true));
+        drop(mailbox);
+        assert_eq!(watch.seek_result(last), Some(true));
+        Ok(())
+    }
+
+    #[test]
+    fn skipping_tracks_discards_a_queued_seek_but_pausing_does_not() -> anyhow::Result<()> {
+        let track = Track::test_fixture();
+        let mut watch = Watch::test_snapshot(track.clone());
+        let (commands, requests) = mpsc::sync_channel(4);
+        watch.commands = commands;
+        watch.seek(&track, 0.8).context("queued seek")?;
+        watch.send(&track, Control::Next);
+        assert!(matches!(requests.try_recv(), Ok((_, Control::Next))));
+        assert!(
+            watch
+                .seek
+                .lock()
+                .map_err(|_| anyhow::anyhow!("mailbox poisoned"))?
+                .pending
+                .is_none()
+        );
+        let serial = watch.seek(&track, 0.4).context("seek while paused")?;
+        watch.send(&track, Control::PlayPause);
+        assert!(
+            watch
+                .seek
+                .lock()
+                .map_err(|_| anyhow::anyhow!("mailbox poisoned"))?
+                .pending
+                .is_some_and(|request| request.serial == serial)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn seeks_are_invalidated_by_track_changes_or_updated_seek_limits() {
+        let track = Track::test_fixture();
+        let mut next = track.clone();
+        next.generation += 1; // Same session and even the same title can be a new track.
+        assert!(!track.same_seek_target(&next));
+        next = track.clone();
+        if let Some(timeline) = &mut next.timeline {
+            timeline.seek = SeekRange::new(0, 2_400_000_000, 600_000_000, 2_400_000_000);
+        }
+        assert!(!track.same_seek_target(&next));
+        assert!(
+            track.same_content(&next),
+            "changing only range limits needs no visual rebuild"
+        );
+        next.timeline = None;
+        assert!(
+            !track.same_content(&next),
+            "losing seek support removes the interactive hit area"
+        );
+    }
 
     #[test]
     fn progress_uses_source_age_and_playback_rate_then_clamps_at_both_ends() -> anyhow::Result<()> {
@@ -649,6 +948,7 @@ mod native_probe {
                 dirty: Arc::new(AtomicU8::new(0)),
             },
             commands,
+            seek: Arc::new(Mutex::new(SeekMailbox::default())),
             progress: Arc::new(AtomicBool::new(false)),
         };
         watch.show_progress(false);
@@ -665,7 +965,12 @@ mod native_probe {
     fn a_position_update_does_not_invalidate_track_content_but_transport_changes_do() {
         let old = Track::test_fixture();
         let mut new = old.clone();
-        new.timeline = Timeline::new(0, 2_400_000_000, 840_000_000, Duration::ZERO, 1.0);
+        new.timeline = Timeline::new(0, 2_400_000_000, 840_000_000, Duration::ZERO, 1.0).map(
+            |mut timeline| {
+                timeline.seek = old.timeline.and_then(|timeline| timeline.seek);
+                timeline
+            },
+        );
         assert!(old.same_content(&new));
         new.playing = false;
         assert!(!old.same_content(&new));
