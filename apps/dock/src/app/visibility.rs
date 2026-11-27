@@ -75,6 +75,7 @@ impl App {
         let hidden = self.config.auto_hide || (self.config.smart_hide && self.smart_hidden);
         if hidden
             && (self.mascot.is_some()
+                || self.weather_holds_open()
                 || self.menu_open
                 || self.press.is_some()
                 || self.drag_over
@@ -525,6 +526,7 @@ impl App {
             eprintln!("muelle: nombre de la barra superior: {error:#}");
         }
         self.sync_companion();
+        self.sync_weather();
         Ok(())
     }
 

@@ -279,6 +279,7 @@ pub fn run() -> Result<()> {
             menu_open: false,
             mascot: None,
             companion: super::companion::State::default(),
+            weather: super::weather::State::default(),
             // Initial registration notifications establish the baseline after
             // the queue starts, without playing a startup charging/saver act.
             power_seen: None,

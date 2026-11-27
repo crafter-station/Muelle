@@ -47,6 +47,8 @@ function fixture(section = "menubar", config = {}, save = async () => {}, galler
   let stateIndex = 0, refIndex = 0, nextTimer = 0, close;
   const loaded = { ...base, ...config };
   const gallery = section === "gallery";
+  const weather = section === "weather";
+  const weatherCalls = [];
   const wallpaperCalls = [], wallpaperPreviews = [], clockPicks = [], mascotPreviews = [];
   const browser = {
     addEventListener(event, callback) { assert.ok(!listeners.has(event)); listeners.set(event, callback); },
@@ -59,7 +61,7 @@ function fixture(section = "menubar", config = {}, save = async () => {}, galler
     ...React,
     useState(initial) {
       const index = stateIndex++;
-      if (!(index in states)) states[index] = !gallery && index === 0 ? { ...loaded } : !gallery && initial === "dock" ? section : initial;
+      if (!(index in states)) states[index] = !gallery && !weather && index === 0 ? { ...loaded } : !gallery && !weather && initial === "dock" ? section : initial;
       return [states[index], (value) => { states[index] = typeof value === "function" ? value(states[index]) : value; }];
     },
     useRef(initial) { const index = refIndex++; return refs[index] ??= { current: initial }; },
@@ -77,6 +79,10 @@ function fixture(section = "menubar", config = {}, save = async () => {}, galler
     "@tauri-apps/api/window": { getCurrentWindow: () => nativeWindow },
     "@tauri-apps/api/core": { invoke: async (command, args) => {
       switch (command) {
+        case "locate_weather": weatherCalls.push("locate"); return galleryNative.locateWeather?.();
+        case "cancel_weather_location": weatherCalls.push("cancel"); return;
+        case "open_weather_location_settings": weatherCalls.push("privacy"); return;
+        case "open_weather_attribution": weatherCalls.push("source"); return;
         case "get_config": return { ...loaded };
         case "get_autostart": return false;
         case "windows_preferences": return { animations: true };
@@ -98,7 +104,7 @@ function fixture(section = "menubar", config = {}, save = async () => {}, galler
     const module = { exports: {} };
     modules.set(filename, module);
     compiled.get(filename)((id) => {
-      if (id === "react" && (filename === path.join(source, "App.tsx") || gallery && filename === path.join(source, "WallpaperGallery.tsx"))) return hooks;
+      if (id === "react" && (filename === path.join(source, "App.tsx") || gallery && filename === path.join(source, "WallpaperGallery.tsx") || weather && filename === path.join(source, "WeatherSettings.tsx"))) return hooks;
       if (id in mocks) return mocks[id];
       if (!id.startsWith(".")) return require(id);
       const resolved = path.resolve(path.dirname(filename), id);
@@ -108,19 +114,21 @@ function fixture(section = "menubar", config = {}, save = async () => {}, galler
   }
   const { App } = load(path.join(source, "App.tsx"));
   const { WallpaperGallery } = load(path.join(source, "WallpaperGallery.tsx"));
+  const { WeatherSettings } = load(path.join(source, "WeatherSettings.tsx"));
   function render() {
     stateIndex = refIndex = 0; effects.length = 0;
-    return gallery ? WallpaperGallery({ texts: texts[loaded.language], onApplied: (preview) => wallpaperPreviews.push(preview) }) : App();
+    return gallery ? WallpaperGallery({ texts: texts[loaded.language], onApplied: (preview) => wallpaperPreviews.push(preview) })
+      : weather ? WeatherSettings({ config: loaded, texts: texts[loaded.language], onChange: (patch) => { Object.assign(loaded, patch); calls.push(patch); } }) : App();
   }
   function find(predicate) { const node = [...elements(render())].find(predicate); assert.ok(node); return node; }
   return {
-    calls, timers, render, themes: nativeWindow.themes, wallpaperCalls, wallpaperPreviews, clockPicks, mascotPreviews,
+    calls, timers, render, themes: nativeWindow.themes, wallpaperCalls, wallpaperPreviews, clockPicks, mascotPreviews, weatherCalls,
     external(patch) { Object.assign(loaded, patch); },
     async focus() { listeners.get("focus")?.(); await settle(); },
     async mount() { render(); const cleanup = effects.map((effect) => effect()); await settle(); return () => cleanup.forEach((fn) => fn?.()); },
     change(label, value) { find((node) => node.props.label === label && typeof node.props.onChange === "function").props.onChange(value); },
     button(text) { find((node) => node.type === "button" && node.props.children === text).props.onClick(); },
-    body() { return gallery ? render() : find((node) => node.props.className === "content-body"); },
+    body() { return gallery || weather ? render() : find((node) => node.props.className === "content-body"); },
     fire(delay) { for (const [id, timer] of [...timers]) if (timer.delay === delay) { timers.delete(id); timer.callback(); } },
     async close() { let prevented = false; await close({ preventDefault() { prevented = true; } }); return prevented; },
   };
@@ -229,6 +237,7 @@ test("retired Windows status-item overrides expose no controls and create no sav
     try {
       const controls = [...elements(view.body())].filter((node) => "checked" in node.props);
       assert.deepEqual(controls.map((node) => node.props.label), [texts[language].menuBarShow,
+        texts[language].menuBarAllDisplays,
         texts[language].menuBarMusic, texts[language].aiUsage,
         texts[language].accessoryBattery, texts[language].menuBarSystemMonitor,
         texts[language].menuBarNotifications]);
@@ -682,5 +691,73 @@ test("language uses one dropdown and changing it preserves other preferences", a
       view.change(texts[other].language, language);
       view.fire(60); await settle();
     }
+  }
+});
+
+
+test("weather is opt-in and ignores a late location after disabling", async () => {
+  let resolve;
+  const view = fixture("weather", {}, undefined, { locateWeather: () => new Promise((done) => { resolve = done; }) });
+  const unmount = await view.mount();
+  try {
+    assert.deepEqual(view.weatherCalls, []);
+    assert.equal(view.timers.size, 0);
+    view.change(texts.en.weatherShow, true);
+    assert.deepEqual(view.weatherCalls, ["locate"]);
+    view.change(texts.en.weatherShow, false);
+    resolve({ latitudeE2: 3872, longitudeE2: -914, updatedAt: 123 });
+    await settle();
+    assert.deepEqual(view.calls, [{ weather: true }, { weather: false, weatherLocation: null }]);
+    assert.deepEqual(view.weatherCalls, ["locate", "cancel"]);
+  } finally { unmount(); }
+});
+
+test("quick weather off/on serializes location prompts and keeps only the latest fix", async () => {
+  const resolvers = [];
+  const view = fixture("weather", {}, undefined, { locateWeather: () => new Promise((done) => resolvers.push(done)) });
+  const unmount = await view.mount();
+  try {
+    view.change(texts.en.weatherShow, true);
+    view.change(texts.en.weatherShow, false);
+    view.change(texts.en.weatherShow, true);
+    assert.equal(resolvers.length, 1);
+    resolvers[0]({ latitudeE2: 100, longitudeE2: 100, updatedAt: 123 });
+    await settle();
+    assert.equal(resolvers.length, 2);
+    const latest = { latitudeE2: 3872, longitudeE2: -914, updatedAt: Math.floor(Date.now()/1000) };
+    resolvers[1](latest);
+    await settle();
+    assert.deepEqual(view.calls.at(-1), { weatherLocation: latest });
+    assert.ok(!view.calls.some((patch) => patch.weatherLocation?.latitudeE2 === 100));
+  } finally { unmount(); }
+});
+
+test("weather permission denial has recovery controls and never invents a location", async () => {
+  const view = fixture("weather", {}, undefined, { locateWeather: async () => { throw "denied"; } });
+  const unmount = await view.mount();
+  try {
+    view.change(texts.en.weatherShow, true);
+    await settle();
+    assert.deepEqual(view.calls.at(-1), { weatherLocation: null });
+    const html = renderToStaticMarkup(view.body());
+    assert.ok(html.includes(texts.en.weatherDenied));
+    view.button(texts.en.weatherLocationPrivacy);
+    await settle();
+    assert.deepEqual(view.weatherCalls, ["locate", "privacy"]);
+    assert.equal(view.timers.size, 0);
+  } finally { unmount(); }
+});
+
+test("fresh weather locations are reused and old fixes refresh only while Settings is open", async () => {
+  const now = Math.floor(Date.now()/1000);
+  for (const age of [0, 7*3600]) {
+    const location = { latitudeE2: 3872, longitudeE2: -914, updatedAt: now-age };
+    const view = fixture("weather", { weather: true, weatherLocation: location }, undefined,
+      { locateWeather: async () => ({ ...location, updatedAt: now }) });
+    const unmount = await view.mount();
+    try {
+      assert.deepEqual(view.weatherCalls, age ? ["locate"] : []);
+      assert.equal(view.timers.size, 0);
+    } finally { unmount(); }
   }
 });

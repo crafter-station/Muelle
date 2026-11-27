@@ -28,6 +28,8 @@ mod preferences;
 mod previews;
 mod rendering;
 mod visibility;
+mod weather;
+pub(crate) use weather::signal as weather_signal;
 
 use std::{
     cell::RefCell,
@@ -472,6 +474,7 @@ impl PreviewOrder {
 }
 
 enum MenuTarget {
+    Weather,
     Entry {
         id: String,
         role: Role,
@@ -776,6 +779,7 @@ pub(crate) struct App {
     /// The crab, while it is out (see `perform`).
     mascot: Option<mascot::Mascot>,
     companion: companion::State,
+    weather: weather::State,
     /// Charging and energy saver at the last power change.
     power_seen: Option<(Option<bool>, bool)>,
     /// When the charger act last played.

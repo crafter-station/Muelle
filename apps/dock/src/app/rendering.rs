@@ -121,6 +121,9 @@ impl App {
         if let Some(group) = &self.group_view {
             group.refresh_backdrops(&self.gfx)?;
         }
+        if let Some(card) = &self.weather.card {
+            card.refresh_backdrops(&self.gfx)?;
+        }
         Ok(())
     }
 
@@ -504,7 +507,11 @@ impl App {
         } else {
             &stage.rest_zone
         };
-        place(self.input, input_zone, visible)
+        place(self.input, input_zone, visible)?;
+        if let Some(card) = &self.weather.card {
+            card.raise();
+        }
+        Ok(())
     }
 
     pub(super) fn schedule_trim(&self) {
@@ -520,6 +527,7 @@ impl App {
 
     pub(super) fn render(&mut self) -> Result<()> {
         self.sync_companion();
+        self.sync_weather();
         let Some(stage) = &mut self.stage else {
             return Ok(());
         };

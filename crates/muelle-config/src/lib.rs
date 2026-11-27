@@ -346,19 +346,26 @@ impl std::fmt::Debug for WeatherLocation {
 
 impl WeatherLocation {
     pub fn from_degrees(latitude: f64, longitude: f64, updated_at: u64) -> Option<Self> {
-        if !latitude.is_finite() || !longitude.is_finite()
-            || !(-90.0..=90.0).contains(&latitude) || !(-180.0..=180.0).contains(&longitude) {
+        if !latitude.is_finite()
+            || !longitude.is_finite()
+            || !(-90.0..=90.0).contains(&latitude)
+            || !(-180.0..=180.0).contains(&longitude)
+        {
             return None;
         }
-        let location = Self { latitude_e2: (latitude * 100.0).round() as i32,
-            longitude_e2: (longitude * 100.0).round() as i32, updated_at };
+        let location = Self {
+            latitude_e2: (latitude * 100.0).round() as i32,
+            longitude_e2: (longitude * 100.0).round() as i32,
+            updated_at,
+        };
         location.valid().then_some(location)
     }
 
     pub fn valid(self) -> bool {
         (-9000..=9000).contains(&self.latitude_e2)
             && (-18000..=18000).contains(&self.longitude_e2)
-            && self.updated_at > 0 && self.updated_at < 253_402_300_800
+            && self.updated_at > 0
+            && self.updated_at < 253_402_300_800
     }
 }
 
@@ -581,6 +588,24 @@ fn write_config(path: &Path, config: &Config) -> Result<(), ConfigError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn weather_is_opt_in_and_saves_only_a_valid_coarse_fix() -> Result<(), serde_json::Error> {
+        let older: super::Config = serde_json::from_str("{}")?;
+        assert!(!older.weather && older.weather_location.is_none());
+        let location = super::WeatherLocation::from_degrees(38.72237, -9.13931, 1_795_680_000);
+        let Some(location) = location else {
+            panic!("valid weather coordinate");
+        };
+        assert_eq!(location.latitude_e2, 3872);
+        assert_eq!(location.longitude_e2, -914);
+        assert!(!format!("{location:?}").contains("3872"));
+        assert!(super::WeatherLocation::from_degrees(f64::NAN, 0.0, 1).is_none());
+        let invalid: super::Config = serde_json::from_str(
+            r#"{"weather":true,"weatherLocation":{"latitudeE2":9001,"longitudeE2":0,"updatedAt":1}}"#,
+        )?;
+        assert!(invalid.sanitized().weather_location.is_none());
+        Ok(())
+    }
     use super::*;
 
     #[test]

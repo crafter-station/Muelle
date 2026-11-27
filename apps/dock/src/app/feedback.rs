@@ -332,6 +332,7 @@ impl App {
             muelle_shell::system::energy_saver_on(),
         );
         let before = self.power_seen.replace(now);
+        self.sync_weather();
         let charging_allowed = self
             .charging_shown
             .is_none_or(|shown| shown.elapsed() >= CHARGING_AGAIN);

@@ -16,12 +16,13 @@ use windows::{
 };
 use windows_numerics::{Vector2, Vector3};
 
+const INITIAL_REST: Duration = Duration::from_secs(6);
 const WALK: Duration = Duration::from_secs(3);
 const BLINK: Duration = Duration::from_millis(180);
 const SMILE: Duration = Duration::from_millis(1200);
 
-/// The resting beats are intentionally long and different. No endless bounce
-/// or full-Dock patrol, no pretend AI/battery status, and no idle-input reads.
+/// Short, varied pauses keep the companion visibly alive without continuous
+/// animation, pretend status changes or idle-input reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Beat {
     Rest(u8),
@@ -33,14 +34,14 @@ enum Beat {
 impl Beat {
     fn next(self) -> (Self, Duration) {
         match self {
-            Self::Rest(0) => (Self::Blink, BLINK),
-            Self::Blink => (Self::Rest(1), Duration::from_secs(36)),
-            Self::Rest(1) => (Self::Walk(true), WALK),
-            Self::Walk(true) => (Self::Rest(2), Duration::from_secs(42)),
+            Self::Rest(0) => (Self::Walk(true), WALK),
+            Self::Walk(true) => (Self::Rest(1), Duration::from_secs(8)),
+            Self::Rest(1) => (Self::Blink, BLINK),
+            Self::Blink => (Self::Rest(2), Duration::from_secs(14)),
             Self::Rest(2) => (Self::Smile, SMILE),
-            Self::Smile => (Self::Rest(3), Duration::from_secs(28)),
+            Self::Smile => (Self::Rest(3), Duration::from_secs(10)),
             Self::Rest(_) => (Self::Walk(false), WALK),
-            Self::Walk(false) => (Self::Rest(0), Duration::from_secs(24)),
+            Self::Walk(false) => (Self::Rest(0), Duration::from_secs(12)),
         }
     }
 }
@@ -160,7 +161,7 @@ impl Companion {
         self.reset_pose()?;
         self.beat = Beat::Rest(0);
         self.motion = enabled;
-        Ok(enabled.then_some(Duration::from_secs(24)))
+        Ok(enabled.then_some(INITIAL_REST))
     }
 
     pub fn motion(&self) -> bool {
@@ -269,7 +270,26 @@ mod tests {
         }
         assert_eq!(beat, Beat::Rest(0));
         assert_eq!(walks, [true, false]);
-        assert!(rest > active * 15);
+        assert!(rest > active * 5);
+    }
+
+    #[test]
+    fn the_first_action_is_a_walk_within_ten_seconds() {
+        let (beat, _) = Beat::Rest(0).next();
+        assert!(
+            INITIAL_REST <= Duration::from_secs(10) && beat == Beat::Walk(true),
+            "the first visible activity must not be a blink that is easy to miss"
+        );
+    }
+
+    #[test]
+    fn idle_actions_never_leave_more_than_fifteen_seconds_of_rest() {
+        let mut beat = Beat::Rest(0);
+        for _ in 0..16 {
+            let (next, delay) = beat.next();
+            assert!(delay <= Duration::from_secs(15));
+            beat = next;
+        }
     }
 
     #[test]
@@ -339,8 +359,11 @@ mod tests {
                     let retained = poses.First()?.Current()?;
                     assert_eq!(view.set_motion(false)?, None);
                     assert_eq!(view.advance(&gfx)?, None);
-                    assert_eq!(view.set_motion(true)?, Some(Duration::from_secs(24)));
-                    for _ in 0..8 {
+                    assert_eq!(view.set_motion(true)?, Some(INITIAL_REST));
+                    assert_eq!(view.advance(&gfx)?, Some(WALK));
+                    assert_eq!(view.beat, Beat::Walk(true));
+                    assert_eq!(view.x, view.left);
+                    for _ in 1..8 {
                         assert!(view.advance(&gfx)?.is_some());
                     }
                     assert_eq!(view.beat, Beat::Rest(0));

@@ -10,9 +10,12 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
-- Weather groundwork only: isolated forecast client, bounded in-memory cache
-  and demand-driven refresh policy. No Dock card, Settings control or automatic
-  location/network activity is enabled in this first phase.
+- Optional weather card beside the Dock, with current conditions, temperature
+  and a compact layout on crowded displays. Follows the selected material and
+  Dock visibility. Settings requests an approximate Windows location with
+  consent; no continuous tracking. Refreshes every 30 min (60 in energy saver)
+  while visible, with caching and bounded workers. Hourly/daily popup UI is
+  reserved for the next phase.
 
 - Optional persistent mascot for all six characters: rests on the visible Dock,
   blinks and takes short walks between events. Yields to Dock interactions and
@@ -47,9 +50,12 @@ copia la sección de la versión que se publica a la release de GitHub.
   bar at its own scale, keeps its own strip for maximized windows and hides on
   its own (full screen, automatic or intelligent hiding, revealed at its own
   top edge). The app name is dimmed on the displays where that app is not. The
-  copies read nothing themselves: they draw what the primary bar reads, and
-  popups open on the primary bar. Settings → Menu bar → *On every display*, on
-  by default.
+  copies read nothing themselves: they draw what the primary bar reads and
+  borrow its player, volume and usage readers when used, so their music, AI
+  usage and volume popups open and work on their own display, one popup at a
+  time. Windows' own flyouts (quick settings, notifications, networks) still
+  open where Windows puts them, on the primary display. Settings → Menu bar →
+  *On every display*, on by default.
 - Moving the Dock to another display with the pointer no longer flashes the
   old Dock, at the other display's scale, before it slides in: the Dock's
   window stays out of view until its new content is on screen.
@@ -61,9 +67,11 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
-- Primera fase del clima: cliente aislado, caché en memoria acotada y política
-  de actualización bajo demanda. Esta fase aún no activa tarjeta, control en
-  Ajustes ni actividad automática de ubicación o red.
+- Tarjeta de clima opcional junto al Dock, con condición, temperatura y formato
+  compacto si falta espacio. Sigue el material y la visibilidad del Dock.
+  Ajustes solicita una ubicación aproximada de Windows con permiso, sin
+  seguimiento continuo. Actualiza cada 30 min (60 en ahorro) mientras es visible,
+  con caché y trabajador acotado. El popup por horas y días llega en la siguiente fase.
 
 - Mascota permanente opcional para los seis personajes: descansa sobre el Dock
   visible, parpadea y da paseos cortos entre eventos. Cede ante la interacción
@@ -100,9 +108,13 @@ copia la sección de la versión que se publica a la release de GitHub.
   maximizadas y se oculta por su cuenta (pantalla completa, ocultación
   automática o inteligente, y se revela en su propio borde superior). El
   nombre de la app se atenúa en las pantallas donde no está. Las copias no
-  leen nada por sí mismas: dibujan lo que lee la barra principal, y los
-  paneles se abren en la principal. Ajustes → Barra superior → *En todas las
-  pantallas*, activado por defecto.
+  leen nada por sí mismas: dibujan lo que lee la barra principal y toman
+  prestados sus lectores de reproducción, volumen y uso al usarlas, así que
+  sus paneles de música, uso de IA y volumen se abren y funcionan en su propia
+  pantalla, uno a la vez. Los paneles propios de Windows (ajustes rápidos,
+  notificaciones, redes) se siguen abriendo donde los pone Windows, en la
+  pantalla principal. Ajustes → Barra superior → *En todas las pantallas*,
+  activado por defecto.
 - Al llevar el Dock a otra pantalla con el puntero ya no destella el Dock
   anterior, a la escala de la otra pantalla, antes de entrar deslizándose: la
   ventana del Dock queda fuera de la vista hasta que su contenido nuevo está

@@ -45,7 +45,7 @@ export function WeatherSettings({ config, texts: t, onChange }: {
     return () => {
       mounted.current = false;
       generation.current += 1;
-      void cancelWeatherLocation().catch(() => {});
+      if (pending.current) void cancelWeatherLocation().catch(() => {});
     };
   }, []);
 
@@ -66,7 +66,7 @@ export function WeatherSettings({ config, texts: t, onChange }: {
     setStatus("");
     onChange(enabled ? { weather: true } : { weather: false, weatherLocation: null });
     if (enabled) locate();
-    else void cancelWeatherLocation().catch(() => {});
+    else if (pending.current) void cancelWeatherLocation().catch(() => {});
   };
   const message = status === "locating" ? t.weatherLocating
     : status === "denied" ? t.weatherDenied
@@ -80,6 +80,7 @@ export function WeatherSettings({ config, texts: t, onChange }: {
     </Row>
     <SubRow label={t.weatherLocation} hint={message} open={!!config.weather} stacked>
       <div className="weather-settings-actions" aria-live="polite">
+        <span className="sr-only" role="status">{message}</span>
         <button type="button" className="push" disabled={status === "locating"}
           onClick={() => { generation.current += 1; locate(); }}>{t.weatherUpdateLocation}</button>
         {status && status !== "locating" ? <button type="button" className="push"

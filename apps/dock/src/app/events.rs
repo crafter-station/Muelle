@@ -682,6 +682,14 @@ pub(super) unsafe extern "system" fn wndproc(
             with_app_then("arrastre sobre una app", App::spring_open);
         }
         WM_TIMER if w.0 == MASCOT_TIMER => with_app("mascota", App::mascot_tick),
+        super::weather::READY => with_app("datos del clima", App::weather_ready),
+        super::weather::NETWORK => with_app("red del clima", App::weather_network),
+        super::weather::EVENT => with_app_then("tarjeta del clima", |app| {
+            app.weather_event(HWND(l.0 as *mut _), w.0)
+        }),
+        WM_TIMER if w.0 == super::weather::TIMER => {
+            with_app("actualización del clima", App::weather_tick)
+        }
         WM_TIMER if w.0 == super::COMPANION_TIMER => {
             with_app("mascota en reposo", App::companion_tick)
         }
@@ -691,12 +699,14 @@ pub(super) unsafe extern "system" fn wndproc(
         WM_WTSSESSION_CHANGE if w.0 == WTS_SESSION_LOCK as usize => {
             with_app("pausar mascota", |app| {
                 app.companion_locked(true);
+                app.weather_locked(true);
                 Ok(())
             });
         }
         WM_WTSSESSION_CHANGE if w.0 == WTS_SESSION_UNLOCK as usize => {
             with_app("desbloqueo", |app| {
                 app.companion_locked(false);
+                app.weather_locked(false);
                 app.arm_welcome();
                 Ok(())
             });

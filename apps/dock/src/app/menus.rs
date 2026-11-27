@@ -478,6 +478,9 @@ impl App {
         target: MenuTarget,
         command: u32,
     ) -> Result<Option<Outside>> {
+        if matches!(&target, MenuTarget::Weather) {
+            return self.weather_command(command);
+        }
         let MenuTarget::Entry {
             id,
             role,

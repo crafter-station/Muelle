@@ -132,6 +132,7 @@ impl Fixture {
             menu_open: false,
             mascot: None,
             companion: super::super::companion::State::default(),
+            weather: super::super::weather::State::default(),
             // Initial registration notifications establish the baseline after
             // the queue starts, without playing a startup charging/saver act.
             power_seen: None,
@@ -291,4 +292,75 @@ fn flyouts_keep_the_dock_as_it_was_and_the_desktop_shows_it() {
         // A flyout or a launcher's popup (from the menu bar) changes nothing.
         assert_eq!(smart_covered(None, false, was_hidden), was_hidden);
     }
+}
+
+#[test]
+#[ignore = "Offscreen weather input only; no network, location or live Dock changes"]
+fn native_weather_hover_keeps_the_dock_open_and_disabling_releases_it() -> Result<()> {
+    use crate::{
+        appearance::{Look, Material},
+        gfx::WeatherGlyph,
+        weather::{Card, Key, Model, Placement},
+    };
+    use windows::Win32::Foundation::RECT;
+    let _queue = queue()?;
+    let mut fixture = Fixture::new()?;
+    let app = &mut fixture.app;
+    app.config.weather = true;
+    app.config.auto_hide = true;
+    app.config.smart_hide = false;
+    app.slide = Spring::at(0.0, 24.0);
+    let key = Key {
+        placement: Placement {
+            bounds: RECT {
+                left: -32000,
+                top: -32000,
+                right: -31760,
+                bottom: -31942,
+            },
+            compact: false,
+        },
+        look: Look {
+            material: Material::Standard,
+            light: false,
+            glass: false,
+        },
+        scale: 1.0,
+        revision: 0,
+        language: muelle_config::Language::En,
+    };
+    app.weather.card = Some(Card::new(
+        &app.gfx,
+        key,
+        &Model {
+            degrees: "17°".into(),
+            title: "Partly cloudy".into(),
+            subtitle: "Current location".into(),
+            glyph: WeatherGlyph::PartlyCloudy,
+        },
+    )?);
+    let source = app
+        .weather
+        .card
+        .as_ref()
+        .map(Card::hwnd)
+        .unwrap_or_default();
+    app.weather_event(app.input, 1)?;
+    assert!(
+        !app.weather_holds_open(),
+        "ignore an event from a stale/foreign input window"
+    );
+    app.weather_event(source, 1)?;
+    app.hide_if_unused()?;
+    assert!(app.weather_holds_open());
+    assert_eq!(app.slide.target, 0.0);
+    app.weather_event(source, 0)?;
+    app.hide_if_unused()?;
+    assert!(!app.weather_holds_open());
+    assert_eq!(app.slide.target, 1.0);
+    app.config.weather = false;
+    app.sync_weather();
+    assert!(app.weather.card.is_none());
+    assert!(!app.weather_holds_open());
+    Ok(())
 }
