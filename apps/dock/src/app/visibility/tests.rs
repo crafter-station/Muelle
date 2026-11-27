@@ -354,6 +354,16 @@ fn native_weather_hover_keeps_the_dock_open_and_disabling_releases_it() -> Resul
     app.hide_if_unused()?;
     assert!(app.weather_holds_open());
     assert_eq!(app.slide.target, 0.0);
+    app.weather_after_menu(source);
+    assert!(
+        app.weather_holds_open(),
+        "restore tracking when a menu releases capture"
+    );
+    app.weather_after_menu(app.input);
+    assert!(
+        !app.weather_holds_open(),
+        "moving to another window must release the weather hold"
+    );
     app.weather_event(source, 0)?;
     app.hide_if_unused()?;
     assert!(!app.weather_holds_open());

@@ -93,14 +93,13 @@ impl App {
             && self.slide.is_settled()
             && self.preview.is_none()
             && self.group_view.is_none()
-            && !self.menu_open
             && self.drag.is_none()
             && !self.drag_over
             && !self.switching
     }
     fn weather_demand(&self) -> Demand {
         Demand {
-            visible: self.weather_visible() && self.weather.card.is_some(),
+            visible: self.weather_visible() && self.weather.card.is_some() && !self.menu_open,
             online: self.weather.online,
             energy_saver: self.power_seen.is_some_and(|(_, saver)| saver),
         }
@@ -428,6 +427,13 @@ impl App {
             SETTINGS => Some(Outside::OpenSettings),
             _ => None,
         })
+    }
+    pub(super) fn weather_after_menu(&mut self, pointer: HWND) {
+        self.weather.hovering = self
+            .weather
+            .card
+            .as_ref()
+            .is_some_and(|card| card.track_after_menu(pointer == card.hwnd()));
     }
 }
 

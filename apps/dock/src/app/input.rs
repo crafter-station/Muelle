@@ -122,11 +122,15 @@ impl App {
         self.menu_open = false;
         let mut point = POINT::default();
         // SAFETY: Read-only queries.
-        let over = unsafe {
-            GetCursorPos(&mut point).is_ok()
-                && windows::Win32::UI::WindowsAndMessaging::WindowFromPoint(point) == self.input
+        let pointer = unsafe {
+            if GetCursorPos(&mut point).is_ok() {
+                windows::Win32::UI::WindowsAndMessaging::WindowFromPoint(point)
+            } else {
+                HWND::default()
+            }
         };
-        if over {
+        self.weather_after_menu(pointer);
+        if pointer == self.input {
             self.on_mouse_move()
         } else {
             self.on_mouse_leave()

@@ -57,8 +57,9 @@ export function WeatherSettings({ config, texts: t, onChange }: {
       if (pending.current) void cancelWeatherLocation().catch(() => {});
       return;
     }
+    if (status && status !== "locating") return;
     if (!config.weatherLocation || Date.now() / 1000 - config.weatherLocation.updatedAt > 6 * 3600) locate();
-  }, [config.weather, config.weatherLocation, locate]);
+  }, [config.weather, config.weatherLocation, locate, status]);
 
   const toggle = (enabled: boolean) => {
     generation.current += 1;

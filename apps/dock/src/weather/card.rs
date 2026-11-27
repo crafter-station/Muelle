@@ -117,6 +117,26 @@ impl Card {
     pub fn hwnd(&self) -> HWND {
         self.hwnd
     }
+    pub fn track_after_menu(&self, inside: bool) -> bool {
+        // A modal menu held capture. Re-arm leave tracking once after it closes,
+        // so a stationary pointer does not either hide or pin the Dock forever.
+        unsafe {
+            SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
+            if inside {
+                let mut tracking = TRACKMOUSEEVENT {
+                    cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: self.hwnd,
+                    dwHoverTime: 0,
+                };
+                if TrackMouseEvent(&mut tracking).is_ok() {
+                    SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 1);
+                    return true;
+                }
+            }
+        }
+        false
+    }
     pub fn raise(&self) {
         // The Dock's larger invisible magnification window must not sit over
         // this card's input. Only called with existing Dock placement work.
