@@ -10,18 +10,17 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
-- With intelligent hiding, opening Windows Search, the notification center,
-  quick settings, the notification area flyout or a launcher from the menu bar
-  no longer brings the Dock up over the app in front: such windows keep the
-  Dock as it was. The desktop still shows it.
+- The volume icon in the menu bar opens a volume slider under it, with the
+  percentage and a mute button, as the music panel shows them; another click
+  closes it. Without an output device it still opens Windows' sound page
+  (issue #55).
 
 ### Español
 
-- Con la ocultación inteligente, abrir desde la barra superior la búsqueda de
-  Windows, el centro de notificaciones, la configuración rápida, el menú del
-  área de notificación o un lanzador ya no hace aparecer el Dock sobre la app
-  del frente: esas ventanas lo dejan como estaba. El escritorio sigue
-  mostrándolo.
+- El icono de volumen de la barra superior abre un control deslizante debajo,
+  con el porcentaje y un botón de silencio, como en el panel de música; otro
+  clic lo cierra. Sin dispositivo de salida sigue abriendo la página de sonido
+  de Windows (issue #55).
 
 ## [0.1.26]
 
