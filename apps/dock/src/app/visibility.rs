@@ -11,7 +11,7 @@ use muelle_shell::{
     taskbar, tracker,
 };
 use windows::Win32::{
-    Foundation::{POINT, RECT},
+    Foundation::{HWND, POINT, RECT},
     UI::{
         Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON},
         WindowsAndMessaging::{GetCursorPos, KillTimer, SetTimer},
@@ -27,6 +27,21 @@ use super::{
     App, EDGE_TIMER, FULLSCREEN_RECHECK_MS, FULLSCREEN_TIMER, HIDE_DELAY_MS, HIDE_TIMER,
     HOVER_OMEGA, millis,
 };
+
+/// Whether intelligent hiding keeps the dock away, from what is in front:
+/// `Some(overlaps)` for an app the dock shows, which hides it when it reaches
+/// into the dock. The desktop shows it. Anything else (Windows Search, the
+/// notification center, quick settings, the notification area flyout, a
+/// launcher such as Command Palette, mostly opened from the menu bar) comes
+/// and goes over the app that stays, so it keeps the dock as it was instead
+/// of bringing it up over that app.
+fn smart_covered(app_overlap: Option<bool>, desktop: bool, was_hidden: bool) -> bool {
+    match app_overlap {
+        Some(overlaps) => overlaps,
+        None if desktop => false,
+        None => was_hidden,
+    }
+}
 
 pub(super) fn rects_overlap(a: RECT, b: RECT) -> bool {
     a.left < a.right
@@ -258,22 +273,30 @@ impl App {
             && self.config.smart_hide
             && self.stage.as_ref().is_some_and(|stage| {
                 let front = tracker::foreground_window();
-                if !self.windows.iter().any(|window| window.hwnd == front) {
-                    return false;
-                }
-                // What shows of it: its invisible resize borders reaching
-                // into the dock must not hide it.
-                tracker::visible_rect(front).is_some_and(|rect| {
-                    rects_overlap(
-                        stage.screen_rect(Rect {
-                            x: 0.0,
-                            y: 0.0,
-                            width: stage.layout.width,
-                            height: stage.layout.height,
-                        }),
-                        rect,
-                    )
-                })
+                let app_overlap =
+                    self.windows
+                        .iter()
+                        .any(|window| window.hwnd == front)
+                        .then(|| {
+                            // What shows of it: its invisible resize borders
+                            // reaching into the dock must not hide it.
+                            tracker::visible_rect(front).is_some_and(|rect| {
+                                rects_overlap(
+                                    stage.screen_rect(Rect {
+                                        x: 0.0,
+                                        y: 0.0,
+                                        width: stage.layout.width,
+                                        height: stage.layout.height,
+                                    }),
+                                    rect,
+                                )
+                            })
+                        });
+                smart_covered(
+                    app_overlap,
+                    tracker::is_wallpaper(HWND(front as *mut _)),
+                    self.smart_hidden,
+                )
             });
         if covered != self.smart_hidden {
             self.smart_hidden = covered;
