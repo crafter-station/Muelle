@@ -20,9 +20,7 @@ use windows::{
         Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         System::{LibraryLoader::GetModuleHandleW, WinRT::Composition::ICompositorDesktopInterop},
         UI::{
-            Input::KeyboardAndMouse::{
-                GetCapture, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_SHIFT,
-            },
+            Input::KeyboardAndMouse::{GetCapture, ReleaseCapture, SetCapture, SetFocus},
             WindowsAndMessaging::*,
         },
     },
@@ -30,9 +28,6 @@ use windows::{
 };
 
 pub const CLOSE: isize = -1;
-pub const NEXT: isize = -2;
-pub const PREVIOUS: isize = -3;
-pub const ACTIVATE: isize = -4;
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct Context {
@@ -63,8 +58,6 @@ pub struct Popup {
     context: Context,
     layout: Layout,
     view: view::View,
-    focus: Option<usize>,
-    pressed: Option<usize>,
     previous: HWND,
 }
 impl Popup {
@@ -100,8 +93,6 @@ impl Popup {
             context,
             layout,
             view,
-            focus: None,
-            pressed: None,
             previous: HWND::default(),
         };
         popup.target.SetRoot(&popup.view.root)?;
@@ -141,14 +132,10 @@ impl Popup {
         .ok_or_else(|| anyhow::anyhow!("weather popup cannot fit monitor"))?;
         if let Some(data) = data {
             self.context = context;
-            self.pressed = None;
             let view = view::build(gfx, context, layout, data)?;
             self.target.SetRoot(&view.root)?;
             self.view = view;
             self.caption(data)?;
-            if let Some(index) = self.focus {
-                self.view.focus[index].SetIsVisible(true)?;
-            }
         }
         if self.layout.bounds != layout.bounds {
             let r = layout.bounds;
@@ -182,41 +169,9 @@ impl Popup {
         Ok(())
     }
     pub fn action(&mut self, event: isize) -> Result<Option<usize>> {
-        match event {
-            NEXT | PREVIOUS => {
-                let next = match (self.focus, event) {
-                    (Some(index), NEXT) => (index + 1) % 3,
-                    (Some(index), _) => (index + 2) % 3,
-                    (None, NEXT) => 0,
-                    _ => 2,
-                };
-                if let Some(index) = self.focus {
-                    self.view.focus[index].SetIsVisible(false)?;
-                }
-                self.focus = Some(next);
-                self.view.focus[next].SetIsVisible(true)?;
-                Ok(None)
-            }
-            ACTIVATE => Ok(self.focus),
-            CLOSE => Ok(Some(0)),
-            down if down <= -16 => {
-                let point = (-16 - down) as u32;
-                self.pressed = self.layout.hit(POINT {
-                    x: (point & 0xffff) as i32,
-                    y: (point >> 16) as i32,
-                });
-                Ok(None)
-            }
-            click if click >= 0 => {
-                let hit = self.layout.hit(POINT {
-                    x: (click as u32 & 0xffff) as i32,
-                    y: ((click as u32 >> 16) & 0xffff) as i32,
-                });
-                let pressed = self.pressed.take();
-                Ok(hit.filter(|hit| pressed == Some(*hit)))
-            }
-            _ => Ok(None),
-        }
+        // This informational panel has no buttons. Escape, outside-click and
+        // focus-loss still dismiss it; clicks within the forecast do nothing.
+        Ok((event == CLOSE).then_some(0))
     }
     pub fn refresh_backdrops(&self, gfx: &Gfx) -> Result<()> {
         gfx.refresh_backdrops(&self.view.root)?;
@@ -304,32 +259,13 @@ unsafe extern "system" fn procedure(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
             }
             if point.x < 0 || point.y < 0 || point.x >= rect.right || point.y >= rect.bottom {
                 post(hwnd, CLOSE);
-            } else if msg == WM_LBUTTONDOWN {
-                post(hwnd, -16 - l.0 as u32 as isize);
             }
             return LRESULT(0);
         }
-        WM_LBUTTONUP => {
-            if point.x >= 0 && point.y >= 0 {
-                post(hwnd, l.0 as u32 as isize);
-            }
-            return LRESULT(0);
-        }
+        WM_LBUTTONUP => return LRESULT(0),
         WM_KEYDOWN => {
-            match w.0 {
-                0x1b => post(hwnd, CLOSE),
-                0x09 => post(
-                    hwnd,
-                    if unsafe { GetKeyState(i32::from(VK_SHIFT.0)) } < 0 {
-                        PREVIOUS
-                    } else {
-                        NEXT
-                    },
-                ),
-                0x25 | 0x26 => post(hwnd, PREVIOUS),
-                0x27 | 0x28 => post(hwnd, NEXT),
-                0x0d | 0x20 if l.0 & (1 << 30) == 0 => post(hwnd, ACTIVATE),
-                _ => {}
+            if w.0 == 0x1b {
+                post(hwnd, CLOSE);
             }
             return LRESULT(0);
         }
@@ -454,34 +390,11 @@ mod tests {
                         assert_eq!(backdrops(&popup.view.root)?, usize::from(glass));
                         assert_ne!(unsafe { GetForegroundWindow() }, hwnd);
                         assert_ne!(unsafe { GetCapture() }, hwnd);
-                        assert_eq!(popup.action(ACTIVATE)?, None);
-                        let point = POINT {
-                            x: (366.0 * popup.layout.scale) as i32,
-                            y: (30.0 * popup.layout.scale) as i32,
-                        };
-                        let click = (((point.y as u32) << 16) | point.x as u32) as isize;
-                        assert_eq!(
-                            popup.action(click)?,
-                            None,
-                            "a release alone must not activate a button"
-                        );
-                        popup.action(-16 - click)?;
-                        assert_eq!(popup.action(click)?, Some(0));
-                        popup.action(-16 - click)?;
-                        assert_eq!(
-                            popup.action(0)?,
-                            None,
-                            "release in another control/empty space cancels the press"
-                        );
-                        assert_eq!(
-                            popup.action(click)?,
-                            None,
-                            "a cancelled press must not remain armed"
-                        );
-                        popup.action(NEXT)?;
-                        assert_eq!(popup.action(ACTIVATE)?, Some(0));
-                        popup.action(PREVIOUS)?;
-                        assert_eq!(popup.action(ACTIVATE)?, Some(2));
+                        assert_eq!(popup.action(-4)?, None);
+                        assert_eq!(popup.action(0)?, None);
+                        assert_eq!(popup.action(-2)?, None);
+                        assert_eq!(popup.action(-3)?, None);
+                        assert_eq!(popup.action(-4)?, None);
                         let context = Context {
                             anchor: RECT {
                                 left: context.anchor.left + 20,
@@ -507,7 +420,6 @@ mod tests {
                         popup.update(&gfx, changed, Some(&data))?;
                         assert_eq!(backdrops(&popup.view.root)?, usize::from(!glass));
                         assert_eq!(popup.hwnd(), hwnd);
-                        assert!(popup.view.focus[2].IsVisible()?);
                         assert_eq!(popup.action(CLOSE)?, Some(0));
                         drop(popup);
                         assert!(!unsafe { IsWindow(Some(hwnd)) }.as_bool());

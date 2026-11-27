@@ -10,14 +10,21 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Weather uses automatic Windows location by default, with an optional saved
+  city in Settings → Dock → Weather. City search runs only on submission, with
+  bounded requests and stale-result protection. The forecast popup removes its
+  close button and footer actions; outside click and Escape still close it.
+  Provider attribution stays in Settings.
+
 - Weather explicitly releases its private Composition targets, brushes and
   drawing surfaces when closing/updating, and keeps pixel size stable during
-  fractional motion to avoid redundant rasterization.
+  fractional motion to avoid redundant rasterization. Coalesced idle maintenance
+  submits deferred drawing releases, preventing memory growth on repeated opens
+  without a GPU wait or per-frame flush.
 - Weather recovers after sleep, clock changes and temporary visual/network
   subscription failures, retaining backoff and one request at a time. Stable
   deadlines avoid rearming timers during animation. High contrast/screen-reader
-  users get a native textual forecast; popup buttons require a matching press
-  and release. Failure diagnostics omit location, URLs and response content.
+  users get a native textual forecast. Failure diagnostics omit location, URLs and response content.
 
 - Optional blue weather card inside the Dock, with current conditions,
   temperature and static sun/cloud illustrations. Reserves its own space,
@@ -79,14 +86,22 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
+- El clima usa por defecto la ubicación automática de Windows y permite elegir
+  una ciudad en Ajustes → Dock → Clima. La búsqueda solo consulta al enviarla,
+  con peticiones limitadas y descarte de respuestas antiguas. El popup elimina
+  la cruz y las acciones inferiores; sigue cerrándose con clic fuera y Esc.
+  Los créditos del proveedor quedan en Ajustes.
+
 - El clima libera expresamente sus targets, brushes y superficies de dibujo
   privados al cerrar/actualizar. Su tamaño en píxeles se mantiene estable
   durante el movimiento fraccional para evitar rasterizaciones innecesarias.
+  El mantenimiento de reposo agrupa la liberación gráfica diferida, evitando
+  crecimiento de memoria en aperturas repetidas sin esperar a la GPU ni vaciar
+  la cola en cada fotograma.
 - El clima se recupera tras suspensión, cambios de hora y fallos temporales de
   vista/suscripción de red, respetando backoff y una única petición. Los plazos
   estables evitan rearmar timers durante las animaciones. Alto contraste/lector
-  de pantalla usa un pronóstico nativo de texto; los botones exigen pulsar y
-  soltar sobre el mismo control. Diagnóstico sin ubicación, URL ni contenido.
+  de pantalla usa un pronóstico nativo de texto. Diagnóstico sin ubicación, URL ni contenido.
 
 - Tarjeta azul de clima opcional dentro del Dock, con condición, temperatura
   e ilustraciones estáticas de sol y nubes. Reserva su propio espacio, acompaña

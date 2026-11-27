@@ -9,10 +9,11 @@ use crate::{
     weather::{self, Card, Key, Model, glyph},
 };
 use anyhow::Result;
-use muelle_config::WeatherLocation;
+use muelle_config::{WeatherCity, WeatherLocation, WeatherLocationMode};
 use muelle_shell::{power, status};
 use muelle_weather::{Coordinates, Demand, Forecast, Refresh, Ticket};
 use std::{
+    cell::Cell,
     sync::{Arc, Mutex, atomic::Ordering},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -38,7 +39,12 @@ struct Pending {
 #[derive(Default)]
 pub(super) struct State {
     service: Refresh,
-    configured: Option<(bool, Option<WeatherLocation>)>,
+    configured: Option<(
+        bool,
+        WeatherLocationMode,
+        Option<WeatherLocation>,
+        Option<WeatherCity>,
+    )>,
     mailbox: Mailbox,
     pub(super) card: Option<Card>,
     pub(super) popup: Option<weather::popup::Popup>,
@@ -55,6 +61,7 @@ pub(super) struct State {
     pending: Option<Pending>,
     network_retry: Option<Instant>,
     popup_hour: Option<(u64, Instant)>,
+    drawings_dirty: Cell<bool>,
 }
 
 pub(crate) fn signal(source: HWND, event: usize) {
@@ -89,10 +96,14 @@ impl App {
         self.sync_weather();
     }
     pub(super) fn suspend_weather_view(&mut self) {
+        let released = self.weather.card.is_some() || self.weather.popup.is_some();
         self.weather.popup = None;
         self.weather.popup_hour = None;
         let hovered = std::mem::take(&mut self.weather.hovering);
         self.weather.card = None;
+        if released {
+            self.queue_weather_graphics_trim();
+        }
         self.arm_weather(None);
         if hovered && self.config.hides_automatically() {
             unsafe {
@@ -122,26 +133,39 @@ impl App {
     }
 
     pub(super) fn sync_weather(&mut self) {
-        let config = (self.config.weather, self.config.weather_location);
-        if self.weather.configured != Some(config) {
-            let coordinates = config.1.and_then(|loc| {
-                Coordinates::new(
-                    f64::from(loc.latitude_e2) / 100.0,
-                    f64::from(loc.longitude_e2) / 100.0,
-                )
-                .ok()
+        // Compare borrowed labels on the render path; clone only on a setting change.
+        let changed = self
+            .weather
+            .configured
+            .as_ref()
+            .is_none_or(|(enabled, mode, fix, city)| {
+                *enabled != self.config.weather
+                    || *mode != self.config.weather_location_mode
+                    || *fix != self.config.weather_location
+                    || *city != self.config.weather_city
             });
-            self.weather.service.configure(config.0, coordinates);
-            self.weather.configured = Some(config);
+        if changed {
+            let coordinates = self.config.weather_coordinates().and_then(|(lat, lon)| {
+                Coordinates::new(f64::from(lat) / 100.0, f64::from(lon) / 100.0).ok()
+            });
+            self.weather
+                .service
+                .configure(self.config.weather, coordinates);
+            self.weather.configured = Some((
+                self.config.weather,
+                self.config.weather_location_mode,
+                self.config.weather_location,
+                self.config.weather_city.clone(),
+            ));
             self.weather.failed = false;
             self.weather.view_retry = None;
             self.weather.revision = self.weather.revision.wrapping_add(1);
-            if config.0 && self.weather.network.is_none() {
+            if self.config.weather && self.weather.network.is_none() {
                 self.subscribe_weather_network();
                 unsafe {
                     let _ = PostMessageW(Some(self.input), NETWORK, WPARAM(0), LPARAM(0));
                 }
-            } else if !config.0 {
+            } else if !self.config.weather {
                 self.weather.network = None;
                 self.weather.online = false;
                 self.weather.network_known = false;
@@ -199,11 +223,12 @@ impl App {
             .is_none_or(|view| view.key != key);
         if redraw && self.weather.view_retry.is_none_or(|after| now >= after) {
             let text = weather::text::text(key.language);
-            let saved = self.config.weather_location.is_some_and(|loc| {
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .is_ok_and(|now| now.as_secs().saturating_sub(loc.updated_at) > 6 * 3600)
-            });
+            let saved = self.config.weather_location_mode == WeatherLocationMode::Auto
+                && self.config.weather_location.is_some_and(|loc| {
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .is_ok_and(|now| now.as_secs().saturating_sub(loc.updated_at) > 6 * 3600)
+                });
             let (degrees, title, glyph) = match cached.as_ref() {
                 Some(c) => (
                     format!("{}°", c.forecast.current.temperature_c.round() as i16),
@@ -212,7 +237,7 @@ impl App {
                 ),
                 None => (
                     ("—").into(),
-                    if self.config.weather_location.is_none() {
+                    if self.config.weather_coordinates().is_none() {
                         text.location_needed
                     } else if self.weather.failed
                         || (self.weather.network_known && !self.weather.online)
@@ -224,7 +249,9 @@ impl App {
                     WeatherGlyph::Unknown,
                 ),
             };
-            let subtitle = if self.config.weather_location.is_none() {
+            let subtitle = if let Some(city) = self.config.selected_weather_city() {
+                city.label.as_str()
+            } else if self.config.weather_coordinates().is_none() {
                 text.settings
             } else if cached.as_ref().is_some_and(|c| c.stale) {
                 text.stale
@@ -253,6 +280,7 @@ impl App {
                 return;
             }
             self.weather.view_retry = None;
+            self.queue_weather_graphics_trim();
         }
         let mut due = self
             .weather

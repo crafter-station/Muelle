@@ -36,7 +36,7 @@ pub struct Day {
 pub struct Data {
     pub degrees: String,
     pub condition: &'static str,
-    pub location: &'static str,
+    pub location: String,
     pub status: &'static str,
     pub glyph: WeatherGlyph,
     pub feels: String,
@@ -153,7 +153,7 @@ impl Data {
             } else {
                 t.unavailable
             },
-            location,
+            location: location.into(),
             status,
             glyph: WeatherGlyph::Unknown,
             feels: "—".into(),

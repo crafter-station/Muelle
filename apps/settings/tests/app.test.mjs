@@ -79,6 +79,7 @@ function fixture(section = "menubar", config = {}, save = async () => {}, galler
     "@tauri-apps/api/window": { getCurrentWindow: () => nativeWindow },
     "@tauri-apps/api/core": { invoke: async (command, args) => {
       switch (command) {
+        case "search_weather_cities": weatherCalls.push({ search: args.query, language: args.language }); return galleryNative.searchCities?.(args.query);
         case "locate_weather": weatherCalls.push("locate"); return galleryNative.locateWeather?.();
         case "cancel_weather_location": weatherCalls.push("cancel"); return;
         case "open_weather_location_settings": weatherCalls.push("privacy"); return;
@@ -128,6 +129,8 @@ function fixture(section = "menubar", config = {}, save = async () => {}, galler
     async mount() { render(); const cleanup = effects.map((effect) => effect()); await settle(); return () => cleanup.forEach((fn) => fn?.()); },
     change(label, value) { find((node) => node.props.label === label && typeof node.props.onChange === "function").props.onChange(value); },
     button(text) { find((node) => node.type === "button" && node.props.children === text).props.onClick(); },
+    input(label, value) { find((node) => node.type === "input" && node.props["aria-label"] === label).props.onChange({ target: { value } }); },
+    submit() { find((node) => node.type === "form").props.onSubmit({ preventDefault() {} }); },
     body() { return gallery || weather ? render() : find((node) => node.props.className === "content-body"); },
     fire(delay) { for (const [id, timer] of [...timers]) if (timer.delay === delay) { timers.delete(id); timer.callback(); } },
     async close() { let prevented = false; await close({ preventDefault() { prevented = true; } }); return prevented; },
@@ -760,4 +763,85 @@ test("fresh weather locations are reused and old fixes refresh only while Settin
       assert.equal(view.timers.size, 0);
     } finally { unmount(); }
   }
+});
+
+
+test("manual weather searches only on submit, saves a city and reuses the automatic fix", async () => {
+  const city = { label: "Lima, Perú", latitudeE2: -1205, longitudeE2: -7704 };
+  const fix = { latitudeE2: 3872, longitudeE2: -914, updatedAt: Math.floor(Date.now()/1000) };
+  let finish;
+  const view = fixture("weather", { weather: true, weatherLocationMode: "city", weatherLocation: fix }, undefined,
+    { searchCities: () => new Promise((done) => { finish = done; }) });
+  const unmount = await view.mount();
+  try {
+    assert.deepEqual(view.weatherCalls, []);
+    view.input(texts.en.weatherCity, "Lima");
+    assert.deepEqual(view.weatherCalls, [], "typing must never perform HTTP");
+    view.submit(); view.submit();
+    assert.deepEqual(view.weatherCalls, [{ search: "Lima", language: "en" }]);
+    finish([city]); await settle();
+    view.button(city.label);
+    assert.deepEqual(view.calls.at(-1), { weatherCity: city });
+    view.change(texts.en.weatherLocation, "auto");
+    assert.deepEqual(view.calls.at(-1), { weatherLocationMode: "auto" });
+    assert.equal(view.weatherCalls.length, 1, "fresh automatic fix needs no new permission request");
+    assert.equal(view.timers.size, 0);
+  } finally { unmount(); }
+});
+
+test("changing weather mode ignores late Windows fixes and city search responses", async () => {
+  let locate, search;
+  const view = fixture("weather", {}, undefined, {
+    locateWeather: () => new Promise((done) => { locate = done; }),
+    searchCities: () => new Promise((done) => { search = done; }),
+  });
+  const unmount = await view.mount();
+  try {
+    view.change(texts.en.weatherShow, true);
+    view.change(texts.en.weatherLocation, "city");
+    locate({ latitudeE2: 100, longitudeE2: 100, updatedAt: 123 });
+    await settle();
+    assert.ok(!view.calls.some((patch) => patch.weatherLocation));
+    view.input(texts.en.weatherCity, "Paris"); view.submit();
+    view.change(texts.en.weatherShow, false);
+    search([{ label: "Paris, France", latitudeE2: 4886, longitudeE2: 235 }]);
+    await settle();
+    assert.ok(!renderToStaticMarkup(view.body()).includes("Paris, France"));
+    assert.ok(!view.calls.some((patch) => patch.weatherCity));
+    assert.equal(view.timers.size, 0);
+  } finally { unmount(); }
+});
+
+test("city search shows empty results, ignores edited queries and stays off on mount", async () => {
+  let resolve;
+  const view = fixture("weather", { weather: true, weatherLocationMode: "city" }, undefined,
+    { searchCities: () => new Promise((done) => { resolve = done; }) });
+  const unmount = await view.mount();
+  try {
+    view.input(texts.en.weatherCity, "A"); view.submit();
+    assert.deepEqual(view.weatherCalls, []);
+    view.input(texts.en.weatherCity, "Paris"); view.submit();
+    view.input(texts.en.weatherCity, "Lima");
+    resolve([{ label: "Paris, France", latitudeE2: 4886, longitudeE2: 235 }]); await settle();
+    assert.ok(!renderToStaticMarkup(view.body()).includes("Paris, France"));
+    view.submit(); resolve([]); await settle();
+    assert.ok(renderToStaticMarkup(view.body()).includes(texts.en.weatherNoCities));
+  } finally { unmount(); }
+});
+
+
+test("city search can retry after a network failure without changing the saved city", async () => {
+  const saved = { label: "Lima, Perú", latitudeE2: -1205, longitudeE2: -7704 };
+  let attempts = 0;
+  const view = fixture("weather", { weather: true, weatherLocationMode: "city", weatherCity: saved }, undefined,
+    { searchCities: async () => { if (++attempts === 1) throw "unavailable"; return []; } });
+  const unmount = await view.mount();
+  try {
+    view.input(texts.en.weatherCity, "Paris"); view.submit(); await settle();
+    assert.ok(renderToStaticMarkup(view.body()).includes(texts.en.weatherSearchError));
+    view.submit(); await settle();
+    assert.equal(attempts, 2);
+    assert.ok(renderToStaticMarkup(view.body()).includes(texts.en.weatherNoCities));
+    assert.deepEqual(view.calls, []);
+  } finally { unmount(); }
 });

@@ -124,6 +124,9 @@ pub struct Config {
     pub weather: bool,
     /// A coarse Windows fix obtained by Settings with foreground consent.
     pub weather_location: Option<WeatherLocation>,
+    pub weather_location_mode: WeatherLocationMode,
+    /// An explicit city never replaces the cached Windows location.
+    pub weather_city: Option<WeatherCity>,
     /// The dot under apps that have windows open.
     pub show_indicators: bool,
     /// The section of recently used apps that are not pinned.
@@ -328,6 +331,48 @@ pub enum Appearance {
 pub const ICON_SIZE_RANGE: (u32, u32) = (32, 96);
 pub const MAX_MAGNIFIED_SIZE: u32 = 160;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WeatherLocationMode {
+    #[default]
+    Auto,
+    City,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeatherCity {
+    pub label: String,
+    pub latitude_e2: i32,
+    pub longitude_e2: i32,
+}
+
+impl std::fmt::Debug for WeatherCity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WeatherCity(redacted)")
+    }
+}
+
+impl WeatherCity {
+    pub fn from_degrees(label: String, latitude: f64, longitude: f64) -> Option<Self> {
+        let (latitude_e2, longitude_e2) = coarse_weather_coordinates(latitude, longitude)?;
+        let city = Self {
+            label,
+            latitude_e2,
+            longitude_e2,
+        };
+        city.valid().then_some(city)
+    }
+
+    pub fn valid(&self) -> bool {
+        !self.label.trim().is_empty()
+            && self.label.chars().count() <= 160
+            && !self.label.chars().any(char::is_control)
+            && (-9000..=9000).contains(&self.latitude_e2)
+            && (-18000..=18000).contains(&self.longitude_e2)
+    }
+}
+
 /// Approximate location only. No precise coordinate, location history or
 /// device identifier is kept. The timestamp is the Windows fix's UTC time.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -346,16 +391,10 @@ impl std::fmt::Debug for WeatherLocation {
 
 impl WeatherLocation {
     pub fn from_degrees(latitude: f64, longitude: f64, updated_at: u64) -> Option<Self> {
-        if !latitude.is_finite()
-            || !longitude.is_finite()
-            || !(-90.0..=90.0).contains(&latitude)
-            || !(-180.0..=180.0).contains(&longitude)
-        {
-            return None;
-        }
+        let (latitude_e2, longitude_e2) = coarse_weather_coordinates(latitude, longitude)?;
         let location = Self {
-            latitude_e2: (latitude * 100.0).round() as i32,
-            longitude_e2: (longitude * 100.0).round() as i32,
+            latitude_e2,
+            longitude_e2,
             updated_at,
         };
         location.valid().then_some(location)
@@ -369,7 +408,38 @@ impl WeatherLocation {
     }
 }
 
+fn coarse_weather_coordinates(latitude: f64, longitude: f64) -> Option<(i32, i32)> {
+    (latitude.is_finite()
+        && longitude.is_finite()
+        && (-90.0..=90.0).contains(&latitude)
+        && (-180.0..=180.0).contains(&longitude))
+    .then(|| {
+        (
+            (latitude * 100.0).round() as i32,
+            (longitude * 100.0).round() as i32,
+        )
+    })
+}
+
 impl Config {
+    pub fn selected_weather_city(&self) -> Option<&WeatherCity> {
+        (self.weather_location_mode == WeatherLocationMode::City)
+            .then_some(self.weather_city.as_ref())
+            .flatten()
+    }
+
+    pub fn weather_coordinates(&self) -> Option<(i32, i32)> {
+        match self.weather_location_mode {
+            WeatherLocationMode::Auto => self
+                .weather_location
+                .map(|loc| (loc.latitude_e2, loc.longitude_e2)),
+            WeatherLocationMode::City => self
+                .weather_city
+                .as_ref()
+                .map(|city| (city.latitude_e2, city.longitude_e2)),
+        }
+    }
+
     /// Either policy needs a reveal strip and leaves maximized windows the full work area.
     pub fn hides_automatically(&self) -> bool {
         self.auto_hide || self.smart_hide
@@ -391,6 +461,7 @@ impl Config {
             .map(|target| target.trim().to_owned())
             .filter(|target| !target.is_empty());
         self.weather_location = self.weather_location.filter(|location| location.valid());
+        self.weather_city = self.weather_city.filter(WeatherCity::valid);
         self
     }
 
@@ -443,6 +514,8 @@ impl Default for Config {
             accessory_battery: false,
             weather: false,
             weather_location: None,
+            weather_location_mode: WeatherLocationMode::Auto,
+            weather_city: None,
             show_indicators: true,
             show_recents: true,
             bounce_on_open: true,
@@ -588,6 +661,42 @@ fn write_config(path: &Path, config: &Config) -> Result<(), ConfigError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn weather_city_is_explicit_preserves_auto_fix_and_validates_saved_data()
+    -> Result<(), serde_json::Error> {
+        let mut config: super::Config = serde_json::from_str("{}")?;
+        assert_eq!(
+            config.weather_location_mode,
+            super::WeatherLocationMode::Auto
+        );
+        config.weather_location = super::WeatherLocation::from_degrees(38.72, -9.14, 1);
+        let automatic = config.weather_coordinates();
+        config.weather_city = Some(super::WeatherCity {
+            label: "Lima, Perú".into(),
+            latitude_e2: -1205,
+            longitude_e2: -7704,
+        });
+        assert_eq!(config.weather_coordinates(), automatic);
+        assert!(config.selected_weather_city().is_none());
+        config.weather_location_mode = super::WeatherLocationMode::City;
+        assert_eq!(config.weather_coordinates(), Some((-1205, -7704)));
+        let round_trip: super::Config = serde_json::from_str(&serde_json::to_string(&config)?)?;
+        assert_eq!(config, round_trip);
+        config.weather_location_mode = super::WeatherLocationMode::Auto;
+        assert_eq!(config.weather_coordinates(), automatic);
+        if let Some(city) = config.weather_city.as_mut() {
+            city.label.push('\n');
+        }
+        config = config.sanitized();
+        assert!(config.weather_city.is_none());
+        config.weather_location_mode = super::WeatherLocationMode::City;
+        assert!(
+            config.weather_coordinates().is_none(),
+            "manual mode never falls back to Windows"
+        );
+        assert!(!format!("{config:?}").contains("1205"));
+        Ok(())
+    }
     #[test]
     fn weather_is_opt_in_and_saves_only_a_valid_coarse_fix() -> Result<(), serde_json::Error> {
         let older: super::Config = serde_json::from_str("{}")?;

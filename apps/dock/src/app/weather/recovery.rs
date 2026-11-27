@@ -1,6 +1,17 @@
 //! Exceptional recovery shares the weather deadline; healthy readers never poll.
 use super::*;
 impl App {
+    pub(super) fn queue_weather_graphics_trim(&self) {
+        if !self.weather.drawings_dirty.replace(true) {
+            self.schedule_trim();
+        }
+    }
+    pub(in crate::app) fn flush_weather_drawings(&self) -> Result<()> {
+        if self.weather.drawings_dirty.replace(false) {
+            self.gfx.flush_released_drawings()?;
+        }
+        Ok(())
+    }
     pub(super) fn subscribe_weather_network(&mut self) {
         let first_failure = self.weather.network_retry.is_none();
         self.weather.network = status::NetworkWatch::new(self.input.0 as isize, NETWORK);
@@ -61,6 +72,13 @@ mod tests {
         assert!(!app.config.weather);
         app.weather_resumed()?;
         assert!(app.weather.network.is_none() && app.weather.due.is_none());
+        assert!(!app.weather.drawings_dirty.get());
+        app.queue_weather_graphics_trim();
+        app.queue_weather_graphics_trim();
+        assert!(app.weather.drawings_dirty.get());
+        app.flush_weather_drawings()?;
+        assert!(!app.weather.drawings_dirty.get());
+        app.flush_weather_drawings()?; // unchanged/off path performs no work
         app.weather_suspended(true);
         assert!(app.weather.sleeping);
         app.weather_locked(true);

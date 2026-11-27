@@ -152,6 +152,16 @@ pub struct Gfx {
 }
 
 impl Gfx {
+    /// Submit deferred drawing/destruction work on the owning UI thread.
+    /// Use only for coalesced idle maintenance, never per frame or per surface.
+    pub(crate) fn flush_released_drawings(&self) -> Result<()> {
+        // Keep pipeline state and live resources intact. Flush is asynchronous;
+        // no GPU wait, device reset or operation on another app's device.
+        unsafe {
+            self.d3d.GetImmediateContext()?.Flush();
+        }
+        Ok(())
+    }
     pub fn new() -> Result<Self> {
         let compositor = Compositor::new()?;
         // SAFETY: D3D writes only to the initialized output slot; the returned

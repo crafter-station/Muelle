@@ -533,6 +533,10 @@ impl App {
 
     pub(super) fn trim_if_idle(&self) {
         if !self.hovering && !self.is_animating() {
+            if let Err(error) = self.flush_weather_drawings() {
+                crate::recovery::graphics_error(&error);
+                muelle_shell::log::line(&format!("liberación gráfica del clima: {error:#}"));
+            }
             power::trim_memory();
         }
     }

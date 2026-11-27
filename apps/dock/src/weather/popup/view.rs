@@ -16,7 +16,6 @@ use windows_numerics::{Vector2, Vector3};
 
 pub struct View {
     pub root: ContainerVisual,
-    pub focus: Vec<Visual>,
 }
 impl Drop for View {
     fn drop(&mut self) {
@@ -147,7 +146,14 @@ pub fn build(gfx: &Gfx, context: Context, layout: Layout, data: &Data) -> Result
     let t = crate::weather::text::text(context.language);
     let words = text::text(context.language);
     p.text(t.title, (20.0, 17.0), 310.0, 14.0, true, 1.0)?;
-    p.text(data.location, (20.0, 39.0), 305.0, 11.0, false, 0.65)?;
+    p.text(
+        &data.location,
+        (20.0, 39.0),
+        if data.status.is_empty() { 360.0 } else { 165.0 },
+        11.0,
+        false,
+        0.65,
+    )?;
     p.icon(data.glyph, 20.0, 68.0, 56.0)?;
     p.text(&data.degrees, (84.0, 62.0), 137.0, 42.0, false, 1.0)?;
     p.text(data.condition, (20.0, 128.0), 360.0, 13.0, true, 1.0)?;
@@ -214,39 +220,10 @@ pub fn build(gfx: &Gfx, context: Context, layout: Layout, data: &Data) -> Result
     } else {
         p.text(data.status, (20.0, 155.0), 360.0, 11.0, false, 0.65)?;
     }
-    let mut focus = Vec::with_capacity(3);
-    for (index, r) in layout.controls.into_iter().enumerate() {
-        let radius = if index == 0 { 14.0 } else { 8.0 };
-        let quiet = Color {
-            A: muted.A / 2,
-            ..muted
-        };
-        p.fill(r.x, r.y, r.width, r.height, radius, quiet)?;
-        let visual = p.fill(r.x, r.y, r.width, r.height, radius, muted)?;
-        visual.SetIsVisible(false)?;
-        focus.push(visual);
-    }
-    p.centered("×", (366.0, 17.0), 26.0, 19.0, false, 0.72)?;
-    p.text(
-        t.settings,
-        (28.0, layout.height - 33.0),
-        190.0,
-        10.5,
-        false,
-        0.72,
-    )?;
-    p.text(
-        "Open-Meteo ↗",
-        (254.0, layout.height - 33.0),
-        118.0,
-        10.5,
-        false,
-        0.72,
-    )?;
     // Cached data is labelled in the header, without adding another row/clock.
     if !data.status.is_empty() && context.has_data {
         p.text(data.status, (190.0, 40.0), 150.0, 10.0, false, 0.68)?;
     }
     drop(p);
-    Ok(View { root, focus })
+    Ok(View { root })
 }

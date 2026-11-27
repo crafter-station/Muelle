@@ -196,7 +196,7 @@ fn measure_weather_retained_ui_in_release() -> Result<()> {
     assert!(panel.target.Root()? == root);
     let start = Instant::now();
     for _ in 0..1000 {
-        panel.action(NEXT)?;
+        panel.action(0)?;
     }
     let keyboard_us = start.elapsed().as_micros();
     drop(panel);
@@ -223,6 +223,8 @@ fn measure_weather_retained_ui_in_release() -> Result<()> {
             }
         }
         if round == 39 || round == 79 {
+            // Same coalesced, non-blocking maintenance as the app's idle timer.
+            gfx.flush_released_drawings()?;
             // A hidden target has no present cycle. Explicitly commit its
             // pending creates/deletes, then pump until the async batch settles.
             let commit = gfx.compositor.RequestCommitAsync()?;

@@ -1,5 +1,5 @@
-use muelle_core::{frame::DockEdge, layout::Rect};
-use windows::Win32::Foundation::{POINT, RECT};
+use muelle_core::frame::DockEdge;
+use windows::Win32::Foundation::RECT;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Layout {
@@ -7,7 +7,6 @@ pub struct Layout {
     pub scale: f32,
     pub width: f32,
     pub height: f32,
-    pub controls: [Rect; 3],
 }
 impl Layout {
     pub fn new(
@@ -20,7 +19,7 @@ impl Layout {
         if !requested.is_finite() || requested <= 0.0 {
             return None;
         }
-        let (width, height) = (400.0_f32, if has_data { 566.0_f32 } else { 218.0 });
+        let (width, height) = (400.0_f32, if has_data { 536.0_f32 } else { 188.0 });
         // Fit into the space away from the Dock, not the whole screen.
         // Otherwise a short/high-DPI display clamps the panel over its card.
         let (room_width, room_height) = match edge {
@@ -56,33 +55,7 @@ impl Layout {
             scale,
             width,
             height,
-            controls: [
-                Rect {
-                    x: 352.0,
-                    y: 16.0,
-                    width: 28.0,
-                    height: 28.0,
-                },
-                Rect {
-                    x: 20.0,
-                    y: height - 38.0,
-                    width: 208.0,
-                    height: 26.0,
-                },
-                Rect {
-                    x: 246.0,
-                    y: height - 38.0,
-                    width: 134.0,
-                    height: 26.0,
-                },
-            ],
         })
-    }
-    pub fn hit(self, point: POINT) -> Option<usize> {
-        let (x, y) = (point.x as f32 / self.scale, point.y as f32 / self.scale);
-        self.controls
-            .iter()
-            .position(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)
     }
 }
 #[cfg(test)]
@@ -129,16 +102,6 @@ mod tests {
                             DockEdge::Left => assert!(l.bounds.left > anchor.right),
                             DockEdge::Right => assert!(l.bounds.right < anchor.left),
                         }
-                        for (index, rect) in l.controls.iter().enumerate() {
-                            assert_eq!(
-                                l.hit(POINT {
-                                    x: ((rect.x + rect.width / 2.0) * l.scale) as i32,
-                                    y: ((rect.y + rect.height / 2.0) * l.scale) as i32
-                                }),
-                                Some(index)
-                            );
-                        }
-                        assert_eq!(l.hit(POINT { x: -1, y: -1 }), None);
                     }
                 }
             }

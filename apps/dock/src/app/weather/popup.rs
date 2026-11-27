@@ -29,21 +29,26 @@ impl App {
     }
     pub(super) fn weather_popup_data(&self, context: Context) -> Data {
         let cache = self.weather.service.cached(Instant::now());
-        Data::new(
+        let mut data = Data::new(
             cache.as_ref().map(|c| c.forecast),
             context.language,
             now(),
             Status {
                 stale: cache.as_ref().is_some_and(|c| c.stale),
-                has_location: self.config.weather_location.is_some(),
+                has_location: self.config.weather_coordinates().is_some(),
                 failed: self.weather.failed,
                 offline: self.weather.network_known && !self.weather.online,
-                saved: self
-                    .config
-                    .weather_location
-                    .is_some_and(|loc| now().saturating_sub(loc.updated_at as i64) > 6 * 3600),
+                saved: self.config.weather_location_mode == WeatherLocationMode::Auto
+                    && self
+                        .config
+                        .weather_location
+                        .is_some_and(|loc| now().saturating_sub(loc.updated_at as i64) > 6 * 3600),
             },
-        )
+        );
+        if let Some(city) = self.config.selected_weather_city() {
+            data.location.clone_from(&city.label);
+        }
+        data
     }
     pub(super) fn toggle_weather_popup(&mut self) -> Result<()> {
         if self.weather.popup.is_some() {
@@ -68,7 +73,11 @@ impl App {
         self.render()
     }
     pub(super) fn close_weather_popup(&mut self) {
+        let released = self.weather.popup.is_some();
         self.weather.popup = None;
+        if released {
+            self.queue_weather_graphics_trim();
+        }
         self.weather.popup_hour = None;
         let mut point = POINT::default();
         let pointer = unsafe {
@@ -112,6 +121,9 @@ impl App {
             .as_ref()
             .filter(|p| p.needs_data(context))
             .map(|_| self.weather_popup_data(context));
+        if data.is_some() {
+            self.queue_weather_graphics_trim();
+        }
         if let Some(popup) = &mut self.weather.popup
             && let Err(error) = popup.update(&self.gfx, context, data.as_ref())
         {
@@ -131,15 +143,11 @@ impl App {
         if popup.hwnd() != source {
             return Ok(None);
         }
-        let Some(action) = popup.action(event)? else {
+        let Some(_) = popup.action(event)? else {
             return Ok(None);
         };
         self.close_weather_popup();
         self.render()?;
-        Ok(match action {
-            1 => Some(Outside::OpenSettings),
-            2 => Some(Outside::Open(muelle_weather::ATTRIBUTION_URL.into())),
-            _ => None,
-        })
+        Ok(None)
     }
 }

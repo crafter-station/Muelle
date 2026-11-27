@@ -9,6 +9,7 @@
 
 mod wallpapers;
 mod weather;
+mod weather_cities;
 
 use std::{env, io, path::PathBuf, process::Command, sync::Mutex, time::Duration};
 
@@ -352,6 +353,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(PendingUpdate::default())
         .manage(weather::LocationRequest::default())
+        .manage(weather_cities::CitySearch::default())
         .setup(move |app| {
             if background {
                 tauri::async_runtime::spawn(update_in_background(app.handle().clone()));
@@ -375,6 +377,7 @@ fn main() {
             open_release_notes,
             open_repository,
             weather::locate_weather,
+            weather_cities::search_weather_cities,
             weather::cancel_weather_location,
             weather::open_weather_location_settings,
             weather::open_weather_attribution,
