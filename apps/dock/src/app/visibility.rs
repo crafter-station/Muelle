@@ -316,7 +316,10 @@ impl App {
             // display's scale, flashed at the new place before sliding in.
             // Keep the window out of view until the new content is there.
             self.set_moving(true);
-            if let Err(error) = self.refresh().and_then(|()| self.on_commit(DOCK_MOVED)) {
+            if let Err(error) = self
+                .refresh_dock()
+                .and_then(|()| self.on_commit(DOCK_MOVED))
+            {
                 self.set_moving(false);
                 return Err(error);
             }

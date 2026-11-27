@@ -10,6 +10,10 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Weather groundwork only: isolated forecast client, bounded in-memory cache
+  and demand-driven refresh policy. No Dock card, Settings control or automatic
+  location/network activity is enabled in this first phase.
+
 - Optional persistent mascot for all six characters: rests on the visible Dock,
   blinks and takes short walks between events. Yields to Dock interactions and
   full-screen apps, pauses on lock, and stays static in energy saver/reduced
@@ -49,8 +53,17 @@ copia la sección de la versión que se publica a la release de GitHub.
 - Moving the Dock to another display with the pointer no longer flashes the
   old Dock, at the other display's scale, before it slides in: the Dock's
   window stays out of view until its new content is on screen.
+- The Dock comes to another display sooner: about 0.2 s after the pointer
+  reaches that display's bottom edge instead of about 0.4 s. The edges are
+  sampled every frame only while the pointer is near one (every 80 ms
+  elsewhere), the rest before moving is 180 ms instead of 250 ms, and moving
+  the Dock no longer redraws the menu bar.
 
 ### Español
+
+- Primera fase del clima: cliente aislado, caché en memoria acotada y política
+  de actualización bajo demanda. Esta fase aún no activa tarjeta, control en
+  Ajustes ni actividad automática de ubicación o red.
 
 - Mascota permanente opcional para los seis personajes: descansa sobre el Dock
   visible, parpadea y da paseos cortos entre eventos. Cede ante la interacción
@@ -94,6 +107,11 @@ copia la sección de la versión que se publica a la release de GitHub.
   anterior, a la escala de la otra pantalla, antes de entrar deslizándose: la
   ventana del Dock queda fuera de la vista hasta que su contenido nuevo está
   en pantalla.
+- El Dock llega antes a otra pantalla: unos 0,2 s después de que el puntero
+  toque su borde inferior, en vez de unos 0,4 s. Los bordes se miran en cada
+  fotograma solo mientras el puntero está cerca de uno (cada 80 ms en el
+  resto), la espera antes de mudarse baja de 250 a 180 ms, y mudar el Dock ya
+  no redibuja la barra superior.
 
 ## [0.1.26]
 

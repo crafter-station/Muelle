@@ -8,6 +8,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod wallpapers;
+mod weather;
 
 use std::{env, io, path::PathBuf, process::Command, sync::Mutex, time::Duration};
 
@@ -350,6 +351,7 @@ fn main() {
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(PendingUpdate::default())
+        .manage(weather::LocationRequest::default())
         .setup(move |app| {
             if background {
                 tauri::async_runtime::spawn(update_in_background(app.handle().clone()));
@@ -372,6 +374,10 @@ fn main() {
             install_update,
             open_release_notes,
             open_repository,
+            weather::locate_weather,
+            weather::cancel_weather_location,
+            weather::open_weather_location_settings,
+            weather::open_weather_attribution,
             wallpaper_preview,
             wallpapers::wallpaper_selection,
             wallpapers::apply_wallpaper

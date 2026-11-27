@@ -142,6 +142,13 @@ impl App {
             crate::recovery::graphics_error(&error);
             muelle_shell::log::line(&format!("actualización de la barra superior: {error:#}"));
         }
+        self.refresh_dock()
+    }
+
+    /// The dock alone, without redrawing the menu bar: moving the dock to
+    /// another display changes nothing on the bar, and redrawing it took
+    /// 25-50 ms of that move.
+    pub(super) fn refresh_dock(&mut self) -> Result<()> {
         let monitor = self
             .dock_monitor()
             .context("no se pudo consultar el monitor del dock")?;

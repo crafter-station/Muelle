@@ -145,36 +145,60 @@ pub fn menu_bar_clicked(x: f32, y: f32) {
     });
 }
 
-/// The pointer or a timer on a copy of the menu bar on another display.
-pub fn menu_bar_mirror_event(hwnd: HWND, event: crate::menubar::MirrorEvent) {
+/// The pointer or a timer on a copy of the menu bar on another display: the
+/// same handling as the primary bar's. Returns whether a scroll was used.
+pub fn menu_bar_mirror_event(hwnd: HWND, event: crate::menubar::MirrorEvent) -> bool {
     use crate::menubar::MirrorEvent;
+    let mut used = false;
     with_app_then("barra superior en otra pantalla", |app| {
         let menu_open = app.menu_open;
-        let Some(bar) = app
-            .menubar
-            .as_mut()
-            .and_then(|bar| bar.bar_mut(hwnd.0 as isize))
-        else {
+        let gfx = app.gfx.clone();
+        let Some(primary) = app.menubar.as_mut() else {
             return Ok(None);
         };
-        match event {
-            MirrorEvent::Click(x, y) => {
-                if let Some(anchor) = bar.input_switcher_anchor(x, y) {
-                    return Ok(Some(Outside::InputMenu {
-                        gfx: app.gfx.clone(),
-                        anchor,
-                        look: crate::appearance::menu_bar(),
-                    }));
+        let outside = primary.with_bar(&gfx, hwnd.0 as isize, |bar| {
+            match event {
+                MirrorEvent::Press(x, y) => {
+                    if !bar.press_progress(&gfx, x, y)? {
+                        bar.press_volume(&gfx, x, y)?;
+                    }
                 }
-                bar.click(&app.gfx, x, y)?;
+                MirrorEvent::Release(x, y) => {
+                    let seek = bar.release_progress(Some(x));
+                    let volume = bar.release_volume(Some(y))?;
+                    if seek {
+                        bar.progress_tick(&gfx)?;
+                    }
+                    if !seek && !volume {
+                        if let Some(anchor) = bar.input_switcher_anchor(x, y) {
+                            bar.dismiss_island(&gfx)?;
+                            return Ok(Some(Outside::InputMenu {
+                                gfx: gfx.clone(),
+                                anchor,
+                                look: crate::appearance::menu_bar(),
+                            }));
+                        }
+                        bar.click(&gfx, x, y)?;
+                    }
+                }
+                MirrorEvent::CaptureLost => {
+                    bar.release_progress(None);
+                    bar.release_volume(None)?;
+                }
+                MirrorEvent::PointerMoved(x, y) => bar.pointer_moved(&gfx, x, y)?,
+                MirrorEvent::CheckPointer if !menu_open => bar.check_pointer(&gfx)?,
+                MirrorEvent::CheckPointer => {}
+                MirrorEvent::FinishHide(epoch) => bar.finish_hide(&gfx, epoch)?,
+                MirrorEvent::Scroll(point, delta) => used = bar.scroll_usage_at(point, delta)?,
+                MirrorEvent::VolumeFlush => bar.flush_volume()?,
+                MirrorEvent::ProgressTick => bar.progress_tick(&gfx)?,
+                MirrorEvent::Dismiss => bar.dismiss_island(&gfx)?,
             }
-            MirrorEvent::PointerMoved(x, y) => bar.pointer_moved(&app.gfx, x, y)?,
-            MirrorEvent::CheckPointer if !menu_open => bar.check_pointer(&app.gfx)?,
-            MirrorEvent::CheckPointer => {}
-            MirrorEvent::FinishHide(epoch) => bar.finish_hide(&app.gfx, epoch)?,
-        }
-        Ok(None)
+            Ok(None)
+        })?;
+        Ok(outside.flatten())
     });
+    used
 }
 
 pub fn menu_bar_slider_press(x: f32, y: f32) {

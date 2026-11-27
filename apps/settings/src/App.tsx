@@ -37,6 +37,7 @@ import { DockDensityPreview, DockPreview, IslandPreview, MascotPreview, SettingI
 import { type SectionId, SectionIcon } from "./icons";
 import { UpdateBanner } from "./UpdateBanner";
 import { WallpaperGallery } from "./WallpaperGallery";
+import { WeatherSettings } from "./WeatherSettings";
 import { type Texts, LANGUAGE_OPTIONS, resolveLanguage, textsFor } from "./i18n";
 
 type UpdateState =
@@ -550,6 +551,7 @@ export function App() {
                   />
                 </Row>
               </Card>
+              <WeatherSettings config={config} texts={t} onChange={update} />
               <Card title={t.dockItems}>
                 <Row label={t.showStart}>
                   <Toggle label={t.showStart} checked={config.showStart ?? true} onChange={(showStart) => update({ showStart })} />

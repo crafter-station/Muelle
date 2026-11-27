@@ -18,10 +18,17 @@ use windows::Win32::{
 };
 
 pub const CHANGED: u32 = WM_APP + 26;
-const DWELL: Duration = Duration::from_millis(250);
+/// How long the pointer rests on another display's edge before the dock
+/// moves there: long enough that passing by does not move it.
+const DWELL: Duration = Duration::from_millis(180);
 const MENU_DWELL: Duration = Duration::from_millis(150);
 const EDGE_DEPTH: i32 = 2;
+/// Sampling away from the edges, where nothing can be revealed yet.
 const SAMPLE_MS: u32 = 80;
+/// Sampling once the pointer is this close to a watched edge: every display
+/// frame, so arriving there is seen at once instead of up to 80 ms late.
+const NEAR_SAMPLE_MS: u32 = 16;
+const NEAR: i32 = 96;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Target {
@@ -84,6 +91,23 @@ impl Edges {
                 DockEdge::Right => point.x >= screen.right - EDGE_DEPTH,
             })
             .map(Target::Dock)
+    }
+
+    /// Whether `point` is close to an edge that reveals something.
+    fn near(&self, point: POINT) -> bool {
+        let close = |from: i32, to: i32| (from - to).abs() < NEAR;
+        self.tops
+            .iter()
+            .any(|(_, top)| (top.left..top.right).contains(&point.x) && close(point.y, top.top))
+            || self.screens.iter().any(|screen| {
+                (screen.left..screen.right).contains(&point.x)
+                    && (screen.top..screen.bottom).contains(&point.y)
+                    && match self.dock_edge {
+                        DockEdge::Bottom => close(point.y, screen.bottom - 1),
+                        DockEdge::Left => close(point.x, screen.left),
+                        DockEdge::Right => close(point.x, screen.right - 1),
+                    }
+            })
     }
 
     fn observe(&mut self, point: POINT, now: Instant) -> bool {
@@ -203,9 +227,19 @@ impl EdgeWatch {
                         return;
                     }
                     let _ = sender.send(Ok(GetCurrentThreadId()));
+                    let mut every = SAMPLE_MS;
                     while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
                         if msg.message == WM_TIMER {
-                            sample_cursor();
+                            let wanted = if sample_cursor() {
+                                NEAR_SAMPLE_MS
+                            } else {
+                                SAMPLE_MS
+                            };
+                            if wanted != every {
+                                every = wanted;
+                                // The same id replaces this thread's timer.
+                                SetTimer(None, timer, every, None);
+                            }
                         }
                     }
                     let _ = KillTimer(None, timer);
@@ -246,13 +280,16 @@ impl Drop for EdgeWatch {
     }
 }
 
-fn sample_cursor() {
+/// Reads the pointer; returns whether it is near a watched edge.
+fn sample_cursor() -> bool {
     let mut point = POINT::default();
     // SAFETY: The output is live and this thread only reads cursor position.
     if unsafe { GetCursorPos(&mut point) }.is_err() {
-        return;
+        return false;
     }
+    let mut near = false;
     let window = EDGES.try_lock().ok().and_then(|mut edges| {
+        near = edges.near(point);
         (edges.window != 0 && edges.observe(point, Instant::now())).then_some(edges.window)
     });
     if let Some(window) = window {
@@ -261,6 +298,7 @@ fn sample_cursor() {
             let _ = PostMessageW(Some(HWND(window as *mut _)), CHANGED, WPARAM(0), LPARAM(0));
         }
     }
+    near
 }
 #[cfg(test)]
 mod tests {
@@ -358,6 +396,41 @@ mod tests {
             Some(Target::Dock(screen))
         );
         assert_eq!(edges.at(POINT { x: 0, y: 500 }, Some(screen)), None);
+    }
+
+    #[test]
+    fn sampling_quickens_only_near_a_watched_edge() {
+        let laptop = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let monitor = RECT {
+            left: 1920,
+            top: 0,
+            right: 3840,
+            bottom: 1080,
+        };
+        let mut edges = Edges::default();
+        edges.set_screens(vec![laptop, monitor], DockEdge::Bottom);
+        edges.set_top(
+            1,
+            Some(RECT {
+                bottom: 35,
+                ..laptop
+            }),
+        );
+        let at = |x, y| POINT { x, y };
+        assert!(!edges.near(at(960, 540)));
+        assert!(edges.near(at(2880, 1079)));
+        assert!(edges.near(at(2880, 1000)));
+        assert!(edges.near(at(960, 10)));
+        // No bar on the monitor: its top edge reveals nothing.
+        assert!(!edges.near(at(2880, 10)));
+        edges.set_screens(vec![laptop, monitor], DockEdge::Left);
+        assert!(!edges.near(at(2880, 1079)));
+        assert!(edges.near(at(1930, 540)));
     }
 
     #[test]

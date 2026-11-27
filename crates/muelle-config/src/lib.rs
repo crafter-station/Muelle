@@ -120,6 +120,10 @@ pub struct Config {
     pub menu_bar_all_displays: bool,
     /// Opt-in peripheral monitoring. Off means no accessory reader or queries.
     pub accessory_battery: bool,
+    /// Opt-in weather card; off means no weather requests or resources.
+    pub weather: bool,
+    /// A coarse Windows fix obtained by Settings with foreground consent.
+    pub weather_location: Option<WeatherLocation>,
     /// The dot under apps that have windows open.
     pub show_indicators: bool,
     /// The section of recently used apps that are not pinned.
@@ -324,6 +328,40 @@ pub enum Appearance {
 pub const ICON_SIZE_RANGE: (u32, u32) = (32, 96);
 pub const MAX_MAGNIFIED_SIZE: u32 = 160;
 
+/// Approximate location only. No precise coordinate, location history or
+/// device identifier is kept. The timestamp is the Windows fix's UTC time.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeatherLocation {
+    pub latitude_e2: i32,
+    pub longitude_e2: i32,
+    pub updated_at: u64,
+}
+
+impl std::fmt::Debug for WeatherLocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WeatherLocation(approximate, redacted)")
+    }
+}
+
+impl WeatherLocation {
+    pub fn from_degrees(latitude: f64, longitude: f64, updated_at: u64) -> Option<Self> {
+        if !latitude.is_finite() || !longitude.is_finite()
+            || !(-90.0..=90.0).contains(&latitude) || !(-180.0..=180.0).contains(&longitude) {
+            return None;
+        }
+        let location = Self { latitude_e2: (latitude * 100.0).round() as i32,
+            longitude_e2: (longitude * 100.0).round() as i32, updated_at };
+        location.valid().then_some(location)
+    }
+
+    pub fn valid(self) -> bool {
+        (-9000..=9000).contains(&self.latitude_e2)
+            && (-18000..=18000).contains(&self.longitude_e2)
+            && self.updated_at > 0 && self.updated_at < 253_402_300_800
+    }
+}
+
 impl Config {
     /// Either policy needs a reveal strip and leaves maximized windows the full work area.
     pub fn hides_automatically(&self) -> bool {
@@ -345,6 +383,7 @@ impl Config {
             .menu_bar_clock_target
             .map(|target| target.trim().to_owned())
             .filter(|target| !target.is_empty());
+        self.weather_location = self.weather_location.filter(|location| location.valid());
         self
     }
 
@@ -395,6 +434,8 @@ impl Default for Config {
             menu_bar_all_displays: true,
             menu_bar_clock_target: None,
             accessory_battery: false,
+            weather: false,
+            weather_location: None,
             show_indicators: true,
             show_recents: true,
             bounce_on_open: true,

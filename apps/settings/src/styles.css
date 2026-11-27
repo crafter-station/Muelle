@@ -733,4 +733,7 @@ input:focus-visible {
 /* Physical controls and screen diagrams keep their screen coordinates in RTL. */
 .traffic, .toggle, .slider, .preview-screen, .preview-density { direction: ltr; }
 .window[dir="rtl"] .visual-legend { float: right; }
-.window[dir="rtl"] .row-hint { line-height: 1.6; }
+ .window[dir="rtl"] .row-hint { line-height: 1.6; }
+
+.weather-settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.weather-credit { border: 0; background: none; color: inherit; opacity: .65; font-size: 11px; padding: 4px; cursor: default; }

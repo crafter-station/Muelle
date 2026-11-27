@@ -36,6 +36,7 @@ mod shell_work;
 mod strings;
 mod thumbnails;
 mod usage;
+mod weather;
 
 use std::env;
 

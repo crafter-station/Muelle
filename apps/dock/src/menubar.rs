@@ -31,7 +31,7 @@ use muelle_shell::{
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering},
+        atomic::{AtomicBool, AtomicIsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -153,16 +153,67 @@ const SPI_SETWORKAREA: usize = 0x002F;
 /// A `TICK` is already posted.
 static TICK_PENDING: AtomicBool = AtomicBool::new(false);
 static AUDIO_TICK_PENDING: AtomicBool = AtomicBool::new(false);
-static TRIGGERS_LEFT: AtomicI32 = AtomicI32::new(0);
-static TRIGGERS_RIGHT: AtomicI32 = AtomicI32::new(0);
-static PANEL_LEFT: AtomicI32 = AtomicI32::new(0);
-/// The speaker icon while its volume slider is open, else empty.
-static SPEAKER_LEFT: AtomicI32 = AtomicI32::new(0);
-static SPEAKER_RIGHT: AtomicI32 = AtomicI32::new(0);
-static PANEL_RIGHT: AtomicI32 = AtomicI32::new(0);
-static BAR_TOP: AtomicI32 = AtomicI32::new(0);
-static BAR_BOTTOM: AtomicI32 = AtomicI32::new(0);
-static PANEL_BOTTOM: AtomicI32 = AtomicI32::new(0);
+/// Where a bar's window takes the pointer and where its popup's hook sees a
+/// click as inside, in screen pixels. Each bar (one per display) has its own.
+#[derive(Clone, Copy, Default)]
+struct HitZones {
+    bar_top: i32,
+    bar_bottom: i32,
+    /// The island, from left to right.
+    triggers: (i32, i32),
+    /// The popup under it, with its bottom edge.
+    panel: (i32, i32),
+    panel_bottom: i32,
+    /// The speaker icon while its volume slider is open, else empty.
+    speaker: (i32, i32),
+}
+
+impl HitZones {
+    /// Whether a click at `point` stays with the open popup.
+    fn keeps(&self, point: POINT) -> bool {
+        let within = |(left, right): (i32, i32)| point.x >= left && point.x < right;
+        let in_bar = point.y >= self.bar_top && point.y < self.bar_bottom;
+        let in_panel = point.y >= self.bar_bottom && point.y < self.panel_bottom;
+        (in_bar && (within(self.triggers) || within(self.speaker)))
+            || (in_panel && within(self.panel))
+    }
+
+    /// Whether the window lets the pointer through at `(x, y)`: below the
+    /// bar, beside or under its popup.
+    fn passes(&self, x: i32, y: i32) -> bool {
+        y >= self.bar_bottom && (y >= self.panel_bottom || x < self.panel.0 || x >= self.panel.1)
+    }
+}
+
+static HIT_ZONES: std::sync::Mutex<Vec<(isize, HitZones)>> = std::sync::Mutex::new(Vec::new());
+
+fn hit_zones(window: isize) -> HitZones {
+    HIT_ZONES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|(id, _)| *id == window)
+        .map_or_else(HitZones::default, |(_, zones)| *zones)
+}
+
+fn set_hit_zones(window: isize, zones: Option<HitZones>) {
+    let mut all = HIT_ZONES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    all.retain(|(id, _)| *id != window);
+    all.extend(zones.map(|zones| (window, zones)));
+}
+
+/// The bar window's hit test: through its transparent area, else as usual.
+fn hit_test(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    let x = (l.0 & 0xFFFF) as i16 as i32;
+    let y = (l.0 >> 16) as i16 as i32;
+    if hit_zones(hwnd.0 as isize).passes(x, y) {
+        return LRESULT(-1);
+    }
+    // SAFETY: Default hit testing for the bar and the island.
+    unsafe { DefWindowProcW(hwnd, msg, w, l) }
+}
 /// The hook exists only while the island is expanded.
 static ISLAND_HOOK_WINDOW: AtomicIsize = AtomicIsize::new(0);
 /// Segoe Fluent Icons code points.
@@ -655,34 +706,71 @@ struct Mirror {
 
 /// What reaches a copy of the bar on another display (see `mirror_proc`).
 pub enum MirrorEvent {
-    Click(f32, f32),
+    /// Button down: a seek or volume drag may start.
+    Press(f32, f32),
+    /// Button up: ends a drag, or else is a click.
+    Release(f32, f32),
+    /// The mouse capture was lost during a drag.
+    CaptureLost,
     PointerMoved(f32, f32),
     CheckPointer,
     FinishHide(Option<usize>),
+    Scroll(POINT, i16),
+    VolumeFlush,
+    ProgressTick,
+    Dismiss,
 }
 
-/// The window of a copy of the bar on another display: no popups, media,
-/// audio or keyboard there, only the bar, its clicks and its hiding.
+/// The window of a copy of the bar on another display: the bar's gestures,
+/// popups and hiding, as on the primary bar. No keyboard: the music popup's
+/// Space shortcut is the primary bar's.
 unsafe extern "system" fn mirror_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     let at = || ((l.0 & 0xFFFF) as i16 as f32, (l.0 >> 16) as i16 as f32);
     let event = match msg {
-        WM_CLOSE => return LRESULT(0),
+        WM_CLOSE => MirrorEvent::Dismiss,
         WM_LBUTTONDOWN => {
             launcher::note_menu_bar_press();
-            return LRESULT(0);
+            let (x, y) = at();
+            MirrorEvent::Press(x, y)
         }
         WM_LBUTTONUP => {
             let (x, y) = at();
-            MirrorEvent::Click(x, y)
+            MirrorEvent::Release(x, y)
         }
         WM_MOUSEMOVE => {
             let (x, y) = at();
             MirrorEvent::PointerMoved(x, y)
         }
         WM_MOUSELEAVE => MirrorEvent::CheckPointer,
+        WM_MOUSEWHEEL => {
+            let point = POINT {
+                x: (l.0 & 0xFFFF) as i16 as i32,
+                y: (l.0 >> 16) as i16 as i32,
+            };
+            if app::menu_bar_mirror_event(
+                hwnd,
+                MirrorEvent::Scroll(point, (w.0 >> 16) as u16 as i16),
+            ) {
+                return LRESULT(0);
+            }
+            return unsafe { DefWindowProcW(hwnd, msg, w, l) };
+        }
         WM_TIMER if w.0 == POINTER_TIMER => MirrorEvent::CheckPointer,
         WM_TIMER if w.0 == HIDE_ANIMATION_TIMER => MirrorEvent::FinishHide(None),
+        WM_TIMER if w.0 == VOLUME_TIMER => MirrorEvent::VolumeFlush,
+        WM_TIMER if w.0 == PROGRESS_TIMER => MirrorEvent::ProgressTick,
         HIDE_ANIMATION_DONE => MirrorEvent::FinishHide(Some(w.0)),
+        DISMISS_ISLAND => MirrorEvent::Dismiss,
+        WM_CAPTURECHANGED => {
+            // Avoid reentering the app borrow inside Set/ReleaseCapture.
+            unsafe {
+                let _ = PostMessageW(Some(hwnd), VOLUME_CAPTURE_LOST, WPARAM(0), LPARAM(0));
+            }
+            return LRESULT(0);
+        }
+        // A delayed notification must not cancel a newer drag.
+        VOLUME_CAPTURE_LOST if unsafe { GetCapture() } != hwnd => MirrorEvent::CaptureLost,
+        WM_NCHITTEST => return hit_test(hwnd, msg, w, l),
         WM_SETCURSOR => {
             // SAFETY: Keep the standard arrow throughout the bar.
             if let Ok(arrow) = unsafe { LoadCursorW(None, IDC_ARROW) } {
@@ -788,19 +876,7 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
             }
             return unsafe { DefWindowProcW(hwnd, msg, w, l) };
         }
-        WM_NCHITTEST => {
-            let x = (l.0 & 0xFFFF) as i16 as i32;
-            let y = (l.0 >> 16) as i16 as i32;
-            if y >= BAR_BOTTOM.load(Ordering::Relaxed)
-                && (y >= PANEL_BOTTOM.load(Ordering::Relaxed)
-                    || x < PANEL_LEFT.load(Ordering::Relaxed)
-                    || x >= PANEL_RIGHT.load(Ordering::Relaxed))
-            {
-                return LRESULT(-1);
-            }
-            // SAFETY: Default hit testing for the bar and the island.
-            return unsafe { DefWindowProcW(hwnd, msg, w, l) };
-        }
+        WM_NCHITTEST => return hit_test(hwnd, msg, w, l),
         // The minute changed, the charger was plugged or unplugged, the
         // network or volume changed, or a Windows setting (taskbar buttons).
         // Nothing the bar shows depends on the work area.
@@ -846,21 +922,10 @@ unsafe extern "system" fn outside_click_proc(code: i32, w: WPARAM, l: LPARAM) ->
     {
         // SAFETY: Windows provides an MSLLHOOKSTRUCT for mouse hook actions.
         let point = unsafe { (*(l.0 as *const MSLLHOOKSTRUCT)).pt };
-        let in_triggers = point.y >= BAR_TOP.load(Ordering::Relaxed)
-            && point.y < BAR_BOTTOM.load(Ordering::Relaxed)
-            && point.x >= TRIGGERS_LEFT.load(Ordering::Relaxed)
-            && point.x < TRIGGERS_RIGHT.load(Ordering::Relaxed);
-        let in_panel = point.y >= BAR_BOTTOM.load(Ordering::Relaxed)
-            && point.y < PANEL_BOTTOM.load(Ordering::Relaxed)
-            && point.x >= PANEL_LEFT.load(Ordering::Relaxed)
-            && point.x < PANEL_RIGHT.load(Ordering::Relaxed);
-        let in_speaker = point.y >= BAR_TOP.load(Ordering::Relaxed)
-            && point.y < BAR_BOTTOM.load(Ordering::Relaxed)
-            && point.x >= SPEAKER_LEFT.load(Ordering::Relaxed)
-            && point.x < SPEAKER_RIGHT.load(Ordering::Relaxed);
-        if !in_triggers && !in_panel && !in_speaker {
-            let window = ISLAND_HOOK_WINDOW.load(Ordering::Relaxed);
-            if window != 0 {
+        // The bar whose popup is open, on whichever display.
+        let window = ISLAND_HOOK_WINDOW.load(Ordering::Relaxed);
+        if window != 0 && !hit_zones(window).keeps(point) {
+            {
                 // SAFETY: The window remains live until the hook is removed in Drop.
                 unsafe {
                     let _ = PostMessageW(
@@ -1624,22 +1689,95 @@ impl MenuBar {
         let mut look = primary.clone();
         look.screen = monitor.screen;
         look.scale = monitor.scale;
-        // Popups open on the primary bar only.
-        look.panel = None;
+        // Its own popup, if open there.
+        look.panel = self.panel;
         look.dim_app = active.is_some_and(|active| active != display);
         mirror.source = Some(look.clone());
+        // Whether there is a volume to slide, as on the primary bar.
+        self.status = look.status;
         self.apply_look(gfx, look)
     }
 
     fn sync_mirrors(&mut self, gfx: &Gfx) {
-        let Some(look) = &self.look else {
+        if self.mirrors.is_empty() {
+            return;
+        }
+        let Some(look) = self.look.take() else {
             return;
         };
-        for bar in &mut self.mirrors {
-            if let Err(error) = bar.follow(gfx, look, self.active_display) {
+        let active = self.active_display;
+        // One popup at a time: the primary bar's closes the copies'.
+        let open_here = self.panel.is_some();
+        for index in 0..self.mirrors.len() {
+            let result = self.lend(index, |bar| {
+                if open_here && bar.panel.is_some() {
+                    bar.dismiss_island(gfx)?;
+                }
+                bar.follow(gfx, &look, active)
+            });
+            if let Err(error) = result {
                 muelle_shell::log::line(&format!("barra superior en otra pantalla: {error:#}"));
             }
         }
+        self.look = Some(look);
+    }
+
+    /// Runs `action` on the copy at `index` with the primary bar's player,
+    /// volume and usage readers: its popups show and control the same ones,
+    /// and nothing is read twice. They come back afterwards.
+    fn lend<R>(&mut self, index: usize, action: impl FnOnce(&mut MenuBar) -> R) -> R {
+        let bar = &mut self.mirrors[index];
+        bar.media = self.media.take();
+        bar.audio = self.audio.take();
+        bar.usage = self.usage.take();
+        let result = action(bar);
+        self.media = bar.media.take();
+        self.audio = bar.audio.take();
+        self.usage = bar.usage.take();
+        result
+    }
+
+    /// Runs `action` on this bar or its copy whose window is `hwnd`. One
+    /// popup at a time: opening one closes any other bar's.
+    pub fn with_bar<R>(
+        &mut self,
+        gfx: &Gfx,
+        hwnd: isize,
+        action: impl FnOnce(&mut MenuBar) -> Result<R>,
+    ) -> Result<Option<R>> {
+        let result = if self.hwnd.0 as isize == hwnd {
+            action(self)?
+        } else {
+            let Some(index) = self
+                .mirrors
+                .iter()
+                .position(|bar| bar.hwnd.0 as isize == hwnd)
+            else {
+                return Ok(None);
+            };
+            self.lend(index, action)?
+        };
+        self.close_other_panels(gfx, hwnd)?;
+        Ok(Some(result))
+    }
+
+    /// Closes the popups of the bars other than `hwnd` once it has one open.
+    fn close_other_panels(&mut self, gfx: &Gfx, hwnd: isize) -> Result<()> {
+        let opened = std::iter::once(&*self)
+            .chain(&self.mirrors)
+            .any(|bar| bar.hwnd.0 as isize == hwnd && bar.panel.is_some());
+        if !opened {
+            return Ok(());
+        }
+        if self.hwnd.0 as isize != hwnd && self.panel.is_some() {
+            self.dismiss_island(gfx)?;
+        }
+        for index in 0..self.mirrors.len() {
+            if self.mirrors[index].hwnd.0 as isize != hwnd && self.mirrors[index].panel.is_some() {
+                self.lend(index, |bar| bar.dismiss_island(gfx))?;
+            }
+        }
+        Ok(())
     }
 
     /// Intelligent hiding: whether the window in front reaches under the
@@ -1986,7 +2124,7 @@ impl MenuBar {
             && x >= self.panel_span.left
             && x < self.panel_span.right
             && point.y >= self.bounds.bottom
-            && point.y < PANEL_BOTTOM.load(Ordering::Relaxed);
+            && point.y < hit_zones(self.hwnd.0 as isize).panel_bottom;
         if (within_bar || within_panel) && self.hide_until.is_some() {
             self.hover(gfx, true)?;
         } else if !within_bar && !within_panel {
@@ -2143,7 +2281,12 @@ impl MenuBar {
             // SAFETY: This hook was installed by this MenuBar.
             unsafe { UnhookWindowsHookEx(hook)? };
             self.outside_click_hook = None;
-            ISLAND_HOOK_WINDOW.store(0, Ordering::Relaxed);
+            let _ = ISLAND_HOOK_WINDOW.compare_exchange(
+                self.hwnd.0 as isize,
+                0,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
         }
         Ok(())
     }
@@ -2283,10 +2426,6 @@ impl MenuBar {
     }
 
     pub fn click(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<()> {
-        // A copy on another display has no popups: its island only shows.
-        if self.mirror.is_some() && self.island_hits.iter().any(|hit| hit.at(x, y)) {
-            return Ok(());
-        }
         if let Some(action) = self
             .island_hits
             .iter()
@@ -2336,7 +2475,7 @@ impl MenuBar {
                 }
             }
             self.refresh(gfx)?;
-            if matches!(action, IslandAction::Toggle(Island::Music)) {
+            if matches!(action, IslandAction::Toggle(Island::Music)) && self.mirror.is_none() {
                 self.focus_music();
             }
             return Ok(());
@@ -2372,8 +2511,6 @@ impl MenuBar {
             Some(Action::Network) => launcher::open_network_list(),
             // Without an output device there is nothing to slide: Windows'
             // own sound page says why.
-            // A copy has no volume popup: Windows' quick settings have one.
-            Some(Action::Sound) if self.mirror.is_some() => launcher::open_quick_settings(),
             Some(Action::Sound) if self.status.volume.is_none() => launcher::open_sound(),
             Some(Action::Sound) => {
                 if !volume_was_open {
@@ -2426,7 +2563,10 @@ impl MenuBar {
     pub fn refresh(&mut self, gfx: &Gfx) -> Result<()> {
         if let Some(mirror) = &self.mirror {
             return match mirror.source.clone() {
-                Some(look) => self.apply_look(gfx, look),
+                Some(mut look) => {
+                    look.panel = self.panel;
+                    self.apply_look(gfx, look)
+                }
                 None => Ok(()),
             };
         }
@@ -3025,10 +3165,6 @@ impl MenuBar {
         // While the slider is open, a click on the speaker reaches the bar
         // (to close it) instead of dismissing it first from the hook.
         let (speaker_left, speaker_right) = speaker_zone.unwrap_or_default();
-        if self.mirror.is_none() {
-            SPEAKER_LEFT.store(screen.left + speaker_left as i32, Ordering::Relaxed);
-            SPEAKER_RIGHT.store(screen.left + speaker_right as i32, Ordering::Relaxed);
-        }
         if let Some(drag) = self.volume_drag {
             let new_span = self.island_hits.iter().find_map(|hit| match hit.action {
                 IslandAction::Volume(span) => Some(span),
@@ -3062,32 +3198,23 @@ impl MenuBar {
             bottom: screen.top + height as i32,
             ..screen
         };
-        // The popup's hit tests and hook read these: the primary bar's, the
-        // only one with popups.
-        if self.mirror.is_some() {
-            return self.place();
-        }
-        TRIGGERS_LEFT.store(
-            screen.left + self.triggers_span.left as i32,
-            Ordering::Relaxed,
-        );
-        TRIGGERS_RIGHT.store(
-            screen.left + self.triggers_span.right as i32,
-            Ordering::Relaxed,
-        );
-        PANEL_LEFT.store(screen.left + self.panel_span.left as i32, Ordering::Relaxed);
-        PANEL_RIGHT.store(
-            screen.left + self.panel_span.right as i32,
-            Ordering::Relaxed,
-        );
-        BAR_TOP.store(screen.top, Ordering::Relaxed);
-        BAR_BOTTOM.store(screen.top + height as i32, Ordering::Relaxed);
         let clickable_height = if self.panel_span.width() > 0.0 {
             panel_bottom
         } else {
             height
         };
-        PANEL_BOTTOM.store(screen.top + clickable_height as i32, Ordering::Relaxed);
+        let span = |left: f32, right: f32| (screen.left + left as i32, screen.left + right as i32);
+        set_hit_zones(
+            self.hwnd.0 as isize,
+            Some(HitZones {
+                bar_top: screen.top,
+                bar_bottom: screen.top + height as i32,
+                triggers: span(self.triggers_span.left, self.triggers_span.right),
+                panel: span(self.panel_span.left, self.panel_span.right),
+                panel_bottom: screen.top + clickable_height as i32,
+                speaker: span(speaker_left, speaker_right),
+            }),
+        );
         self.place()
     }
 
@@ -3820,8 +3947,7 @@ impl MenuBar {
     }
 
     fn sync_progress_watch(&mut self) {
-        let shown =
-            self.panel == Some(Island::Music) && self.visible && (!self.auto_hide || self.revealed);
+        let shown = self.music_popup_shown() || self.mirrors.iter().any(MenuBar::music_popup_shown);
         if let Some(media) = &self.media {
             media.show_progress(shown);
         }
@@ -3849,6 +3975,11 @@ impl MenuBar {
                 };
             }
         }
+    }
+
+    /// Whether this bar shows the music popup now.
+    fn music_popup_shown(&self) -> bool {
+        self.panel == Some(Island::Music) && self.visible && (!self.auto_hide || self.revealed)
     }
 
     pub fn progress_tick(&mut self, gfx: &Gfx) -> Result<()> {
@@ -4992,9 +5123,13 @@ impl Drop for MenuBar {
         self.accessories = None;
         self.exit_animation = None;
         self.media = None;
-        if self.mirror.is_none() {
-            ISLAND_HOOK_WINDOW.store(0, Ordering::Relaxed);
-        }
+        let _ = ISLAND_HOOK_WINDOW.compare_exchange(
+            self.hwnd.0 as isize,
+            0,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
+        set_hit_zones(self.hwnd.0 as isize, None);
         edge_watch::set_menu_bar(self.hwnd, None);
         if let Some(hook) = self.outside_click_hook.take() {
             // SAFETY: Do not leave a callback pointing at a destroyed window.
@@ -5014,6 +5149,43 @@ impl Drop for MenuBar {
 #[cfg(test)]
 mod island_tests {
     use super::*;
+
+    #[test]
+    fn each_bar_keeps_its_own_popup_clicks() {
+        let laptop = HitZones {
+            bar_top: 0,
+            bar_bottom: 35,
+            triggers: (700, 1200),
+            panel: (650, 1250),
+            panel_bottom: 400,
+            speaker: (0, 0),
+        };
+        let monitor = HitZones {
+            bar_top: 0,
+            bar_bottom: 28,
+            triggers: (2650, 3050),
+            panel: (2600, 3100),
+            panel_bottom: 330,
+            speaker: (3600, 3620),
+        };
+        set_hit_zones(1, Some(laptop));
+        set_hit_zones(2, Some(monitor));
+        let at = |x, y| POINT { x, y };
+        // In each bar's island, popup or speaker; not in the other's.
+        assert!(hit_zones(1).keeps(at(900, 10)));
+        assert!(hit_zones(1).keeps(at(900, 200)));
+        assert!(!hit_zones(1).keeps(at(2800, 10)));
+        assert!(hit_zones(2).keeps(at(2800, 200)));
+        assert!(hit_zones(2).keeps(at(3610, 10)));
+        assert!(!hit_zones(2).keeps(at(2800, 340)));
+        // Below a bar and beside its popup, the pointer goes through.
+        assert!(hit_zones(2).passes(2000, 30));
+        assert!(!hit_zones(2).passes(2800, 30));
+        assert!(!hit_zones(1).passes(500, 30));
+        set_hit_zones(2, None);
+        assert!(!hit_zones(2).keeps(at(2800, 10)));
+        set_hit_zones(1, None);
+    }
 
     #[test]
     fn progress_coordinates_clamp_outside_the_track_and_ignore_invalid_input() {

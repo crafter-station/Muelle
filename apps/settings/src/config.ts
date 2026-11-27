@@ -11,6 +11,7 @@ export type DockAutoHideSpeed = "smooth" | "normal" | "fast";
 export type DockHidingMode = "visible" | "automatic" | "intelligent";
 /** `auto` follows Windows' light or dark mode. */
 export type Appearance = "auto" | "light" | "dark" | "frosted" | "clear" | "liquidGlass";
+export interface WeatherLocation { latitudeE2: number; longitudeE2: number; updatedAt: number }
 
 /** Mirrors `muelle_config::Config`. */
 export interface Config {
@@ -45,6 +46,8 @@ export interface Config {
   /** What the clock opens (an app, shortcut or URI); null for the notification center. */
   menuBarClockTarget: string | null;
   accessoryBattery: boolean;
+  weather?: boolean;
+  weatherLocation?: WeatherLocation | null;
   menuBarSystemMonitor?: boolean;
   /** The menu bar on every display, not only the primary one. */
   menuBarAllDisplays?: boolean;
@@ -101,6 +104,10 @@ export const checkUpdate = () => invoke<UpdateInfo | null>("check_update");
 export const openReleaseNotes = (url: string) => invoke<void>("open_release_notes", { url });
 /** Fixed project URL, opened only when the user asks. */
 export const openRepository = () => invoke<void>("open_repository");
+export const locateWeather = () => invoke<WeatherLocation>("locate_weather");
+export const cancelWeatherLocation = () => invoke<void>("cancel_weather_location");
+export const openWeatherLocationSettings = () => invoke<void>("open_weather_location_settings");
+export const openWeatherAttribution = () => invoke<void>("open_weather_attribution");
 let wallpaperRequest: Promise<string | null> | undefined;
 /** One bounded native read per Settings process, including React StrictMode. */
 export const loadWallpaperPreview = () =>

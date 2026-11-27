@@ -3,6 +3,9 @@
 
 #[path = "gfx/backdrop.rs"]
 mod backdrop;
+#[path = "gfx/weather.rs"]
+mod weather;
+pub use weather::WeatherGlyph;
 
 use anyhow::{Context, Result};
 use muelle_core::frame::DockEdge;
@@ -569,11 +572,11 @@ impl Gfx {
         style: GroupStyle,
     ) -> Result<CompositionSurfaceBrush> {
         let size = side as f32;
-        let inset = size * 0.08;
+        let inset = size * 0.04;
         let tile = size - 2.0 * inset;
         let radius = tile * 0.225;
-        let pad = tile * 0.105;
-        let gap = tile * 0.065;
+        let pad = tile * 0.075;
+        let gap = tile * 0.05;
         let cell = (tile - 2.0 * pad - gap) / 2.0;
         let stroke = (size * 0.012).max(0.8);
         let more = if count > 4 {
