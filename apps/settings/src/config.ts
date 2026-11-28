@@ -12,6 +12,70 @@ export type DockHidingMode = "visible" | "automatic" | "intelligent";
 /** `auto` follows Windows' light or dark mode. */
 export type Appearance = "auto" | "light" | "dark" | "frosted" | "clear" | "liquidGlass";
 
+export type SearchMonitor = "mouse" | "active" | "primary";
+export type SearchEngine = "google" | "bing" | "duckduckgo" | "brave" | "ecosia" | "startpage" | "custom";
+export interface SearchKeyword {
+  word: string;
+  url: string;
+}
+
+/** Mirrors `muelle_config::SearchConfig`. */
+export interface SearchConfig {
+  enabled: boolean;
+  hotkey: string;
+  monitor: SearchMonitor;
+  keepQuery: boolean;
+  closeOnBlur: boolean;
+  width: number;
+  position: number;
+  maxRows: number;
+  compact: boolean;
+  headers: boolean;
+  showApps: boolean;
+  showSystemSettings: boolean;
+  showFolders: boolean;
+  showFiles: boolean;
+  showContents: boolean;
+  showDefinitions: boolean;
+  showCalculator: boolean;
+  showAddresses: boolean;
+  showWebSearch: boolean;
+  contentResults: number;
+  learn: boolean;
+  standardFolders: Record<"desktop" | "documents" | "downloads" | "pictures" | "music" | "videos", boolean>;
+  folders: string[];
+  excludedFolders: string[];
+  hiddenFiles: boolean;
+  refreshMinutes: number;
+  engine: SearchEngine;
+  customSearch: string;
+  keywordsEnabled: boolean;
+  keywords: SearchKeyword[];
+}
+
+/** The ranges `muelle_config` keeps these settings within. */
+export const SEARCH_LIMITS = {
+  width: { min: 520, max: 960 },
+  position: { min: 0, max: 40 },
+  maxRows: { min: 4, max: 12 },
+  contentResults: { min: 1, max: 6 },
+} as const;
+
+/** Mirrors `muelle_config::WeekStart`. */
+export type WeekStart = "auto" | "monday" | "sunday" | "saturday";
+/** Mirrors `muelle_config::MenuBarIcon`. */
+export type MenuBarIcon = "ring" | "windows" | "custom";
+/** Why a picture was refused: `muelle_shell::menu_icon::Problem` codes. */
+export type IconProblem = "format" | "size" | "square" | "dimensions" | "save";
+
+/** The control center's tiles, in the order it lays them out. */
+export const CONTROL_TILES = [
+  "network", "media", "bluetooth", "nearbySharing", "focus", "taskView", "cast", "display",
+  "sound", "darkMode", "calculator", "timer", "screenshot",
+] as const;
+/** Mirrors `muelle_config::ControlTiles`. */
+export type ControlTiles = Record<(typeof CONTROL_TILES)[number], boolean>;
+
 /** Mirrors `muelle_config::Config`. */
 export interface Config {
   version: number;
@@ -60,6 +124,19 @@ export interface Config {
   menuBarAppearance: Appearance | null;
   /** The folder shown at the right of the dock, whose contents open as a menu. */
   shortcutsFolder: string | null;
+  search: SearchConfig;
+  menuBarCircle?: boolean;
+  menuBarCircleMenu?: boolean;
+  menuBarIcon?: MenuBarIcon;
+  menuBarIconFile?: string | null;
+  menuBarIconAnimation?: boolean;
+  menuBarDynamicArrow?: boolean;
+  controlCenter?: boolean;
+  controlCenterTiles?: ControlTiles;
+  networkMenu?: boolean;
+  trayMenu?: boolean;
+  calendar?: boolean;
+  calendarWeekStart?: WeekStart;
 }
 
 export const ICON_SIZE = { min: 32, max: 96 } as const;
@@ -87,6 +164,10 @@ export const pickFolder = (current: string | null) =>
 /** An app or shortcut for the clock to open, or null if the user cancels. */
 export const pickClockTarget = (current: string | null, apps: string, all: string) =>
   invoke<string | null>("pick_clock_target", { current, apps, all });
+/** The kept copy of the picture chosen; null if the user cancels. */
+export const pickMenuIcon = (current: string | null, images: string) =>
+  invoke<string | null>("pick_menu_icon", { current, images });
+export const menuIconPreview = (path: string) => invoke<string | null>("menu_icon_preview", { path });
 export interface UpdateInfo {
   version: string;
   /** Release page with the notes, if the manifest has one. */
@@ -119,3 +200,18 @@ export const applyWallpaper = async (id: number, preview: string) => {
   wallpaperSelectionRequest = undefined;
 };
 export const installUpdate = () => invoke<void>("install_update");
+
+export interface SearchStatus {
+  running: boolean;
+  /** The shortcut in effect; null if none could be claimed. */
+  hotkey: string | null;
+  /** Whether definitions have a dictionary to come from. */
+  dictionary: boolean;
+}
+export const loadSearchStatus = () => invoke<SearchStatus>("search_status");
+/** Releases the search shortcut while a new one is typed, then claims it again. */
+export const suspendSearchHotkey = (suspend: boolean) => invoke<void>("suspend_search_hotkey", { suspend });
+export const rebuildSearchIndex = () => invoke<void>("rebuild_search_index");
+export const clearSearchHistory = () => invoke<void>("clear_search_history");
+/** The section Settings was started to show, if any. */
+export const initialSection = () => invoke<string | null>("initial_section");

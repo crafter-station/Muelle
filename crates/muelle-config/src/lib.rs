@@ -12,6 +12,13 @@ use std::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod controls;
+mod look;
+mod search;
+pub use controls::*;
+pub use look::*;
+pub use search::*;
+
 pub const CURRENT_VERSION: u32 = 1;
 
 /// Error reading or saving the configuration.
@@ -114,6 +121,36 @@ pub struct Config {
     /// default: off, nothing is sampled; on, every 2 s only while the bar
     /// is on screen.
     pub menu_bar_system_monitor: bool,
+    /// A circle before the name of the app in front.
+    pub menu_bar_circle: bool,
+    /// Pressing the circle opens a menu like macOS's Apple menu: settings,
+    /// Force Quit, sleep, restart, shut down, lock and sign out.
+    pub menu_bar_circle_menu: bool,
+    /// What the icon before the app's name looks like.
+    pub menu_bar_icon: MenuBarIcon,
+    /// Muelle's copy of the user's picture, for `MenuBarIcon::Custom`.
+    pub menu_bar_icon_file: Option<String>,
+    /// The icon and its menu move as they open and close.
+    pub menu_bar_icon_animation: bool,
+    /// The notification area's arrow points down while its menu is closed and
+    /// up while it is open. Off, it always points up, as on the taskbar.
+    pub menu_bar_dynamic_arrow: bool,
+    /// Muelle's control center under the menu bar's button. Off, the button
+    /// opens Windows' quick settings.
+    pub control_center: bool,
+    /// What the control center shows.
+    pub control_center_tiles: ControlTiles,
+    /// Muelle's Wi-Fi menu under the network icon. Off, the icon opens
+    /// Windows' list of networks.
+    pub network_menu: bool,
+    /// Muelle's tray menu under the arrow. Off, the arrow opens Windows' own
+    /// and Muelle does not listen to the notification area.
+    pub tray_menu: bool,
+    /// Muelle's calendar under the clock, unless `menu_bar_clock_target`
+    /// names something else to open. Off, the clock opens the notification
+    /// center.
+    pub calendar: bool,
+    pub calendar_week_start: WeekStart,
     /// Opt-in peripheral monitoring. Off means no accessory reader or queries.
     pub accessory_battery: bool,
     /// The dot under apps that have windows open.
@@ -148,6 +185,8 @@ pub struct Config {
     /// menu, with a submenu for each folder inside, like a Windows 10 taskbar
     /// toolbar. Only one: the user arranges the folder as they like.
     pub shortcuts_folder: Option<String>,
+    /// The search window, opened by its shortcut or the menu bar's button.
+    pub search: SearchConfig,
     // Retired switches, whose saved values are ignored: the attention
     // indicator follows Windows' own "Show badges on taskbar apps"; icons
     // always bounce for attention; window previews always have a close
@@ -338,6 +377,11 @@ impl Config {
             .menu_bar_clock_target
             .map(|target| target.trim().to_owned())
             .filter(|target| !target.is_empty());
+        self.menu_bar_icon_file = self
+            .menu_bar_icon_file
+            .map(|file| file.trim().to_owned())
+            .filter(|file| !file.is_empty());
+        self.search = self.search.sanitized();
         self
     }
 
@@ -386,6 +430,18 @@ impl Default for Config {
             menu_bar_notifications: false,
             menu_bar_system_monitor: false,
             menu_bar_clock_target: None,
+            menu_bar_circle: true,
+            menu_bar_circle_menu: true,
+            menu_bar_icon: MenuBarIcon::Ring,
+            menu_bar_icon_file: None,
+            menu_bar_icon_animation: true,
+            menu_bar_dynamic_arrow: true,
+            control_center: true,
+            control_center_tiles: ControlTiles::default(),
+            network_menu: true,
+            tray_menu: true,
+            calendar: true,
+            calendar_week_start: WeekStart::Auto,
             accessory_battery: false,
             show_indicators: true,
             show_recents: true,
@@ -399,6 +455,7 @@ impl Default for Config {
             appearance: Appearance::Auto,
             menu_bar_appearance: None,
             shortcuts_folder: None,
+            search: SearchConfig::default(),
         }
     }
 }
@@ -547,6 +604,39 @@ mod tests {
                     .is_none()
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn menu_bar_extras_start_on_and_keep_saved_choices() -> Result<(), serde_json::Error> {
+        let older: Config = serde_json::from_str("{}")?;
+        assert!(older.menu_bar_circle && older.menu_bar_dynamic_arrow);
+        assert!(older.menu_bar_circle_menu && older.menu_bar_icon_animation);
+        assert_eq!(older.menu_bar_icon, MenuBarIcon::Ring);
+        let windows: Config = serde_json::from_str(r#"{"menuBarIcon":"windows"}"#)?;
+        assert_eq!(windows.menu_bar_icon, MenuBarIcon::Windows);
+        // A look added by a newer version leaves the ring.
+        let newer: Config = serde_json::from_str(r#"{"menuBarIcon":"star"}"#)?;
+        assert_eq!(newer.menu_bar_icon, MenuBarIcon::Ring);
+        assert!(older.calendar);
+        assert_eq!(older.calendar_week_start, WeekStart::Auto);
+        let sunday: Config =
+            serde_json::from_str(r#"{"calendar":false,"calendarWeekStart":"sunday"}"#)?;
+        assert!(!sunday.calendar);
+        assert_eq!(sunday.calendar_week_start, WeekStart::Sunday);
+        let blank: Config = serde_json::from_str(r#"{"menuBarIconFile":"  "}"#)?;
+        assert_eq!(blank.sanitized().menu_bar_icon_file, None);
+        assert!(older.control_center && older.network_menu && older.tray_menu);
+        assert_eq!(older.control_center_tiles, ControlTiles::default());
+        // A tile missing from the file stays shown.
+        let chosen: Config = serde_json::from_str(
+            r#"{"menuBarCircle":false,"trayMenu":false,"controlCenterTiles":{"nearbySharing":false}}"#,
+        )?;
+        assert!(!chosen.menu_bar_circle && !chosen.tray_menu);
+        assert!(!chosen.control_center_tiles.nearby_sharing);
+        assert!(chosen.control_center_tiles.dark_mode);
+        let saved: Config = serde_json::from_str(&serde_json::to_string(&chosen)?)?;
+        assert_eq!(saved, chosen);
         Ok(())
     }
 

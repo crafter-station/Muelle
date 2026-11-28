@@ -2,8 +2,8 @@
 //!
 //! Hiding the Windows taskbar also hides its clock and status area; this bar
 //! brings them back: the name of the app in front, the battery, a control
-//! center button (opens the Windows quick settings: network, volume,
-//! brightness) and the date and time (opens the notification center).
+//! center button (opens Muelle's control center, see `control_center`) and
+//! the date and time (opens the notification center).
 //!
 //! Cost while idle: one timer that fires once a minute, on the minute, to
 //! redraw the clock. Everything else is event-driven.
@@ -17,7 +17,7 @@
 //! and volume changes arrive through separate notifications; nothing polls.
 
 use anyhow::Result;
-use muelle_config::{IslandStyle, Language};
+use muelle_config::{IslandStyle, Language, MenuBarIcon};
 use muelle_shell::{
     accessories::{Kind as AccessoryKind, Snapshot as AccessorySnapshot},
     appbar::{AppBar, Edge},
@@ -39,8 +39,9 @@ use windows::{
         Color,
         Composition::{
             CompositionBatchTypes, CompositionBrush, CompositionRoundedRectangleGeometry,
-            CompositionScopedBatch, CompositionSurfaceBrush, Compositor, ContainerVisual,
-            Desktop::DesktopWindowTarget, ShapeVisual, SpriteVisual, VisualCollection,
+            CompositionScopedBatch, CompositionSpriteShape, CompositionSurfaceBrush, Compositor,
+            ContainerVisual, Desktop::DesktopWindowTarget, ShapeVisual, SpriteVisual, Visual,
+            VisualCollection,
         },
     },
     Win32::{
@@ -76,6 +77,7 @@ use crate::{
     gfx::{Gfx, Ink, LabelBrush},
     mascot,
     media::{self, Control as MediaControl, Track},
+    menu,
     scene::Theme,
     strings,
     usage::{
@@ -87,6 +89,26 @@ use crate::{
 const HEIGHT: f32 = 28.0;
 const SIDE_MARGIN: f32 = 14.0;
 const ITEM_GAP: f32 = 16.0;
+/// The hollow circle before the app's name: its size, the thickness of its
+/// line and the room after it.
+const CIRCLE: f32 = 12.0;
+const CIRCLE_LINE: f32 = 1.5;
+const CIRCLE_GAP: f32 = 10.0;
+/// The other looks' sizes: Windows' squares, with the room between them, and
+/// the user's picture.
+const SQUARES: f32 = 13.0;
+const SQUARES_GAP: f32 = 1.0;
+const PICTURE: f32 = 16.0;
+/// Pixels read from the user's picture, enough for any scale.
+const PICTURE_PIXELS: u32 = 64;
+/// How long the icon takes to open or close, and how small it gets midway.
+const ICON_MS: i64 = 260;
+const ICON_DIP: f32 = 0.72;
+/// How often Windows' tray flyout is checked, only while it is open.
+const TRAY_TIMER: usize = 8;
+const TRAY_CHECK_MS: u32 = 150;
+/// The end of the volume slider's fold back into the speaker.
+const FOLD_TIMER: usize = 9;
 /// Extra clickable room around an item.
 const HIT_SLOP: f32 = 7.0;
 
@@ -116,6 +138,8 @@ const ACCESSORIES_CHANGED: u32 = WM_APP + 30;
 const CLOCK_TIMER: usize = 1;
 const POINTER_TIMER: usize = 2;
 const POINTER_CHECK_MS: u32 = 100;
+/// The same while the volume slider is open, to catch a tap of Escape.
+const MENU_CHECK_MS: u32 = 30;
 const HIDE_ANIMATION_TIMER: usize = 3;
 const REVEAL_MS: u32 = 180;
 const HIDE_MS: u32 = 130;
@@ -173,6 +197,8 @@ pub(crate) mod glyph {
     pub const WIDGETS: char = '\u{F246}';
     /// The taskbar's "show hidden icons" arrow.
     pub const HIDDEN_ICONS: char = '\u{E70E}';
+    /// The same pointing down, while its menu is closed.
+    pub const HIDDEN_ICONS_CLOSED: char = '\u{E70D}';
     pub const MICROPHONE: char = '\u{E720}';
     pub const CAMERA: char = '\u{E722}';
     pub const MOUSE: char = '\u{E962}';
@@ -184,6 +210,8 @@ pub(crate) mod glyph {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
+    /// The circle at the left end: the menu like macOS's Apple menu.
+    SystemMenu,
     AccessoryIndicator,
     QuickSettings,
     Notifications,
@@ -213,6 +241,17 @@ pub struct MenuBarWidgets {
     pub notifications: bool,
     /// CPU, memory and network speed (`Config::menu_bar_system_monitor`).
     pub system_monitor: bool,
+    /// A circle before the app's name (`Config::menu_bar_circle`).
+    pub circle: bool,
+    /// The circle opens a menu (`Config::menu_bar_circle_menu`).
+    pub circle_menu: bool,
+    /// What it looks like (`Config::menu_bar_icon`).
+    pub icon: MenuBarIcon,
+    /// It moves as its menu opens and closes
+    /// (`Config::menu_bar_icon_animation`).
+    pub icon_animation: bool,
+    /// The tray arrow follows its menu (`Config::menu_bar_dynamic_arrow`).
+    pub dynamic_arrow: bool,
 }
 
 impl Default for MenuBarWidgets {
@@ -221,6 +260,11 @@ impl Default for MenuBarWidgets {
             island_style: IslandStyle::Notch,
             notifications: false,
             system_monitor: false,
+            circle: true,
+            circle_menu: true,
+            icon: MenuBarIcon::Ring,
+            icon_animation: true,
+            dynamic_arrow: true,
         }
     }
 }
@@ -264,12 +308,72 @@ struct Look {
     panel: Option<Island>,
     usage_refreshing: bool,
     track: Option<Track>,
+    /// The button whose panel is open: it shows pressed.
+    held: Option<Action>,
+    /// Windows' own tray flyout is open, opened from the arrow.
+    windows_tray: bool,
+    /// The file of the user's picture, while one is loaded.
+    picture: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AccessoryReading {
     kind: AccessoryKind,
     percent: Option<u8>,
+}
+
+/// How large each look of the icon is, in logical pixels.
+const fn icon_side(icon: MenuBarIcon) -> f32 {
+    match icon {
+        MenuBarIcon::Ring => CIRCLE,
+        MenuBarIcon::Windows => SQUARES,
+        MenuBarIcon::Custom => PICTURE,
+    }
+}
+
+const fn icon_time() -> TimeSpan {
+    TimeSpan {
+        Duration: ICON_MS * 10_000,
+    }
+}
+
+/// Scales `visual` through `keys`: how far along, and how large.
+fn animate_scale(c: &Compositor, visual: &Visual, keys: &[(f32, f32)]) -> Result<()> {
+    let animation = c.CreateVector3KeyFrameAnimation()?;
+    for &(at, scale) in keys {
+        animation.InsertKeyFrame(at, Vector3::new(scale, scale, 1.0))?;
+    }
+    animation.SetDuration(icon_time())?;
+    visual.StartAnimation(h!("Scale"), &animation)?;
+    Ok(())
+}
+
+/// Takes `visual` out of whatever holds it, so it can go elsewhere.
+fn detach(visual: &ContainerVisual) -> Result<()> {
+    // A visual with no parent has nothing to be taken from.
+    if let Ok(parent) = visual.Parent() {
+        parent.Children()?.Remove(visual)?;
+    }
+    Ok(())
+}
+
+/// Behind a button whose panel is open.
+const fn pressed_fill(light: bool) -> Color {
+    if light {
+        rgba(0, 0, 0, 30)
+    } else {
+        rgba(255, 255, 255, 50)
+    }
+}
+
+/// The tray arrow: up as the taskbar's, or, while it follows its menu, down
+/// until the menu is open.
+const fn tray_arrow(follows: bool, open: bool) -> char {
+    if follows && !open {
+        glyph::HIDDEN_ICONS_CLOSED
+    } else {
+        glyph::HIDDEN_ICONS
+    }
 }
 
 // Compare only visible readings: unrelated names/devices do not redraw the bar.
@@ -496,9 +600,22 @@ impl Drop for ExitAnimation {
 
 pub struct MenuBar {
     bluetooth: Option<bluetooth::Monitor>,
-    /// In the bar row, where the pointer keeps the volume slider open: the
-    /// speaker and the width of the slider under it. Empty while closed.
-    volume_row_span: Span,
+    /// The volume slider while it shows, to fold it away when it goes.
+    slider: Option<ContainerVisual>,
+    /// The slider folding away, and the window height it still needs.
+    folding: Option<(ContainerVisual, i32)>,
+    /// The window in front when the volume slider opened: another coming
+    /// to the front closes it, as it does the other menus.
+    volume_front: isize,
+    /// The button whose panel hangs from the bar, which stays on screen
+    /// for it.
+    held: Option<Action>,
+    /// Windows' own tray flyout is open (see `follow_windows_tray`).
+    windows_tray: bool,
+    /// The user's picture for the icon, with the file it came from.
+    picture: Option<(String, muelle_shell::icons::IconImage)>,
+    /// The middle of the icon, in window pixels, while it shows.
+    icon_center: Option<(f32, f32)>,
     accessories: Option<accessories::Monitor>,
     accessories_enabled: bool,
     accessory_retry_at: Instant,
@@ -622,6 +739,8 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         WM_TIMER if w.0 == VOLUME_TIMER => app::menu_bar_volume_flush(),
         WM_TIMER if w.0 == PROGRESS_TIMER => app::menu_bar_progress_tick(),
         WM_TIMER if w.0 == MONITOR_TIMER => app::menu_bar_monitor_tick(),
+        WM_TIMER if w.0 == TRAY_TIMER => app::menu_bar_tray_tick(),
+        WM_TIMER if w.0 == FOLD_TIMER => app::menu_bar_fold_done(),
         WM_CAPTURECHANGED => {
             // Avoid reentering the app borrow inside Set/ReleaseCapture.
             unsafe {
@@ -749,7 +868,7 @@ unsafe extern "system" fn outside_click_proc(code: i32, w: WPARAM, l: LPARAM) ->
     unsafe { CallNextHookEx(None, code, w, l) }
 }
 
-pub(crate) fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
+pub(crate) const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
     Color {
         A: a,
         R: r,
@@ -807,7 +926,7 @@ pub(crate) fn add_rounded_box(
     clippy::too_many_arguments,
     reason = "Same rectangle/color inputs as add_rounded_box; retain geometry for small UI updates"
 )]
-fn retained_rounded_box(
+pub(crate) fn retained_rounded_box(
     compositor: &Compositor,
     layers: &VisualCollection,
     x: f32,
@@ -1262,7 +1381,13 @@ impl MenuBar {
             island_hits: Vec::new(),
             outside_click_hook: None,
             bluetooth: bluetooth::Monitor::new(hwnd.0 as isize, BLUETOOTH_CHANGED).ok(),
-            volume_row_span: Span::default(),
+            slider: None,
+            folding: None,
+            volume_front: 0,
+            held: None,
+            windows_tray: false,
+            picture: None,
+            icon_center: None,
             _network: NetworkWatch::new(hwnd.0 as isize, STATUS_CHANGED),
             privacy_watch: status::watch_privacy(hwnd.0 as isize, REGISTRY_CHANGED),
             settings_watch: status::watch_taskbar_settings(hwnd.0 as isize, REGISTRY_CHANGED),
@@ -1461,9 +1586,34 @@ impl MenuBar {
         self.refresh(gfx)
     }
 
+    /// Forgets a slider that was folding away.
+    fn end_fold(&mut self) {
+        if self.folding.take().is_some() {
+            // SAFETY: Our own timer.
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), FOLD_TIMER);
+            }
+        }
+    }
+
+    /// The slider has folded away: the window goes back to the bar's height.
+    pub fn finish_fold(&mut self) -> Result<()> {
+        let Some((slider, _)) = &self.folding else {
+            return Ok(());
+        };
+        detach(slider)?;
+        self.end_fold();
+        if self.panel_span.width() <= 0.0 {
+            self.visual_height = self.bounds.bottom - self.bounds.top;
+            self.place()?;
+        }
+        Ok(())
+    }
+
     /// The volume slider under the speaker icon (issue #55).
     fn open_volume_panel(&mut self, gfx: &Gfx) -> Result<()> {
         self.panel = Some(Island::Volume);
+        self.volume_front = muelle_shell::tracker::foreground_window();
         let mut track = TRACKMOUSEEVENT {
             cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
             dwFlags: TME_LEAVE,
@@ -1484,7 +1634,9 @@ impl MenuBar {
 
     /// The pointer reached the top edge or left the bar.
     pub fn hover(&mut self, gfx: &Gfx, inside: bool) -> Result<()> {
-        if self.volume_drag.is_some() && !inside {
+        // The volume slider is a menu: it stays until dismissed, and so does
+        // the bar it hangs from.
+        if !inside && (self.volume_drag.is_some() || self.panel == Some(Island::Volume)) {
             return Ok(());
         }
         if !inside && self.panel.take().is_some() {
@@ -1648,6 +1800,11 @@ impl MenuBar {
                 return self.dismiss_island(gfx);
             }
         }
+        if self.panel == Some(Island::Volume)
+            && muelle_shell::tracker::foreground_window() != self.volume_front
+        {
+            return self.dismiss_island(gfx);
+        }
         let mut point = POINT::default();
         // SAFETY: Read-only cursor query in the same DPI context as `bounds`.
         unsafe { GetCursorPos(&mut point)? };
@@ -1676,6 +1833,9 @@ impl MenuBar {
             }
             self.release_volume(Some(y))?;
         }
+        if self.held.is_some() {
+            return Ok(());
+        }
         let within_bar = point.x >= self.bounds.left
             && point.x < self.bounds.right
             && point.y >= self.bounds.top
@@ -1703,14 +1863,12 @@ impl MenuBar {
         }
         let span = if y >= (self.bounds.bottom - self.bounds.top) as f32 {
             self.panel_span
-        } else if self.panel == Some(Island::Volume) {
-            // Opened from the speaker, not the island: resting on it, or above
-            // the slider, keeps it open; moving along the bar closes it.
-            self.volume_row_span
         } else {
             self.triggers_span
         };
-        if self.panel.is_some() && (x < span.left || x >= span.right) {
+        // The island's panels follow the pointer; the volume slider does not.
+        let follows = self.panel.is_some_and(|panel| panel != Island::Volume);
+        if follows && (x < span.left || x >= span.right) {
             self.dismiss_island(gfx)?;
         }
         self.hover(gfx, true)
@@ -1785,7 +1943,12 @@ impl MenuBar {
                 // TrackMouseEvent may report a leave immediately after showing
                 // a window. Check real geometry while revealed, including if
                 // no further WM_MOUSEMOVE reaches this window.
-                SetTimer(Some(self.hwnd), POINTER_TIMER, POINTER_CHECK_MS, None);
+                let every = if self.panel == Some(Island::Volume) {
+                    MENU_CHECK_MS
+                } else {
+                    POINTER_CHECK_MS
+                };
+                SetTimer(Some(self.hwnd), POINTER_TIMER, every, None);
             } else {
                 let _ = KillTimer(Some(self.hwnd), POINTER_TIMER);
             }
@@ -2038,7 +2201,12 @@ impl MenuBar {
         });
         match hit.map(|(_, _, action)| *action) {
             Some(Action::AccessoryIndicator) => {}
+            // The dock opens it: it knows the apps that are running.
+            Some(Action::SystemMenu) => {}
+            // The dock opens Muelle's own, whose windows it owns; these
+            // clicks come here only while Settings has those turned off.
             Some(Action::QuickSettings) => launcher::open_quick_settings(),
+            Some(Action::Network) => launcher::open_network_list(),
             Some(Action::Notifications) => launcher::open_notifications(),
             Some(Action::Clock) => match &self.clock_target {
                 // A target that no longer opens (an uninstalled app) falls
@@ -2047,7 +2215,6 @@ impl MenuBar {
                 _ => launcher::open_notifications(),
             },
             Some(Action::Power) => launcher::open_power_settings(),
-            Some(Action::Network) => launcher::open_network_list(),
             // Without an output device there is nothing to slide: Windows'
             // own sound page says why.
             Some(Action::Sound) if self.status.volume.is_none() => launcher::open_sound(),
@@ -2056,14 +2223,17 @@ impl MenuBar {
                     self.open_volume_panel(gfx)?;
                 }
             }
-            Some(Action::Search) => launcher::open_search(),
+            Some(Action::Search) => crate::search_worker::open(),
             Some(Action::TaskView) => launcher::open_task_view(),
             Some(Action::Widgets) => launcher::open_widgets(),
             Some(Action::Bluetooth) => launcher::open_bluetooth(),
             Some(Action::SystemMonitor) => {
                 let _ = launcher::open("taskmgr.exe");
             }
-            Some(Action::HiddenIcons) => launcher::toggle_hidden_icons(anchor),
+            Some(Action::HiddenIcons) => {
+                launcher::toggle_hidden_icons(anchor);
+                self.follow_windows_tray(gfx)?;
+            }
             Some(Action::InputLanguage) => {} // Opened outside the app borrow.
             // Windows' own pages list which apps use each device.
             Some(Action::Microphone) => {
@@ -2073,6 +2243,135 @@ impl MenuBar {
                 let _ = launcher::open("ms-settings:privacy-webcam");
             }
             None => {}
+        }
+        Ok(())
+    }
+
+    /// The circle, on screen, if `x`, `y` (window pixels) are on it and it
+    /// opens its menu.
+    pub fn system_menu_button(&self, x: f32, y: f32) -> Option<RECT> {
+        self.button_at(Action::SystemMenu, x, y)
+    }
+
+    /// The clock, on screen, if `x`, `y` (window pixels) are on it.
+    pub fn clock_button(&self, x: f32, y: f32) -> Option<RECT> {
+        self.button_at(Action::Clock, x, y)
+    }
+
+    /// Shows the clock pressed while the calendar is open.
+    pub fn set_calendar(&mut self, gfx: &Gfx, open: bool) -> Result<()> {
+        self.hold(gfx, Action::Clock, open)
+    }
+
+    /// The middle of the icon on screen, where its menu springs from.
+    pub fn system_menu_origin(&self) -> Option<POINT> {
+        self.icon_center.map(|(x, y)| POINT {
+            x: self.bounds.left + x.round() as i32,
+            y: self.bounds.top + y.round() as i32,
+        })
+    }
+
+    /// Reads the user's picture for the icon; `None`, or a file that is no
+    /// longer acceptable, leaves the ring.
+    pub fn set_picture(&mut self, gfx: &Gfx, file: Option<&str>) -> Result<()> {
+        if self.picture.as_ref().map(|(file, _)| file.as_str()) == file {
+            return Ok(());
+        }
+        self.picture = file.and_then(|file| {
+            muelle_shell::menu_icon::load(std::path::Path::new(file), PICTURE_PIXELS)
+                .inspect_err(|problem| {
+                    muelle_shell::log::line(&format!("icono de la barra: {problem:?}"));
+                })
+                .ok()
+                .map(|image| (file.to_owned(), image))
+        });
+        self.refresh(gfx)
+    }
+
+    /// Shows the circle pressed while its menu is open.
+    pub fn set_system_menu(&mut self, gfx: &Gfx, open: bool) -> Result<()> {
+        self.hold(gfx, Action::SystemMenu, open)
+    }
+
+    /// The control center's button, on screen, if `x`, `y` (window pixels)
+    /// are on it.
+    pub fn control_center_button(&self, x: f32, y: f32) -> Option<RECT> {
+        self.button_at(Action::QuickSettings, x, y)
+    }
+
+    /// The network icon, in the same way.
+    pub fn network_button(&self, x: f32, y: f32) -> Option<RECT> {
+        self.button_at(Action::Network, x, y)
+    }
+
+    /// The arrow for the notification area's icons, in the same way.
+    pub fn tray_button(&self, x: f32, y: f32) -> Option<RECT> {
+        self.button_at(Action::HiddenIcons, x, y)
+    }
+
+    fn button_at(&self, wanted: Action, x: f32, y: f32) -> Option<RECT> {
+        if y < 0.0 || y >= (self.bounds.bottom - self.bounds.top) as f32 {
+            return None;
+        }
+        self.zones
+            .iter()
+            .find(|(left, right, action)| x >= *left && x < *right && *action == wanted)
+            .map(|(left, right, _)| RECT {
+                left: self.bounds.left + *left as i32,
+                right: self.bounds.left + right.ceil() as i32,
+                ..self.bounds
+            })
+    }
+
+    /// Shows the button pressed while the control center is open, and keeps
+    /// an auto-hiding bar on screen meanwhile.
+    pub fn set_control_center(&mut self, gfx: &Gfx, open: bool) -> Result<()> {
+        self.hold(gfx, Action::QuickSettings, open)
+    }
+
+    /// The same while the network icon's menu is open.
+    pub fn set_network_menu(&mut self, gfx: &Gfx, open: bool) -> Result<()> {
+        self.hold(gfx, Action::Network, open)
+    }
+
+    /// The same while the tray menu is open.
+    pub fn set_tray_menu(&mut self, gfx: &Gfx, open: bool) -> Result<()> {
+        self.hold(gfx, Action::HiddenIcons, open)
+    }
+
+    /// Keeps the arrow pointing up while Windows' own tray flyout is open.
+    /// Windows does not say when it closes, so it is checked until it has.
+    pub fn follow_windows_tray(&mut self, gfx: &Gfx) -> Result<()> {
+        let open = self.widgets.dynamic_arrow && launcher::hidden_icons_showing();
+        // SAFETY: A timer on our own window.
+        unsafe {
+            if open {
+                SetTimer(Some(self.hwnd), TRAY_TIMER, TRAY_CHECK_MS, None);
+            } else {
+                let _ = KillTimer(Some(self.hwnd), TRAY_TIMER);
+            }
+        }
+        if self.windows_tray == open {
+            return Ok(());
+        }
+        self.windows_tray = open;
+        self.refresh(gfx)
+    }
+
+    fn hold(&mut self, gfx: &Gfx, button: Action, open: bool) -> Result<()> {
+        let held = match self.held {
+            _ if open => Some(button),
+            Some(held) if held == button => None,
+            other => other,
+        };
+        if self.held == held {
+            return Ok(());
+        }
+        self.held = held;
+        self.refresh(gfx)?;
+        if !open && self.auto_hide && self.revealed {
+            // The pointer may have left while the bar was being held.
+            self.check_pointer(gfx)?;
         }
         Ok(())
     }
@@ -2152,6 +2451,9 @@ impl MenuBar {
             panel: self.panel,
             usage_refreshing: self.usage.as_ref().is_some_and(UsageMonitor::is_refreshing),
             track,
+            held: self.held,
+            windows_tray: self.windows_tray,
+            picture: self.picture.as_ref().map(|(file, _)| file.clone()),
         };
         self.apply_look(gfx, look)
     }
@@ -2399,6 +2701,102 @@ impl MenuBar {
         self.cue = Some((act, x));
     }
 
+    /// The icon before the app's name, `side` pixels square, as it is while
+    /// its menu is `open` or closed; if it `moves`, it gets there from the
+    /// other state. The ring fills, Windows' squares turn, and all dip.
+    fn menu_icon(
+        &self,
+        gfx: &Gfx,
+        look: &Look,
+        shown: MenuBarIcon,
+        side: f32,
+        open: bool,
+        moves: bool,
+    ) -> Result<ContainerVisual> {
+        let c = &gfx.compositor;
+        let scale = look.scale;
+        let ink = if look.light {
+            rgba(0, 0, 0, 220)
+        } else {
+            rgba(255, 255, 255, 240)
+        };
+        let middle = Vector3::new(side / 2.0, side / 2.0, 0.0);
+        let icon = c.CreateContainerVisual()?;
+        icon.SetSize(Vector2::new(side, side))?;
+        icon.SetCenterPoint(middle)?;
+        let parts = icon.Children()?;
+        match shown {
+            MenuBarIcon::Windows => {
+                let gap = (SQUARES_GAP * scale).round().max(1.0);
+                let square = ((side - gap) / 2.0).floor();
+                for column in 0..2u8 {
+                    for row in 0..2u8 {
+                        add_rounded_box(
+                            c,
+                            &parts,
+                            f32::from(column) * (square + gap),
+                            f32::from(row) * (square + gap),
+                            square,
+                            square,
+                            0.0,
+                            ink,
+                            None,
+                        )?;
+                    }
+                }
+                // A quarter turn lands on the same squares.
+                if moves {
+                    let turn = c.CreateScalarKeyFrameAnimation()?;
+                    turn.InsertKeyFrame(0.0, if open { 0.0 } else { 90.0 })?;
+                    turn.InsertKeyFrame(1.0, if open { 90.0 } else { 0.0 })?;
+                    turn.SetDuration(icon_time())?;
+                    icon.StartAnimation(h!("RotationAngleInDegrees"), &turn)?;
+                }
+            }
+            MenuBarIcon::Custom => {
+                if let Some((_, image)) = &self.picture {
+                    let brush = gfx.icon_brush(image, side as u32)?;
+                    add_visual(c, &parts, &brush.cast()?, 0.0, 0.0, side, side)?;
+                }
+            }
+            MenuBarIcon::Ring => {
+                let line = CIRCLE_LINE * scale;
+                let (ring, outline) = retained_rounded_box(
+                    c,
+                    &parts,
+                    0.0,
+                    0.0,
+                    side,
+                    side,
+                    side / 2.0,
+                    rgba(0, 0, 0, 0),
+                    Some(ink),
+                )?;
+                // A line thicker than a border's, kept inside the circle.
+                outline.SetOffset(Vector2::new(line / 2.0, line / 2.0))?;
+                outline.SetSize(Vector2::new(side - line, side - line))?;
+                outline.SetCornerRadius(Vector2::new((side - line) / 2.0, (side - line) / 2.0))?;
+                ring.Shapes()?
+                    .GetAt(0)?
+                    .cast::<CompositionSpriteShape>()?
+                    .SetStrokeThickness(line)?;
+                // Solid while open: a disc that grows from its middle.
+                let (disc, _) =
+                    retained_rounded_box(c, &parts, 0.0, 0.0, side, side, side / 2.0, ink, None)?;
+                disc.SetCenterPoint(middle)?;
+                let rest = if open { 1.0 } else { 0.0 };
+                disc.SetScale(Vector3::new(rest, rest, 1.0))?;
+                if moves {
+                    animate_scale(c, &disc.cast()?, &[(0.0, 1.0 - rest), (1.0, rest)])?;
+                }
+            }
+        }
+        if moves {
+            animate_scale(c, &icon.cast()?, &[(0.0, 1.0), (0.4, ICON_DIP), (1.0, 1.0)])?;
+        }
+        Ok(icon)
+    }
+
     fn build(&mut self, gfx: &Gfx, look: &Look) -> Result<()> {
         let c = &gfx.compositor;
         let scale = look.scale;
@@ -2458,6 +2856,48 @@ impl MenuBar {
 
         self.zones.clear();
         let mut left_end = px(SIDE_MARGIN);
+        // The right edge of the icon, while it shows.
+        let mut icon_end = None;
+        self.icon_center = None;
+        if look.widgets.circle {
+            let shown = if look.widgets.icon == MenuBarIcon::Custom && self.picture.is_none() {
+                MenuBarIcon::Ring
+            } else {
+                look.widgets.icon
+            };
+            let side = px(icon_side(shown));
+            if look.held == Some(Action::SystemMenu) {
+                let inset = px(8.0);
+                add_rounded_box(
+                    c,
+                    &layers,
+                    left_end - inset,
+                    px(3.0),
+                    side + inset * 2.0,
+                    height - px(6.0),
+                    (height - px(6.0)) / 2.0,
+                    pressed_fill(look.light),
+                    None,
+                )?;
+            }
+            let open = look.held == Some(Action::SystemMenu);
+            let was_open = self
+                .look
+                .as_ref()
+                .is_some_and(|old| old.held == Some(Action::SystemMenu));
+            let moves =
+                open != was_open && look.widgets.icon_animation && system::animations_enabled();
+            let top = ((height - side) / 2.0).round();
+            let icon = self.menu_icon(gfx, look, shown, side, open, moves)?;
+            icon.SetOffset(Vector3::new(left_end, top, 0.0))?;
+            layers.InsertAtTop(&icon)?;
+            self.icon_center = Some((left_end + side / 2.0, top + side / 2.0));
+            left_end += side;
+            icon_end = Some(left_end);
+            if !look.app_name.is_empty() {
+                left_end += px(CIRCLE_GAP);
+            }
+        }
         if !look.app_name.is_empty() {
             let name = gfx.text_brush_fitted(
                 &look.app_name,
@@ -2467,7 +2907,7 @@ impl MenuBar {
                 ink,
                 px(220.0).min(width * 0.22),
             )?;
-            place(&layers, &name, px(SIDE_MARGIN))?;
+            place(&layers, &name, left_end)?;
             left_end += name.width;
         }
 
@@ -2562,8 +3002,12 @@ impl MenuBar {
             ));
         }
         // The notification area (antivirus, OneDrive, apps in the background)
-        // lives only in the hidden taskbar; this arrow opens its flyout.
-        items.push((symbol(&[(glyph::HIDDEN_ICONS, 1.0)])?, Action::HiddenIcons));
+        // lives only in the hidden taskbar; this arrow opens its menu.
+        let arrow = tray_arrow(
+            look.widgets.dynamic_arrow,
+            look.held == Some(Action::HiddenIcons) || look.windows_tray,
+        );
+        items.push((symbol(&[(arrow, 1.0)])?, Action::HiddenIcons));
         if status.buttons.task_view {
             items.push((symbol(&[(glyph::TASK_VIEW, 1.0)])?, Action::TaskView));
         }
@@ -2583,6 +3027,22 @@ impl MenuBar {
                 right -= px(6.0);
             }
             let left = right - item.width;
+            let open = *action == Action::Sound && look.panel == Some(Island::Volume);
+            if look.held == Some(*action) || open {
+                // As macOS marks the item whose panel is open.
+                let inset = px(8.0);
+                add_rounded_box(
+                    c,
+                    &layers,
+                    left - inset,
+                    px(3.0),
+                    item.width + inset * 2.0,
+                    height - px(6.0),
+                    (height - px(6.0)) / 2.0,
+                    pressed_fill(look.light),
+                    None,
+                )?;
+            }
             place(&layers, item, left)?;
             if *action == Action::Sound {
                 speaker = Some((left, left + item.width));
@@ -2593,6 +3053,12 @@ impl MenuBar {
                 self.zones.push((left - slop, zone_right + slop, *action));
             }
             right = left - px(ITEM_GAP);
+        }
+
+        // From the screen's edge, as macOS's Apple menu, so a flick of the
+        // pointer into the corner finds it.
+        if let Some(end) = icon_end.filter(|_| look.widgets.circle_menu) {
+            self.zones.push((0.0, end + slop, Action::SystemMenu));
         }
 
         // The system monitor (issue #64), left of the status icons: two
@@ -2650,27 +3116,54 @@ impl MenuBar {
         self.panel_span = Span::default();
         self.draw_island(gfx, look, &layers, width, height, left_end, right)?;
         let speaker_zone = speaker.filter(|_| look.panel == Some(Island::Volume));
-        self.volume_row_span = Span::default();
+        let previous = self.slider.take();
+        let was_open = self
+            .look
+            .as_ref()
+            .is_some_and(|old| old.panel == Some(Island::Volume));
+        let moves = system::animations_enabled();
         if let Some((left, right)) = speaker_zone
             && look.status.volume.is_some()
         {
             let span = volume_span_under((left + right) / 2.0, width, look.scale);
             let geometry = IslandGeometry::new(span, height + px(PANEL_GAP), look);
             let theme = Theme::for_popup(look.light, look.glass);
+            // What the slider hangs in, so that it moves as one.
+            let slider = c.CreateContainerVisual()?;
+            slider.SetSize(Vector2::new(width, visual_height))?;
             let content = popup_surface(
                 gfx,
                 theme,
-                &layers,
+                &slider.Children()?,
                 geometry,
                 px(look.panel_height()),
                 span.width() / 2.0,
             )?;
             self.draw_volume_capsule(gfx, &content, geometry)?;
+            layers.InsertAtTop(&slider)?;
             self.panel_span = span;
-            self.volume_row_span = Span {
-                left: span.left.min(left),
-                right: span.right.max(right),
-            };
+            self.end_fold();
+            if moves && !was_open {
+                // Out of the speaker, as the menus spring from their buttons.
+                slider.SetCenterPoint(Vector3::new((left + right) / 2.0, height / 2.0, 0.0))?;
+                menu::animate_spring(&slider, true)?;
+            }
+            self.slider = Some(slider);
+        } else if let Some(slider) = previous.filter(|_| moves && look.panel.is_none()) {
+            detach(&slider)?;
+            menu::animate_spring(&slider, false)?;
+            layers.InsertAtTop(&slider)?;
+            self.folding = Some((slider, self.visual_height));
+            // SAFETY: A timer on our own window.
+            unsafe {
+                SetTimer(Some(self.hwnd), FOLD_TIMER, menu::FOLD_MS, None);
+            }
+        } else if look.panel.is_some() {
+            self.end_fold();
+        } else if let Some((slider, _)) = &self.folding {
+            // Redrawn midway: it carries on folding.
+            detach(slider)?;
+            layers.InsertAtTop(slider)?;
         }
         // While the slider is open, a click on the speaker reaches the bar
         // (to close it) instead of dismissing it first from the hook.
@@ -2694,10 +3187,13 @@ impl MenuBar {
         contents.RemoveAll()?;
         contents.InsertAtTop(&root)?;
         self.visual_height = if self.panel_span.width() > 0.0 {
-            visual_height
+            visual_height as i32
+        } else if let Some((_, folding)) = &self.folding {
+            // Room to be seen leaving; clicks already pass through it.
+            *folding
         } else {
-            height
-        } as i32;
+            height as i32
+        };
         self.bounds = RECT {
             bottom: screen.top + height as i32,
             ..screen
@@ -4507,6 +5003,63 @@ mod island_tests {
     use super::*;
 
     #[test]
+    #[ignore = "Creates the real menu bar window"]
+    fn native_the_icon_builds_in_every_look_and_opens_its_menu() -> Result<()> {
+        use anyhow::Context;
+        use windows::Win32::System::WinRT::{
+            CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+            DispatcherQueueOptions,
+        };
+        // SAFETY: The controller initializes the test thread's own queue.
+        let _queue = unsafe {
+            CreateDispatcherQueueController(DispatcherQueueOptions {
+                dwSize: size_of::<DispatcherQueueOptions>() as u32,
+                threadType: DQTYPE_THREAD_CURRENT,
+                apartmentType: DQTAT_COM_STA,
+            })?
+        };
+        let gfx = Gfx::new()?;
+        let mut bar = MenuBar::create(&gfx, false, false, false, MenuBarWidgets::default())?;
+        bar.picture = Some((
+            "picture".into(),
+            muelle_shell::icons::IconImage {
+                width: 1,
+                height: 1,
+                bgra: vec![255; 4],
+            },
+        ));
+        for icon in [MenuBarIcon::Ring, MenuBarIcon::Windows, MenuBarIcon::Custom] {
+            bar.set_widgets(
+                &gfx,
+                MenuBarWidgets {
+                    icon,
+                    ..MenuBarWidgets::default()
+                },
+            )?;
+            for open in [true, false] {
+                bar.set_system_menu(&gfx, open)?;
+            }
+            let (_, right, _) = bar
+                .zones
+                .iter()
+                .find(|(_, _, action)| *action == Action::SystemMenu)
+                .context("the icon opens its menu")?;
+            assert!(*right >= icon_side(icon));
+            assert!(bar.system_menu_origin().is_some());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn the_tray_arrow_points_down_until_its_menu_opens() {
+        assert_eq!(tray_arrow(true, false), glyph::HIDDEN_ICONS_CLOSED);
+        assert_eq!(tray_arrow(true, true), glyph::HIDDEN_ICONS);
+        // Off, it is the taskbar's.
+        assert_eq!(tray_arrow(false, false), glyph::HIDDEN_ICONS);
+        assert_eq!(tray_arrow(false, true), glyph::HIDDEN_ICONS);
+    }
+
+    #[test]
     #[ignore = "Hidden compositor fixture; synthetic preferences, no Windows settings writes"]
     fn native_status_items_follow_windows_preferences_without_overrides() -> Result<()> {
         use anyhow::Context;
@@ -4889,11 +5442,36 @@ mod island_tests {
         assert_eq!(bar.panel, Some(Island::Volume));
         bar.click(&gfx, x, 10.0)?;
         assert_eq!(bar.panel, None);
-        // Moving away along the bar closes it, as the island's panels close.
+        // The pointer may go anywhere: it stays, as the other menus do.
         bar.click(&gfx, x, 10.0)?;
         assert_eq!(bar.panel, Some(Island::Volume));
         bar.pointer_moved(&gfx, (x - 300.0).max(0.0), 10.0)?;
+        bar.pointer_moved(&gfx, (x - 300.0).max(0.0), below + 400.0)?;
+        bar.hover(&gfx, false)?;
+        assert_eq!(bar.panel, Some(Island::Volume));
+        // Another app coming to the front closes it.
+        bar.volume_front = bar.volume_front.wrapping_add(1);
+        bar.check_pointer(&gfx)?;
         assert_eq!(bar.panel, None);
+        // So does what a click elsewhere sends.
+        bar.click(&gfx, x, 10.0)?;
+        let open = bar.visual_height;
+        bar.dismiss_island(&gfx)?;
+        assert_eq!(bar.panel, None);
+        // It takes no more clicks, but is seen folding back into the speaker
+        // before the window shrinks to the bar.
+        assert_eq!(bar.panel_span.width(), 0.0);
+        let moves = system::animations_enabled();
+        assert_eq!(bar.folding.is_some(), moves);
+        assert_eq!(bar.visual_height == open, moves);
+        bar.finish_fold()?;
+        assert!(bar.folding.is_none());
+        assert_eq!(bar.visual_height, bar.bounds.bottom - bar.bounds.top);
+        // Opened again while folding, the new one takes over.
+        bar.click(&gfx, x, 10.0)?;
+        bar.dismiss_island(&gfx)?;
+        bar.click(&gfx, x, 10.0)?;
+        assert!(bar.folding.is_none() && bar.slider.is_some());
         Ok(())
     }
 

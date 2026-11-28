@@ -134,6 +134,15 @@ pub fn pick_file(owner: isize, initial: Option<&str>, apps: &str, all: &str) -> 
     pick_with(owner, initial, Pick::File { apps, all })
 }
 
+/// Asks for a picture with the standard Windows dialog; `None` if the user
+/// cancels. `images` names its file type.
+///
+/// Initializes COM on the calling thread for the duration of the call.
+#[must_use]
+pub fn pick_image(owner: isize, images: &str) -> Option<String> {
+    pick_with(owner, None, Pick::Image { images })
+}
+
 /// What the standard dialog asks for.
 #[derive(Clone, Copy)]
 enum Pick<'a> {
@@ -142,6 +151,9 @@ enum Pick<'a> {
     File {
         apps: &'a str,
         all: &'a str,
+    },
+    Image {
+        images: &'a str,
     },
 }
 
@@ -165,6 +177,8 @@ fn start_folder(initial: &str, kind: Pick<'_>) -> Option<String> {
             .parent()
             .filter(|parent| parent.is_absolute())
             .map(|parent| parent.to_string_lossy().into_owned()),
+        // Opens wherever Windows last picked one.
+        Pick::Image { .. } => None,
     }
 }
 
@@ -195,6 +209,14 @@ fn pick_in_apartment(
                     },
                 ];
                 dialog.SetFileTypes(&types)?;
+            }
+            Pick::Image { images } => {
+                dialog.SetOptions(options | FOS_FILEMUSTEXIST)?;
+                let images = HSTRING::from(images);
+                dialog.SetFileTypes(&[COMDLG_FILTERSPEC {
+                    pszName: PCWSTR(images.as_ptr()),
+                    pszSpec: w!("*.png;*.ico;*.jpg;*.jpeg;*.bmp"),
+                }])?;
             }
         }
         if let Some(start) = initial

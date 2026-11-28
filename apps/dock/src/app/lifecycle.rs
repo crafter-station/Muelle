@@ -273,6 +273,10 @@ pub fn run() -> Result<()> {
             preview_candidate: None,
             preview: None,
             group_view: None,
+            control_center: None,
+            tray_host: None,
+            tray_menu: None,
+            calendar: None,
             group_was_open: None,
             ghost: None,
             menu_open: false,
@@ -313,6 +317,7 @@ pub fn run() -> Result<()> {
         // After the dock: creating the bar and reserving its strip take
         // 60-130 ms, which the dock no longer waits for.
         app.apply_menu_bar_setting();
+        app.sync_tray_host();
         // Otherwise the bar shows no app name until the user switches windows.
         if let Err(error) = app.update_menu_bar_app() {
             eprintln!("muelle: barra superior: {error:#}");
@@ -383,6 +388,7 @@ pub fn run() -> Result<()> {
         DROP_WINDOW.store(input.0 as isize, Ordering::Relaxed);
 
         app.schedule_update();
+        crate::search_worker::launch(app.config.search.enabled);
         app.sync_break_timer();
         app.sync_taskband();
         // The day's greeting, or a new version's celebration; and again
@@ -592,6 +598,8 @@ impl App {
         if rebuild {
             self.appbar = None;
             self.appbar = AppBar::register(self.visual, APPBAR_CALLBACK);
+            self.drop_tray_menu();
+            self.drop_calendar();
             self.menubar = None;
             self.apply_menu_bar_setting();
         }

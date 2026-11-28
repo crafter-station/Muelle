@@ -262,7 +262,8 @@ pub fn is_running(app_id: &str) -> bool {
 }
 
 /// The executable a process runs, if it can be queried.
-fn process_image(pid: u32) -> Option<String> {
+#[must_use]
+pub fn process_image(pid: u32) -> Option<String> {
     // SAFETY: The handle is closed before returning; the buffer has the
     // declared length.
     unsafe {

@@ -16,6 +16,7 @@
 
 mod activation;
 mod assets;
+mod controls;
 mod drag;
 mod events;
 mod feedback;
@@ -26,6 +27,7 @@ mod menus;
 mod preferences;
 mod previews;
 mod rendering;
+mod system_menu;
 mod visibility;
 
 use std::{
@@ -55,6 +57,7 @@ use muelle_shell::{
     jumplist, power,
     recycle_bin::BinWatch,
     tracker::{TrackedWindow, WindowTracker},
+    tray_host::TrayHost,
 };
 use windows::{
     UI::Composition::{CompositionSurfaceBrush, Desktop::DesktopWindowTarget},
@@ -72,6 +75,8 @@ use windows::{
 
 use crate::{
     assets::Visuals,
+    calendar::Calendar,
+    control_center::ControlCenter,
     edge_watch::EdgeWatch,
     flight::{Flight, Snapshot},
     gfx::{Gfx, LabelBrush},
@@ -82,20 +87,24 @@ use crate::{
     multi_window_view::MultiWindowView,
     scene::Scene,
     thumbnails::Thumbnails,
+    tray_menu::TrayMenu,
 };
 
 use menus::run_outside;
 
 pub use events::{
-    drag_enter, drag_leave, drag_over, drop_files, group_view_menu, group_view_moved,
-    group_view_press, group_view_press_lost, group_view_release, group_view_tick,
+    calendar_input, calendar_scrolled, calendar_tick, control_center_changed, control_center_moved,
+    control_center_press, control_center_release, control_center_scrim, control_center_secondary,
+    control_center_tick, drag_enter, drag_leave, drag_over, drop_files, group_view_menu,
+    group_view_moved, group_view_press, group_view_press_lost, group_view_release, group_view_tick,
     menu_bar_accessories_changed, menu_bar_accessories_reset, menu_bar_audio_changed,
     menu_bar_bluetooth_changed, menu_bar_check_pointer, menu_bar_clicked, menu_bar_dismiss_island,
-    menu_bar_finish_hide, menu_bar_media_changed, menu_bar_monitor_tick, menu_bar_pointer_moved,
-    menu_bar_progress_tick, menu_bar_registry_changed, menu_bar_scrolled, menu_bar_tick,
-    menu_bar_volume_flush, menu_bar_volume_press, menu_bar_volume_release,
-    multi_window_view_dismiss, multi_window_view_middle_click, multi_window_view_press,
-    multi_window_view_release, multi_window_view_scroll, multi_window_view_tick,
+    menu_bar_finish_hide, menu_bar_fold_done, menu_bar_media_changed, menu_bar_monitor_tick,
+    menu_bar_pointer_moved, menu_bar_progress_tick, menu_bar_registry_changed, menu_bar_scrolled,
+    menu_bar_tick, menu_bar_tray_tick, menu_bar_volume_flush, menu_bar_volume_press,
+    menu_bar_volume_release, multi_window_view_dismiss, multi_window_view_middle_click,
+    multi_window_view_press, multi_window_view_release, multi_window_view_scroll,
+    multi_window_view_tick, tray_menu_input, tray_menu_tick,
 };
 pub(crate) use input::primary_button_down;
 pub use lifecycle::{request_quit, run};
@@ -417,6 +426,16 @@ pub(crate) enum Outside {
         program: String,
     },
     ShowDesktop,
+    /// The menu under the menu bar's circle.
+    SystemMenu(system_menu::Request),
+    /// The menu of the calendar's round button.
+    CalendarMenu {
+        gfx: Gfx,
+        anchor: POINT,
+        dark: bool,
+        /// Where it springs from; `None` shows it at once.
+        spring: Option<POINT>,
+    },
 }
 
 pub(crate) struct MenuRequest {
@@ -750,6 +769,11 @@ pub(crate) struct App {
     preview: Option<MultiWindowView>,
     /// A group's apps, unfolded above it after a click.
     group_view: Option<GroupView>,
+    control_center: Option<ControlCenter>,
+    /// Collects the notification area's icons while the menu bar shows.
+    tray_host: Option<TrayHost>,
+    tray_menu: Option<TrayMenu>,
+    calendar: Option<Calendar>,
     /// The group whose view a press on the dock closed: releasing on that
     /// group then leaves it closed rather than opening it again.
     group_was_open: Option<String>,

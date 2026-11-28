@@ -15,8 +15,9 @@ use windows::{
         UI::{
             Input::KeyboardAndMouse::{
                 INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP,
-                SendInput, VIRTUAL_KEY, VK_A, VK_B, VK_D, VK_ESCAPE, VK_LCONTROL, VK_LWIN, VK_N,
-                VK_S, VK_SPACE, VK_TAB, VK_V, VK_W,
+                SendInput, VIRTUAL_KEY, VK_A, VK_B, VK_D, VK_ESCAPE, VK_K, VK_LCONTROL, VK_LEFT,
+                VK_LSHIFT, VK_LWIN, VK_N, VK_R, VK_RIGHT, VK_S, VK_SNAPSHOT, VK_SPACE, VK_TAB,
+                VK_V, VK_W,
             },
             Shell::{SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW},
             WindowsAndMessaging::{
@@ -228,6 +229,33 @@ pub fn open_task_view() {
     tap(&[VK_LWIN, VK_TAB]);
 }
 
+/// The list of wireless displays and speakers to cast to: Win+K.
+pub fn open_cast() {
+    tap(&[VK_LWIN, VK_K]);
+}
+
+/// Adds a virtual desktop and goes to it: Win+Ctrl+D.
+pub fn new_desktop() {
+    tap(&[VK_LWIN, VK_LCONTROL, VK_D]);
+}
+
+/// The virtual desktop to the right or left: Win+Ctrl+arrow.
+pub fn switch_desktop(next: bool) {
+    let arrow = if next { VK_RIGHT } else { VK_LEFT };
+    tap(&[VK_LWIN, VK_LCONTROL, arrow]);
+}
+
+/// Saves a picture of the whole screen to Pictures\Screenshots:
+/// Win+Print Screen.
+pub fn capture_screen() {
+    tap(&[VK_LWIN, VK_SNAPSHOT]);
+}
+
+/// The Snipping Tool's screen recording (Windows 11): Win+Shift+R.
+pub fn record_screen() {
+    tap(&[VK_LWIN, VK_LSHIFT, VK_R]);
+}
+
 /// The Widgets board: Win+W.
 pub fn open_widgets() {
     tap(&[VK_LWIN, VK_W]);
@@ -388,6 +416,18 @@ static OVERFLOW_OPEN_AT_PRESS: AtomicBool = AtomicBool::new(false);
 /// Call on mouse-button down over the menu bar, before its click.
 pub fn note_menu_bar_press() {
     OVERFLOW_OPEN_AT_PRESS.store(open_overflow().is_some(), Ordering::Relaxed);
+}
+
+/// Whether the flyout was open when the press now being handled began.
+#[must_use]
+pub fn hidden_icons_were_open() -> bool {
+    OVERFLOW_OPEN_AT_PRESS.load(Ordering::Relaxed)
+}
+
+/// Whether Windows' hidden-icons flyout is open, or about to be.
+#[must_use]
+pub fn hidden_icons_showing() -> bool {
+    opening_hidden_icons() || open_overflow().is_some()
 }
 
 /// The hidden-icons flyout, if it is open.

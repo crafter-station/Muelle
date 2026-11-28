@@ -1100,6 +1100,63 @@ impl Gfx {
         })
     }
 
+    /// One symbol from the system icon font, `size` pixels tall in the middle
+    /// of a square of side `side`, in any color.
+    pub fn symbol_brush(
+        &self,
+        symbol: char,
+        side: f32,
+        size: f32,
+        color: Color,
+    ) -> Result<LabelBrush> {
+        let side = side.round().max(1.0);
+        // SAFETY: The format lives for the drawing below.
+        let format = unsafe {
+            let format = self.dwrite.CreateTextFormat(
+                icon_font(),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                size,
+                w!(""),
+            )?;
+            format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
+            format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+            format
+        };
+        let part = |value: u8| f32::from(value) / 255.0;
+        let color = rgb(part(color.R), part(color.G), part(color.B), part(color.A));
+        let brush = self.draw(side as u32, side as u32, |dc| {
+            let area = D2D_RECT_F {
+                left: 0.0,
+                top: 0.0,
+                right: side,
+                bottom: side,
+            };
+            let mut units = [0u16; 2];
+            let text = symbol.encode_utf16(&mut units);
+            // SAFETY: The brush, format and text live for the drawing call.
+            unsafe {
+                let ink = dc.CreateSolidColorBrush(&color, None)?;
+                dc.DrawText(
+                    text,
+                    &format,
+                    &area,
+                    &ink,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
+            }
+            Ok(())
+        })?;
+        Ok(LabelBrush {
+            brush,
+            width: side,
+            height: side,
+        })
+    }
+
     /// Wi-Fi icon filled to `bars` with faint fan background.
     /// If `has_internet` is false, an exclamation mark is drawn beside the Wi-Fi icon.
     pub fn wifi_brush(

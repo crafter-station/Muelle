@@ -20,7 +20,7 @@ use windows::{
     Win32::{
         Foundation::{HANDLE, HWND, LPARAM},
         UI::WindowsAndMessaging::{
-            EnumChildWindows, FindWindowW, GetClassNameW, GetPropW, IsWindow, SetPropW, WM_USER,
+            EnumChildWindows, GetClassNameW, GetPropW, IsWindow, SetPropW, WM_USER,
         },
     },
     core::{BOOL, PCWSTR, w},
@@ -41,8 +41,7 @@ pub const SET_OVERLAY_ICON: u32 = WM_USER + 79;
 pub const CALLS: std::ops::RangeInclusive<u32> = (WM_USER + 50)..=(WM_USER + 100);
 
 fn tray() -> Option<HWND> {
-    // SAFETY: Read-only lookup with a static class name.
-    unsafe { FindWindowW(w!("Shell_TrayWnd"), None) }.ok()
+    crate::taskbar::primary()
 }
 
 /// Explorer's task band, where the property points when nobody took it.

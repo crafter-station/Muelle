@@ -18,6 +18,7 @@ use std::{
 use anyhow::Result;
 use muelle_shell::icons::IconImage;
 use windows::{
+    Foundation::TimeSpan,
     UI::{
         Color,
         Composition::{
@@ -62,7 +63,7 @@ use windows::{
             },
         },
     },
-    core::{BOOL, HSTRING, Interface, PCSTR, PCWSTR, w},
+    core::{BOOL, HSTRING, Interface, PCSTR, PCWSTR, h, w},
 };
 
 use windows_numerics::{Vector2, Vector3};
@@ -108,7 +109,7 @@ pub fn show(
     dark: bool,
     placement: Placement,
 ) -> Option<u32> {
-    show_at(gfx, owner, items, anchor, dark, placement)
+    show_at(gfx, owner, items, anchor, dark, placement, None)
 }
 
 pub fn show_below(
@@ -118,7 +119,28 @@ pub fn show_below(
     anchor: POINT,
     dark: bool,
 ) -> Option<u32> {
-    show_at(gfx, owner, items, anchor, dark, Placement::Below)
+    show_at(gfx, owner, items, anchor, dark, Placement::Below, None)
+}
+
+/// Like `show_below`, springing out of `origin` on screen and folding back
+/// into it, as the control center does from its button.
+pub fn show_springing(
+    gfx: &Gfx,
+    owner: HWND,
+    items: &[MenuItem],
+    anchor: POINT,
+    dark: bool,
+    origin: POINT,
+) -> Option<u32> {
+    show_at(
+        gfx,
+        owner,
+        items,
+        anchor,
+        dark,
+        Placement::Below,
+        Some(origin),
+    )
 }
 
 /// Where a menu opens from its anchor point: above it, centred (an icon on
@@ -163,11 +185,12 @@ fn show_at(
     anchor: POINT,
     dark: bool,
     placement: Placement,
+    origin: Option<POINT>,
 ) -> Option<u32> {
     if needs_native_menu() {
         return show_native(owner, items, anchor, dark, placement);
     }
-    match Popup::open(gfx, owner, items, anchor, dark, placement) {
+    match Popup::open(gfx, owner, items, anchor, dark, placement, origin) {
         Ok(popup) => popup.run(),
         Err(error) => {
             eprintln!("muelle: menú: {error:#}");
@@ -231,6 +254,17 @@ const ARM_DELAY: Duration = Duration::from_millis(300);
 /// Checks that the menu still has the focus, in case Windows gave it away
 /// without telling (it then could not see clicks elsewhere to close).
 const FOCUS_TIMER: usize = 1;
+/// The end of a springing menu's fold.
+const FOLD_TIMER: usize = 2;
+/// A springing menu draws its own corners and shadow, which need room around
+/// it to move and fall.
+const SPRING_PAD: f32 = 20.0;
+const SPRING_RADIUS: f32 = 10.0;
+/// How long it takes to spring out and to fold back, and how small it is at
+/// the point it comes from.
+const SPRING_MS: i64 = 260;
+pub(crate) const FOLD_MS: u32 = 150;
+const SMALL: f32 = 0.55;
 const CHECK_MARK: char = '\u{E73E}';
 
 /// Set by the window procedure when the menu loses the focus or the mouse.
@@ -261,6 +295,10 @@ struct Popup {
     opened: Instant,
     armed: bool,
     previous: HWND,
+    /// The room around the menu inside its window.
+    pad: f32,
+    /// The rows of a menu that springs out of a point, which move together.
+    spring: Option<ContainerVisual>,
 }
 
 impl Popup {
@@ -271,6 +309,7 @@ impl Popup {
         anchor: POINT,
         dark: bool,
         placement: Placement,
+        origin: Option<POINT>,
     ) -> Result<Self> {
         let c = &gfx.compositor;
         // SAFETY: Read-only query on our own window.
@@ -322,10 +361,57 @@ impl Popup {
         }
 
         let glass = muelle_shell::system::transparency_enabled();
-        let root = c.CreateContainerVisual()?;
-        root.SetSize(Vector2::new(width, height))?;
-        let layers = root.Children()?;
-        draw_popup_background(&layers, dark, glass, width, height)?;
+        let size = Vector2::new(width, height);
+        let pad = if origin.is_some() {
+            px(SPRING_PAD)
+        } else {
+            0.0
+        };
+        // What holds the menu's rows; a springing menu moves it.
+        let menu = c.CreateContainerVisual()?;
+        menu.SetSize(size)?;
+        let layers = menu.Children()?;
+        if origin.is_some() {
+            let radius = Vector2::new(px(SPRING_RADIUS), px(SPRING_RADIUS));
+            let mask = c.CreateNineGridBrush()?;
+            mask.SetSource(&gfx.rounded_mask(radius.X)?)?;
+            mask.SetInsets(radius.X.ceil() + 1.0)?;
+            let shadow = c.CreateDropShadow()?;
+            shadow.SetMask(&mask)?;
+            shadow.SetBlurRadius(px(12.0))?;
+            shadow.SetOffset(Vector3::new(0.0, px(5.0), 0.0))?;
+            shadow.SetColor(rgba(0, 0, 0, 92))?;
+            let under = c.CreateSpriteVisual()?;
+            under.SetSize(size)?;
+            under.SetShadow(&shadow)?;
+            layers.InsertAtTop(&under)?;
+            // The glass, cut to round corners, and its border.
+            let panel = c.CreateContainerVisual()?;
+            panel.SetSize(size)?;
+            let outline = c.CreateRoundedRectangleGeometry()?;
+            outline.SetSize(size)?;
+            outline.SetCornerRadius(radius)?;
+            panel.SetClip(&c.CreateGeometricClipWithGeometry(&outline)?)?;
+            draw_popup_background(&panel.Children()?, dark, glass, width, height)?;
+            layers.InsertAtTop(&panel)?;
+            let edge = c.CreateRoundedRectangleGeometry()?;
+            edge.SetOffset(Vector2::new(0.5, 0.5))?;
+            edge.SetSize(Vector2::new(width - 1.0, height - 1.0))?;
+            edge.SetCornerRadius(radius)?;
+            let stroke = c.CreateSpriteShapeWithGeometry(&edge)?;
+            stroke.SetStrokeBrush(&c.CreateColorBrushWithColor(if dark {
+                rgba(255, 255, 255, 40)
+            } else {
+                rgba(0, 0, 0, 30)
+            })?)?;
+            stroke.SetStrokeThickness(1.0)?;
+            let border = c.CreateShapeVisual()?;
+            border.SetSize(size)?;
+            border.Shapes()?.Append(&stroke)?;
+            layers.InsertAtTop(&border)?;
+        } else {
+            draw_popup_background(&layers, dark, glass, width, height)?;
+        }
 
         let selection = c.CreateShapeVisual()?;
         let selection_shape = c.CreateRoundedRectangleGeometry()?;
@@ -507,7 +593,32 @@ impl Popup {
             (screen.bottom - margin - h).max(screen.top + margin),
         );
 
-        let hwnd = create_window(dark)?;
+        // The menu keeps its place; the window grows around it by `pad`.
+        let root = c.CreateContainerVisual()?;
+        root.SetSize(Vector2::new(width + pad * 2.0, height + pad * 2.0))?;
+        menu.SetOffset(Vector3::new(pad, pad, 0.0))?;
+        root.Children()?.InsertAtTop(&menu)?;
+        let spring = match origin {
+            Some(origin) => {
+                // It grows from, and shrinks towards, the point it came from.
+                menu.SetCenterPoint(Vector3::new(
+                    (origin.x - left) as f32,
+                    (origin.y - top) as f32,
+                    0.0,
+                ))?;
+                animate_spring(&menu, true)?;
+                Some(menu.clone())
+            }
+            None => None,
+        };
+        let (left, top) = (left - pad as i32, top - pad as i32);
+        let (w, h) = (w + pad as i32 * 2, h + pad as i32 * 2);
+
+        let hwnd = if spring.is_some() {
+            create_window(w!("MuelleSpringMenu"), None)?
+        } else {
+            create_window(w!("MuelleMenu"), Some(dark))?
+        };
         // SAFETY: `hwnd` is the live window created above.
         let target = unsafe {
             gfx.compositor
@@ -542,6 +653,8 @@ impl Popup {
             opened: Instant::now(),
             armed: false,
             previous,
+            pad,
+            spring,
         })
     }
 
@@ -579,13 +692,52 @@ impl Popup {
                 }
             }
         }
+        self.fold();
         self.close();
         chosen
     }
 
+    /// A springing menu goes back where it came from before it leaves.
+    fn fold(&self) {
+        let Some(menu) = &self.spring else {
+            return;
+        };
+        // SAFETY: Our own window; clicks go past it from now on.
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), FOCUS_TIMER);
+            let _ = ReleaseCapture();
+        }
+        if animate_spring(menu, false).is_err() {
+            return;
+        }
+        // SAFETY: A timer on our own window.
+        if unsafe { SetTimer(Some(self.hwnd), FOLD_TIMER, FOLD_MS, None) } == 0 {
+            return;
+        }
+        let mut msg = MSG::default();
+        // SAFETY: The thread's own loop, as while the menu was open.
+        unsafe {
+            loop {
+                let got = GetMessageW(&mut msg, None, 0, 0).0;
+                if got == 0 {
+                    // Leave WM_QUIT for the dock's own loop.
+                    PostQuitMessage(msg.wParam.0 as i32);
+                }
+                let done =
+                    msg.hwnd == self.hwnd && msg.message == WM_TIMER && msg.wParam.0 == FOLD_TIMER;
+                if got <= 0 || done {
+                    break;
+                }
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+    }
+
     fn handle(&mut self, msg: &MSG) -> Handled {
-        let x = (msg.lParam.0 & 0xFFFF) as i16 as f32;
-        let y = ((msg.lParam.0 >> 16) & 0xFFFF) as i16 as f32;
+        // From the menu's corner, within its window.
+        let x = (msg.lParam.0 & 0xFFFF) as i16 as f32 - self.pad;
+        let y = ((msg.lParam.0 >> 16) & 0xFFFF) as i16 as f32 - self.pad;
         let own = msg.hwnd == self.hwnd;
         match msg.message {
             WM_TIMER if own && msg.wParam.0 == FOCUS_TIMER => {
@@ -767,24 +919,59 @@ enum Handled {
     Close(Option<u32>),
 }
 
-fn create_window(dark: bool) -> Result<HWND> {
-    static CLASS: OnceLock<()> = OnceLock::new();
-    // SAFETY: The class is registered once with a procedure that lives for
-    // the whole process; the window is configured before it is shown.
+/// Springs `menu` out of its centre point, overshooting a little, or folds it
+/// back into it.
+pub(crate) fn animate_spring(menu: &ContainerVisual, open: bool) -> Result<()> {
+    let c = menu.Compositor()?;
+    let uniform = |scale: f32| Vector3::new(scale, scale, 1.0);
+    let ease =
+        c.CreateCubicBezierEasingFunction(Vector2::new(0.16, 0.84), Vector2::new(0.28, 1.0))?;
+    let (from, to) = if open { (0.0, 1.0) } else { (1.0, 0.0) };
+    let size = |shown: f32| SMALL + (1.0 - SMALL) * shown;
+    let scale = c.CreateVector3KeyFrameAnimation()?;
+    scale.InsertKeyFrame(0.0, uniform(size(from)))?;
+    if open {
+        scale.InsertKeyFrameWithEasingFunction(0.66, uniform(1.02), &ease)?;
+    }
+    scale.InsertKeyFrameWithEasingFunction(1.0, uniform(size(to)), &ease)?;
+    let opacity = c.CreateScalarKeyFrameAnimation()?;
+    opacity.InsertKeyFrame(0.0, from)?;
+    opacity.InsertKeyFrame(1.0, to)?;
+    let all = if open { SPRING_MS } else { i64::from(FOLD_MS) };
+    let time = |milliseconds: i64| TimeSpan {
+        Duration: milliseconds * 10_000,
+    };
+    scale.SetDuration(time(all))?;
+    // Solid sooner than it settles, and there until it has folded.
+    opacity.SetDuration(time(if open { all / 2 } else { all }))?;
+    menu.StartAnimation(h!("Scale"), &scale)?;
+    menu.StartAnimation(h!("Opacity"), &opacity)?;
+    Ok(())
+}
+
+/// A menu's window. With `framed`, light or dark, Windows draws its corners,
+/// border and shadow; without, the menu draws its own, so that it can move.
+fn create_window(class: PCWSTR, framed: Option<bool>) -> Result<HWND> {
+    // SAFETY: The class has a procedure that lives for the whole process, and
+    // registering it again is refused harmlessly; the window is configured
+    // before it is shown.
     unsafe {
         let instance = GetModuleHandleW(None)?;
-        let class = w!("MuelleMenu");
-        CLASS.get_or_init(|| {
+        {
             RegisterClassW(&WNDCLASSW {
                 // The system shadow under the menu, as native menus have.
-                style: CS_DROPSHADOW,
+                style: if framed.is_some() {
+                    CS_DROPSHADOW
+                } else {
+                    Default::default()
+                },
                 lpfnWndProc: Some(menu_proc),
                 hInstance: instance.into(),
                 lpszClassName: class,
                 hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
                 ..Default::default()
             });
-        });
+        }
         let hwnd = CreateWindowExW(
             WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
             class,
@@ -799,7 +986,21 @@ fn create_window(dark: bool) -> Result<HWND> {
             Some(instance.into()),
             None,
         )?;
-        apply_popup_frame(hwnd, dark);
+        match framed {
+            Some(dark) => {
+                apply_popup_frame(hwnd, dark);
+            }
+            None => {
+                // Older Windows versions reject it; their menus are opaque.
+                let enable = BOOL::from(true);
+                let _ = DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_USE_HOSTBACKDROPBRUSH,
+                    (&raw const enable).cast(),
+                    size_of_val(&enable) as u32,
+                );
+            }
+        }
         Ok(hwnd)
     }
 }
@@ -1165,6 +1366,7 @@ mod tests {
                 anchor,
                 true,
                 Placement::Below,
+                None,
             )?;
             let mut bounds = RECT::default();
             unsafe {

@@ -23,7 +23,9 @@ use windows::Win32::{
     },
 };
 
-use crate::{edge_watch, folder_menu, multi_window_view::MultiWindowAction};
+use crate::{
+    control_center::Opening, edge_watch, folder_menu, multi_window_view::MultiWindowAction,
+};
 
 use super::{
     APPBAR_CALLBACK, ASSETS_DELAY_MS, ASSETS_READY, ASSETS_TIMER, App, BIN_CHANGED, BIN_DELAY_MS,
@@ -122,6 +124,57 @@ pub(super) fn with_app_value<T: Default>(
 
 pub fn menu_bar_clicked(x: f32, y: f32) {
     with_app_then("barra superior", |app| {
+        let circle = app
+            .menubar
+            .as_ref()
+            .and_then(|bar| bar.system_menu_button(x, y));
+        if let Some(button) = circle {
+            return app.system_menu(button);
+        }
+        // The clock opens Muelle's calendar unless Settings turns it off or
+        // names something else for the clock to open.
+        let calendar = app.config.calendar && app.config.menu_bar_clock_target.is_none();
+        let clock = app
+            .menubar
+            .as_ref()
+            .and_then(|bar| bar.clock_button(x, y))
+            .filter(|_| calendar);
+        if let Some(button) = clock {
+            app.toggle_calendar(button)?;
+            return Ok(None);
+        }
+        // Any other press on the bar closes it.
+        app.close_calendar();
+        // Turned off in Settings, a button opens Windows' own, below.
+        let (tiles, network) = (app.config.control_center, app.config.network_menu);
+        let button = app.menubar.as_ref().and_then(|bar| {
+            bar.control_center_button(x, y)
+                .filter(|_| tiles)
+                .map(|button| (button, Opening::Tiles))
+                .or_else(|| {
+                    let button = bar.network_button(x, y).filter(|_| network)?;
+                    Some((button, Opening::Network))
+                })
+        });
+        if let Some((button, opening)) = button {
+            app.close_tray_menu();
+            app.toggle_control_center(button, opening)?;
+            return Ok(None);
+        }
+        // Any other press on the bar closes it.
+        app.close_control_center();
+        // A press that dismissed Windows' own flyout goes to it, below.
+        let tray = app
+            .menubar
+            .as_ref()
+            .and_then(|bar| bar.tray_button(x, y))
+            .filter(|_| !launcher::hidden_icons_were_open());
+        if let Some(button) = tray
+            && app.toggle_tray_menu(button)?
+        {
+            return Ok(None);
+        }
+        app.close_tray_menu();
         if let Some(bar) = &mut app.menubar {
             if let Some(anchor) = bar.input_switcher_anchor(x, y) {
                 bar.dismiss_island(&app.gfx)?;
@@ -134,6 +187,131 @@ pub fn menu_bar_clicked(x: f32, y: f32) {
             bar.click(&app.gfx, x, y)?;
         }
         Ok(None)
+    });
+}
+
+pub fn control_center_tick() {
+    with_app("centro de control", |app| {
+        let tick = match &mut app.control_center {
+            Some(center) => center.tick(&app.gfx)?,
+            None => return Ok(()),
+        };
+        app.control_center_checked(tick);
+        Ok(())
+    });
+}
+
+pub fn control_center_secondary(point: POINT) {
+    with_app("centro de control", |app| match &mut app.control_center {
+        Some(center) => center.secondary(&app.gfx, point),
+        None => Ok(()),
+    });
+}
+
+pub fn control_center_press(point: POINT) {
+    with_app("centro de control", |app| {
+        let outcome = match &mut app.control_center {
+            Some(center) => center.press(point)?,
+            None => return Ok(()),
+        };
+        app.follow_control_center(outcome);
+        Ok(())
+    });
+}
+
+pub fn control_center_moved(point: POINT) {
+    with_app("centro de control", |app| match &mut app.control_center {
+        Some(center) => center.moved(point),
+        None => Ok(()),
+    });
+}
+
+pub fn control_center_release(point: POINT) {
+    with_app("centro de control", |app| {
+        let outcome = match &mut app.control_center {
+            Some(center) => center.release(&app.gfx, point)?,
+            None => return Ok(()),
+        };
+        app.follow_control_center(outcome);
+        Ok(())
+    });
+}
+
+pub fn control_center_scrim(down: bool) {
+    with_app("centro de control", |app| match &mut app.control_center {
+        Some(center) => center.scrim_clicked(down),
+        None => Ok(()),
+    });
+}
+
+pub fn control_center_changed(message: u32) {
+    with_app("centro de control", |app| match &mut app.control_center {
+        Some(center) => center.changed(&app.gfx, message),
+        None => Ok(()),
+    });
+}
+
+pub fn tray_menu_tick() {
+    with_app("bandeja", |app| {
+        let tick = match &mut app.tray_menu {
+            Some(menu) => menu.tick(&app.gfx, app.tray_host.as_ref())?,
+            None => return Ok(()),
+        };
+        app.tray_menu_checked(tick);
+        Ok(())
+    });
+}
+
+pub fn tray_menu_input(message: u32, point: POINT) {
+    with_app("bandeja", |app| {
+        let outcome = match &mut app.tray_menu {
+            Some(menu) => menu.input(message, point)?,
+            None => return Ok(()),
+        };
+        app.follow_tray_menu(outcome);
+        Ok(())
+    });
+}
+
+pub fn menu_bar_tray_tick() {
+    with_app("bandeja", |app| match &mut app.menubar {
+        Some(bar) => bar.follow_windows_tray(&app.gfx),
+        None => Ok(()),
+    });
+}
+
+pub fn calendar_tick() {
+    with_app("calendario", |app| {
+        let tick = match &mut app.calendar {
+            Some(calendar) => calendar.tick(&app.gfx)?,
+            None => return Ok(()),
+        };
+        app.calendar_checked(tick);
+        Ok(())
+    });
+}
+
+pub fn calendar_input(message: u32, point: POINT) {
+    with_app_then("calendario", |app| {
+        let outcome = match &mut app.calendar {
+            Some(calendar) => calendar.input(&app.gfx, message, point)?,
+            None => return Ok(None),
+        };
+        Ok(app.follow_calendar(outcome))
+    });
+}
+
+pub fn calendar_scrolled(delta: i16) {
+    with_app("calendario", |app| match &mut app.calendar {
+        Some(calendar) => calendar.scrolled(&app.gfx, delta),
+        None => Ok(()),
+    });
+}
+
+pub fn menu_bar_fold_done() {
+    with_app("volumen", |app| match &mut app.menubar {
+        Some(bar) => bar.finish_fold(),
+        None => Ok(()),
     });
 }
 

@@ -26,7 +26,9 @@ use windows::{
         },
         System::{
             Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree},
-            Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW},
+            Registry::{
+                HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RegGetValueW,
+            },
         },
         UI::WindowsAndMessaging::PostMessageW,
     },
@@ -364,13 +366,20 @@ pub struct TaskbarButtons {
 const ADVANCED: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced");
 const SEARCH: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Search");
 
+/// `AllowNewsAndInterests` set to 0 turns Widgets off for the whole PC.
+const WIDGETS_POLICY: PCWSTR = w!(r"SOFTWARE\Policies\Microsoft\Dsh");
+
 fn dword(key: PCWSTR, value: &str) -> Option<u32> {
+    dword_in(HKEY_CURRENT_USER, key, value)
+}
+
+fn dword_in(root: HKEY, key: PCWSTR, value: &str) -> Option<u32> {
     let mut data = 0u32;
     let mut size = size_of::<u32>() as u32;
     // SAFETY: `data` and `size` live for the call and match the requested type.
     unsafe {
         RegGetValueW(
-            HKEY_CURRENT_USER,
+            root,
             key,
             &HSTRING::from(value),
             RRF_RT_REG_DWORD,
@@ -404,8 +413,17 @@ pub fn taskbar_buttons() -> TaskbarButtons {
         task_view: dword(ADVANCED, "ShowTaskViewButton").unwrap_or(1) != 0,
         // Windows 10 has no Widgets (its value is never written there, so it
         // would read as shown), and Win+W opens Windows Ink instead.
-        widgets: crate::system::is_windows_11() && dword(ADVANCED, "TaskbarDa").unwrap_or(1) != 0,
+        widgets: crate::system::is_windows_11()
+            && widgets_offered(
+                dword(ADVANCED, "TaskbarDa"),
+                dword_in(HKEY_LOCAL_MACHINE, WIDGETS_POLICY, "AllowNewsAndInterests"),
+            ),
     }
+}
+
+/// Shown unless the user's taskbar setting or the PC's policy turns it off.
+fn widgets_offered(setting: Option<u32>, policy: Option<u32>) -> bool {
+    setting.unwrap_or(1) != 0 && policy != Some(0)
 }
 
 /// The user's native taskbar badge preference. An unset value uses Windows'
@@ -538,4 +556,17 @@ fn capability_in_use(capability: &str) -> bool {
         r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\{capability}"
     );
     in_use(HKEY_CURRENT_USER, &base) || in_use(HKEY_CURRENT_USER, &format!(r"{base}\NonPackaged"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn widgets_show_unless_the_user_or_the_pc_turns_them_off() {
+        assert!(widgets_offered(None, None));
+        assert!(widgets_offered(Some(1), Some(1)));
+        assert!(!widgets_offered(Some(0), None));
+        assert!(!widgets_offered(Some(1), Some(0)));
+    }
 }
