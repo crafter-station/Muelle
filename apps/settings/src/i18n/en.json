@@ -179,7 +179,6 @@
   "dockHidingAutomaticHint": "Appears when you rest the pointer at its edge.",
   "dockHidingIntelligentHint": "Hides when the active window overlaps it.",
   "wallpaperGalleryTitle": "Wallpapers",
-  "wallpaperGalleryHint": "Downloads when selected, then works offline.",
   "wallpaperApplyLabel": "Use {name} as wallpaper",
   "wallpaperApplying": "Preparing wallpaper…",
   "wallpaperApplied": "Wallpaper applied.",

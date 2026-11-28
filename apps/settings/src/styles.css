@@ -702,7 +702,6 @@ input:focus-visible {
 .preview-density .preview-dock i { flex: 0 0 var(--mini-icon); border-radius: 4px; }
 
 
-.wallpaper-hint { margin: 14px 14px 12px; color: var(--text-dim); font-size: 12px; line-height: 1.5; }
 /* Masonry: balanced columns of tiles in a repeating mix of shapes. */
 .wallpaper-grid { columns: 4; column-gap: 10px; padding: 0 14px; }
 .wallpaper-choice { display: block; width: 100%; margin: 0 0 10px; padding: 0; border: 0; break-inside: avoid; color: var(--text); background: none; font: inherit; text-align: start; cursor: default; }

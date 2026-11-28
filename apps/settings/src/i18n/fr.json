@@ -179,7 +179,6 @@
   "dockHidingAutomaticHint": "Apparaît quand le pointeur reste sur son bord.",
   "dockHidingIntelligentHint": "Se masque si la fenêtre active le recouvre.",
   "wallpaperGalleryTitle": "Fonds d’écran",
-  "wallpaperGalleryHint": "Se télécharge à la sélection, puis fonctionne hors ligne.",
   "wallpaperApplyLabel": "Utiliser {name} comme fond",
   "wallpaperApplying": "Préparation du fond…",
   "wallpaperApplied": "Fond appliqué.",

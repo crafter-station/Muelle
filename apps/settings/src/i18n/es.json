@@ -179,7 +179,6 @@
   "dockHidingAutomaticHint": "Solo aparece al dejar el cursor en su borde.",
   "dockHidingIntelligentHint": "Se oculta si la ventana activa ocupa su espacio.",
   "wallpaperGalleryTitle": "Fondos de pantalla",
-  "wallpaperGalleryHint": "Se descarga al elegirlo y queda disponible sin conexión.",
   "wallpaperApplyLabel": "Usar {name} como fondo",
   "wallpaperApplying": "Preparando fondo…",
   "wallpaperApplied": "Fondo aplicado.",

@@ -5,7 +5,6 @@ import { WALLPAPERS } from "./wallpaper-catalog";
 
 interface WallpaperTexts {
   wallpaperGalleryTitle: string;
-  wallpaperGalleryHint: string;
   wallpaperApplyLabel: string;
   wallpaperApplying: string;
   wallpaperApplyError: string;
@@ -49,7 +48,6 @@ export function WallpaperGallery({ texts, onApplied }: { texts: WallpaperTexts; 
   };
 
   return <Card title={texts.wallpaperGalleryTitle}>
-    <p className="wallpaper-hint">{texts.wallpaperGalleryHint}</p>
     <div className="wallpaper-grid">
       {WALLPAPERS.map(({ id, preview, width, height }) => {
         const name = texts.wallpaperNames[id - 1];
