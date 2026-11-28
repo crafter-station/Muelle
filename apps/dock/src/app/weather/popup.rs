@@ -107,7 +107,7 @@ impl App {
         if self.weather.popup.is_none() {
             return;
         }
-        if self.menu_open {
+        if self.menu_open || self.drag.is_some() || self.drag_over {
             self.close_weather_popup();
             return;
         }

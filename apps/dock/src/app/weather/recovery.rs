@@ -157,6 +157,37 @@ mod tests {
             app.close_preview();
             assert!(app.weather_visible());
         }
+        // Reordering a pin, dragging one out of a group, or an external file
+        // drag must not destroy the same permanent card or start network work.
+        for from_group in [false, true] {
+            app.drag = Some(crate::app::Dragging {
+                id: "owned-source".into(),
+                point: POINT::default(),
+                removing: false,
+                merge: None,
+                from_group,
+            });
+            assert!(
+                app.weather_visible(),
+                "icon drag must retain the weather tile"
+            );
+            assert!(!app.weather_demand().visible);
+            app.weather_event(card, 2)?;
+            app.weather_event(card, 3)?;
+            assert!(app.weather.popup.is_none() && !app.menu_open);
+            assert_eq!(app.weather.card.as_ref().map(Card::hwnd), Some(card));
+            app.drag = None;
+        }
+        app.drag_over = true;
+        assert!(
+            app.weather_visible(),
+            "file drag must retain the weather tile"
+        );
+        assert!(!app.weather_demand().visible);
+        app.weather_event(card, 2)?;
+        assert!(app.weather.popup.is_none());
+        app.drag_over = false;
+        assert!(app.weather_visible());
         assert!(app.weather.pending.is_none() && app.weather.network.is_none());
         assert_eq!(unsafe { GetForegroundWindow() }, foreground);
         assert_eq!(unsafe { GetCapture() }, capture);

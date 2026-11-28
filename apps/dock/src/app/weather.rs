@@ -118,19 +118,19 @@ impl App {
             && !self.fullscreen
             && self.moving_since.is_none()
             && self.slide.value < 1.0
-            && self.drag.is_none()
-            && !self.drag_over
             && !self.switching
     }
     fn weather_demand(&self) -> Demand {
         Demand {
-            // Popovers do not remove a permanent Dock item. Retain its visual
-            // while keeping background fetches paused during these interactions.
+            // Transient Dock interactions retain the permanent card. They pause
+            // network demand, not the visual, avoiding empty slots and rebuilds.
             visible: self.weather_visible()
                 && self.weather.card.is_some()
                 && !self.menu_open
                 && self.preview.is_none()
-                && self.group_view.is_none(),
+                && self.group_view.is_none()
+                && self.drag.is_none()
+                && !self.drag_over,
             online: self.weather.online,
             energy_saver: self.power_seen.is_some_and(|(_, saver)| saver),
         }
@@ -491,6 +491,11 @@ impl App {
                     SetTimer(Some(self.input), HIDE_TIMER, HIDE_DELAY_MS, None);
                 }
             }
+            return Ok(None);
+        }
+        // A captured reorder or OLE drop owns this interaction. Keep the tile
+        // visible, but ignore queued releases instead of opening a second UI.
+        if self.drag.is_some() || self.drag_over {
             return Ok(None);
         }
         if event == 2 && menu::needs_native_menu() {

@@ -16,8 +16,8 @@ copia la sección de la versión que se publica a la release de GitHub.
   used only for daily summary rows. No extra requests when changing hours.
 
 - Weather no longer disappears and leaves an empty Dock slot when a window
-  preview or app group opens. Keeps the existing card while forecast requests
-  remain paused during these interactions.
+  preview or app group opens, or while dragging Dock icons or files. Reuses the
+  existing card while forecast requests remain paused during these interactions.
 
 - Automatic weather location now shows its detected city in Settings, the Dock
   and the forecast popup. Resolves once after a fresh Windows fix, caches the
@@ -112,8 +112,8 @@ copia la sección de la versión que se publica a la release de GitHub.
   las filas de resumen por días. Cambiar de hora no hace peticiones adicionales.
 
 - La tarjeta del clima ya no desaparece ni deja un hueco al abrir previews de
-  ventanas o grupos. Conserva la tarjeta existente y mantiene pausadas las
-  consultas meteorológicas durante esas interacciones.
+  ventanas o grupos, ni al arrastrar iconos o archivos. Reutiliza la tarjeta y
+  mantiene pausadas las consultas meteorológicas durante esas interacciones.
 
 - La ubicación automática del clima muestra la ciudad detectada en Ajustes,
   el Dock y el popup. Resuelve el nombre tras un fix reciente de Windows y lo
