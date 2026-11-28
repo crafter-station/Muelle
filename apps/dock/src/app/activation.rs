@@ -606,8 +606,13 @@ impl App {
     pub(super) fn on_foreground_changed(&mut self) -> Result<()> {
         self.close_preview();
         let foreground = tracker::foreground_window();
-        self.tracker.refresh_browser(foreground);
+        let identity_changed = self.tracker.refresh_browser(foreground);
         self.flights.retain(|flight| flight.is_current(foreground));
+        if identity_changed {
+            // A late browser/PWA identity changes grouping, not only z-order.
+            // Reuse normal roster reconciliation instead of waiting for a new window.
+            return self.sync();
+        }
         // The app roster can stay identical while its windows change z-order.
         // Refresh their order so the next dock activation selects the actual
         // most recently used window rather than a stale group leader.

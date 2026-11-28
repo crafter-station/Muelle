@@ -11,6 +11,7 @@ pub struct Text {
     pub saved_location: &'static str,
     pub stale: &'static str,
     pub settings: &'static str,
+    pub disable: &'static str,
 }
 pub fn text(language: Language) -> &'static Text {
     match language {
@@ -46,6 +47,7 @@ const EN: Text = Text {
     saved_location: "Saved location",
     stale: "Earlier data",
     settings: "Location and weather…",
+    disable: "Turn off weather",
 };
 const ES: Text = Text {
     conditions: [
@@ -69,6 +71,7 @@ const ES: Text = Text {
     saved_location: "Ubicación guardada",
     stale: "Datos anteriores",
     settings: "Ubicación y clima…",
+    disable: "Desactivar clima",
 };
 const FR: Text = Text {
     conditions: [
@@ -92,6 +95,7 @@ const FR: Text = Text {
     saved_location: "Position enregistrée",
     stale: "Données précédentes",
     settings: "Position et météo…",
+    disable: "Désactiver la météo",
 };
 const PT: Text = Text {
     conditions: [
@@ -115,6 +119,7 @@ const PT: Text = Text {
     saved_location: "Localização salva",
     stale: "Dados anteriores",
     settings: "Localização e clima…",
+    disable: "Desativar clima",
 };
 const ZH: Text = Text {
     conditions: [
@@ -138,6 +143,7 @@ const ZH: Text = Text {
     saved_location: "已保存的位置",
     stale: "较早数据",
     settings: "位置与天气…",
+    disable: "关闭天气",
 };
 const HI: Text = Text {
     conditions: [
@@ -161,6 +167,7 @@ const HI: Text = Text {
     saved_location: "सहेजा गया स्थान",
     stale: "पुराना डेटा",
     settings: "स्थान और मौसम…",
+    disable: "मौसम बंद करें",
 };
 const AR: Text = Text {
     conditions: [
@@ -184,6 +191,7 @@ const AR: Text = Text {
     saved_location: "الموقع المحفوظ",
     stale: "بيانات سابقة",
     settings: "الموقع والطقس…",
+    disable: "إيقاف الطقس",
 };
 const BN: Text = Text {
     conditions: [
@@ -207,6 +215,7 @@ const BN: Text = Text {
     saved_location: "সংরক্ষিত অবস্থান",
     stale: "আগের তথ্য",
     settings: "অবস্থান ও আবহাওয়া…",
+    disable: "আবহাওয়া বন্ধ করুন",
 };
 impl Text {
     pub fn condition(&self, condition: Condition) -> &'static str {

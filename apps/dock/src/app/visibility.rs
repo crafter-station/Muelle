@@ -156,7 +156,10 @@ impl App {
     /// Runs after a settings change and after the displays change (Windows+P,
     /// a monitor plugged in or out, a new arrangement).
     pub(super) fn apply_edge_settings(&mut self) {
-        let monitors = monitor_rects();
+        self.configure_edge_watcher(monitor_rects());
+    }
+
+    fn configure_edge_watcher(&mut self, monitors: Vec<RECT>) {
         let remembered = remembered_display(self.dock_display, &monitors);
         if remembered != self.dock_display {
             muelle_shell::log::line(&format!(
@@ -165,16 +168,15 @@ impl App {
             ));
         }
         self.dock_display = remembered.filter(|_| self.config.hides_automatically());
-        let mut screens = if self.config.hides_automatically() {
+        let screens = if self.config.hides_automatically() {
             monitors
         } else {
             Vec::new()
         };
-        let watch_dock = screens.len() > 1;
-        if !watch_dock {
-            // One display already has the dock's own reveal strip.
-            screens.clear();
-        }
+        // Even one display needs a reveal path independent of WM_MOUSEMOVE:
+        // the desktop can cover the input strip. Reuse the shared edge observer
+        // to raise our own windows on dwell, without activating another window.
+        let watch_dock = !screens.is_empty();
         edge_watch::set_dock_monitors(screens, self.position());
         // Both hiding modes of the menu bar reveal it at the top edge; the
         // intelligent one while a window covers it (issue #61).

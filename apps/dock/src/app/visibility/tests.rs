@@ -89,6 +89,8 @@ impl Fixture {
             badge_watch: None,
             attention: Attention::default(),
             attention_enabled: false,
+            app_badges: None,
+            badge_counts: HashMap::new(),
             assets: HashMap::new(),
             assets_for: None,
             placeholder: None,
@@ -157,6 +159,60 @@ pub(in crate::app) fn queue() -> windows::core::Result<windows::System::Dispatch
             apartmentType: DQTAT_COM_STA,
         })
     }
+}
+
+#[test]
+#[ignore = "Own hidden windows and edge observer only; no taskbar, focus or settings changes"]
+fn native_single_monitor_hiding_keeps_an_independent_reveal_observer() -> Result<()> {
+    use muelle_config::DockPosition;
+    use windows::Win32::{Foundation::RECT, UI::WindowsAndMessaging::GetForegroundWindow};
+
+    let _queue = queue()?;
+    let mut fixture = Fixture::new()?;
+    let app = &mut fixture.app;
+    let foreground = unsafe { GetForegroundWindow() };
+    // A single synthetic display keeps the test independent of the user's
+    // connected displays and pointer. The input window receives no mouse events.
+    let screen = RECT {
+        left: -33000,
+        top: -33000,
+        right: -30000,
+        bottom: -30000,
+    };
+    let second = RECT {
+        left: -30000,
+        right: -27000,
+        ..screen
+    };
+    for position in [
+        DockPosition::Bottom,
+        DockPosition::Left,
+        DockPosition::Right,
+    ] {
+        app.config.dock_position = position;
+        for automatic in [true, false] {
+            app.config.auto_hide = automatic;
+            app.config.smart_hide = !automatic;
+            // Keeping only one display after Windows+P must not remove the
+            // independent observer either.
+            for screens in [vec![screen, second], vec![screen]] {
+                app.configure_edge_watcher(screens);
+                assert!(
+                    app.edge_watch.is_some(),
+                    "a covered reveal strip must not disable recovery: {position:?}, automatic={automatic}"
+                );
+            }
+            app.configure_edge_watcher(Vec::new());
+            assert!(app.edge_watch.is_none(), "no displays need no observer");
+            app.configure_edge_watcher(vec![screen]);
+            app.config.auto_hide = false;
+            app.config.smart_hide = false;
+            app.configure_edge_watcher(vec![screen]);
+            assert!(app.edge_watch.is_none(), "always-visible needs no observer");
+        }
+    }
+    assert_eq!(unsafe { GetForegroundWindow() }, foreground);
+    Ok(())
 }
 
 #[test]

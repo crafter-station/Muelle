@@ -6,6 +6,7 @@
       "nsis"
     ],
     "publisher": "Muelle",
+    "copyright": "Copyright (c) 2026 Muelle contributors",
     "homepage": "https://github.com/crafter-station/Muelle",
     "shortDescription": "Dock estilo macOS para Windows",
     "category": "Utility",

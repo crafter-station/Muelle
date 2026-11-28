@@ -236,6 +236,8 @@ pub fn run() -> Result<()> {
             badge_watch: status::watch_taskbar_settings(visual.0 as isize, TASKBAR_PREFS_CHANGED),
             attention: Attention::default(),
             attention_enabled: status::taskbar_badges_enabled(),
+            app_badges: None,
+            badge_counts: HashMap::new(),
             assets: HashMap::new(),
             assets_for: None,
             placeholder: None,

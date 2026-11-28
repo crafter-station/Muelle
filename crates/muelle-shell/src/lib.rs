@@ -1,4 +1,5 @@
 pub mod accessories;
+pub mod app_badges;
 pub mod appbar;
 pub mod autostart;
 pub mod browser_profiles;

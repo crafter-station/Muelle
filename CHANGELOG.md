@@ -10,6 +10,19 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Hidden Dock recovery also watches the screen edge on single-monitor setups,
+  so a covered input strip can recover without changing desktop focus. Reuses
+  the shared observer; Always visible stops it when no menu bar needs it.
+
+- Weather can be turned off from its Dock context menu; saves only that
+  preference and stops its watchers/updates. Window previews are more compact,
+  with titles above the thumbnail and a close button at the right on hover.
+  Closing a window preserves the popup's monitor and paging width.
+
+- Registered Chrome web apps keep their own Dock identity when their shortcut
+  uses chrome.exe. Existing name/icon, pinning and launch handling are reused.
+  Late browser identities reconcile the Dock on activation without new polling.
+
 - The weather end of the Dock now reveals it in automatic and intelligent
   hiding modes, including during a slide. Moving between icons and the weather
   card keeps it open without magnifying the card or starting extra queries.
@@ -111,6 +124,25 @@ copia la sección de la versión que se publica a la release de GitHub.
 - Moving the Dock to another display with the pointer no longer flashes the
   old Dock, at the other display's scale, before it slides in: the Dock's
   window stays out of view until its new content is on screen.
+- The programs and the installer carry their full publisher details
+  (company, copyright, file names), which unsigned programs left blank and
+  antivirus heuristics distrust (issue #82).
+- Badges that apps keep in Windows' notification platform now show on their
+  Dock icons, as on the taskbar: the unread count of Outlook and other web
+  apps installed from Edge, and of apps such as Telegram (Unigram) or
+  WhatsApp. A count shows in a red pill (99+ past 99), a glyph as a red dot.
+  Unlike the overlay icons of Teams or Slack, these never reach the Dock as
+  calls: Muelle reads them, read-only and without notification text, with
+  the SQLite that ships with Windows, and checks for changes once a second
+  in microseconds. They follow Windows' "Show badges on taskbar apps"
+  (issue #74).
+- Firefox web apps (Firefox 143+) get their own Dock icon, as on the taskbar,
+  instead of joining Firefox: their shortcuts open Firefox itself with
+  `-taskbar-tab`, which Muelle now recognizes. A Firefox window that gets its
+  private-browsing identity after it opens moves to the Private Browsing icon
+  when focused, instead of staying under Firefox. Clicking Firefox no longer
+  brings up a web app window. Also for LibreWolf, Waterfox, Floorp and Zen
+  (issue #72).
 - The Dock comes to another display sooner: about 0.2 s after the pointer
   reaches that display's bottom edge instead of about 0.4 s. The edges are
   sampled every frame only while the pointer is near one (every 80 ms
@@ -118,6 +150,20 @@ copia la sección de la versión que se publica a la release de GitHub.
   the Dock no longer redraws the menu bar.
 
 ### Español
+
+- La recuperación del Dock oculto también observa el borde con una sola pantalla,
+  para recuperarse de una franja de entrada tapada sin cambiar el foco del
+  escritorio. Reutiliza el observador compartido; Siempre visible lo detiene
+  cuando tampoco lo necesita la barra superior.
+
+- El clima se puede desactivar desde su menú contextual del Dock; guarda solo
+  esa preferencia y detiene sus suscripciones/actualizaciones. Previews más
+  compactas, título encima y cierre a la derecha al hacer hover. Cerrar una
+  ventana conserva el monitor y el ancho de paginación del popup.
+
+- Las apps web registradas de Chrome conservan su identidad en el Dock aunque
+  el acceso directo use chrome.exe. Reutilizan nombre/icono, anclaje y apertura.
+  Las identidades tardías actualizan la agrupación al activarse, sin nuevo sondeo.
 
 - El extremo del clima permite revelar el Dock en ocultación automática e
   inteligente, incluso durante el deslizamiento. Pasar entre iconos y tarjeta
@@ -225,6 +271,27 @@ copia la sección de la versión que se publica a la release de GitHub.
   anterior, a la escala de la otra pantalla, antes de entrar deslizándose: la
   ventana del Dock queda fuera de la vista hasta que su contenido nuevo está
   en pantalla.
+- Los programas y el instalador llevan sus datos de editor completos
+  (empresa, copyright, nombres de archivo), que iban vacíos y que las
+  heurísticas de los antivirus miran con desconfianza en programas sin firma
+  (issue #82).
+- Las insignias que las apps guardan en la plataforma de notificaciones de
+  Windows ya aparecen en sus iconos del Dock, como en la barra de tareas: los
+  no leídos de Outlook y otras apps web instaladas desde Edge, y de apps como
+  Telegram (Unigram) o WhatsApp. Un número va en una píldora roja (99+ a
+  partir de 99) y un glifo, como un punto rojo. A diferencia de los iconos
+  superpuestos de Teams o Slack, estas nunca llegan al Dock como llamadas:
+  Muelle las lee, solo lectura y sin el texto de las notificaciones, con el
+  SQLite que trae Windows, y comprueba si cambian una vez por segundo en
+  microsegundos. Siguen el ajuste de Windows «Mostrar distintivos en las
+  aplicaciones de la barra de tareas» (issue #74).
+- Las apps web de Firefox (Firefox 143+) tienen su propio icono en el Dock,
+  como en la barra de tareas, en vez de unirse a Firefox: sus accesos directos
+  abren el propio Firefox con `-taskbar-tab`, que Muelle ahora reconoce. Una
+  ventana de Firefox que recibe su identidad de navegación privada después de
+  abrirse pasa al icono de Navegación privada al enfocarla, en vez de quedarse
+  en Firefox. Pulsar Firefox ya no trae una ventana de app web. También para
+  LibreWolf, Waterfox, Floorp y Zen (issue #72).
 - El Dock llega antes a otra pantalla: unos 0,2 s después de que el puntero
   toque su borde inferior, en vez de unos 0,4 s. Los bordes se miran en cada
   fotograma solo mientras el puntero está cerca de uno (cada 80 ms en el

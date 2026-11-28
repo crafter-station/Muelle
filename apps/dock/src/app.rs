@@ -145,6 +145,9 @@ pub(crate) const HEALTH_CHECK: u32 = WM_APP + 9;
 /// The dock's content for its new display has reached the compositor, so its
 /// window can show again (see `App::reveal_dock`).
 const DOCK_MOVED: u32 = WM_APP + 13;
+/// The badges apps keep in Windows' notification platform changed (see
+/// `muelle_shell::app_badges`).
+const APP_BADGES_CHANGED: u32 = WM_APP + 14;
 /// Shows the dock's window anyway if that word never comes.
 const DOCK_MOVED_LIMIT: std::time::Duration = std::time::Duration::from_millis(400);
 const TASKBAR_PREFS_CHANGED: u32 = WM_APP + 10;
@@ -709,6 +712,11 @@ pub(crate) struct App {
     /// Hears pins and unpins on the Windows taskbar.
     pin_watch: Option<muelle_shell::watch::RegistryWatch>,
     badge_watch: Option<muelle_shell::watch::RegistryWatch>,
+    /// Reads the badges apps keep in Windows' notification platform (issue
+    /// #74), while Windows shows taskbar badges.
+    app_badges: Option<muelle_shell::app_badges::Watch>,
+    /// Each app's badge from there, by its AppUserModelID.
+    badge_counts: HashMap<String, muelle_shell::app_badges::Badge>,
     attention: Attention,
     attention_enabled: bool,
     assets: HashMap<String, Asset>,

@@ -30,6 +30,15 @@ pub(super) const POPUP_EVENT: u32 = WM_APP + 113;
 pub(super) const TIMER: usize = 21;
 const SOURCE: u32 = 1;
 const SETTINGS: u32 = 2;
+const DISABLE: u32 = 3;
+
+fn disable_weather(path: &std::path::Path) -> Result<()> {
+    muelle_config::update_preferences(
+        path,
+        serde_json::Map::from_iter([("weather".to_owned(), serde_json::Value::Bool(false))]),
+    )?;
+    Ok(())
+}
 type Mailbox = Arc<Mutex<Option<(Ticket, std::result::Result<Forecast, muelle_weather::Error>)>>>;
 struct Pending {
     ticket: Ticket,
@@ -546,6 +555,8 @@ impl App {
             MenuItem::Separator,
             MenuItem::action(SETTINGS, text.settings),
             MenuItem::action(SOURCE, muelle_weather::ATTRIBUTION),
+            MenuItem::Separator,
+            MenuItem::action(DISABLE, text.disable),
         ]);
         Ok(Some(Outside::Menu(MenuRequest {
             gfx: self.gfx.clone(),
@@ -563,6 +574,14 @@ impl App {
         Ok(match command {
             SOURCE => Some(Outside::Open(muelle_weather::ATTRIBUTION_URL.into())),
             SETTINGS => Some(Outside::OpenSettings),
+            DISABLE => {
+                disable_weather(&muelle_config::default_path())?;
+                self.config.weather = false;
+                self.sync_weather();
+                self.refresh_dock()?;
+                self.hide_if_unused()?;
+                None
+            }
             _ => None,
         })
     }

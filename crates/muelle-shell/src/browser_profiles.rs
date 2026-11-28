@@ -98,6 +98,65 @@ pub fn program(id: &str) -> Option<Cow<'_, str>> {
     }
 }
 
+/// Firefox and the browsers built on it. They have no Chromium profiles here;
+/// their web apps and private windows carry identities of their own (#72).
+pub(crate) fn is_gecko(executable: &str) -> bool {
+    executable.rsplit(['\\', '/']).next().is_some_and(|name| {
+        [
+            "firefox.exe",
+            "librewolf.exe",
+            "waterfox.exe",
+            "floorp.exe",
+            "zen.exe",
+        ]
+        .iter()
+        .any(|gecko| name.eq_ignore_ascii_case(gecko))
+    })
+}
+
+/// A Firefox web app's shortcut (Firefox 143+): the browser itself opening
+/// `-taskbar-tab <id>`, which shows a web app window instead of a browser.
+pub(crate) fn taskbar_tab_arguments(arguments: &str) -> bool {
+    if arguments.len() > MAX_TEXT - 8 {
+        return false;
+    }
+    command_line(&format!("browser {arguments}")).is_some_and(|args| {
+        args.windows(2).skip(1).any(|pair| {
+            let flag = pair[0].trim_start_matches('-');
+            flag.eq_ignore_ascii_case("taskbar-tab")
+                && !pair[1].is_empty()
+                && !pair[1].starts_with('-')
+        })
+    })
+}
+
+/// Identifies an installed Chromium app's shortcut, without replaying any args.
+pub(crate) fn web_app_arguments(arguments: &str) -> bool {
+    if arguments.len() > MAX_TEXT - 8 {
+        return false;
+    }
+    let Some(args) = command_line(&format!("browser {arguments}")) else {
+        return false;
+    };
+    let mut found = false;
+    for value in args
+        .iter()
+        .skip(1)
+        .filter_map(|arg| arg.strip_prefix("--app-id="))
+    {
+        if found
+            || value.len() != 32
+            || !value
+                .bytes()
+                .all(|byte| (b'a'..=b'p').contains(&byte.to_ascii_lowercase()))
+        {
+            return false;
+        }
+        found = true;
+    }
+    found
+}
+
 impl Profile {
     /// Only launch switches needed to select this profile are retained. Never
     /// replay URLs, extension/app ids, remote debugging flags or arbitrary args.
@@ -273,6 +332,19 @@ pub(crate) fn window_id(hwnd: HWND, executable: &str) -> Option<String> {
     Some(id)
 }
 
+/// Cheap focus-time check before resolving a registered web app. Ordinary
+/// browser focus changes read public window properties, never shell shortcuts.
+pub(crate) fn window_web_app(hwnd: HWND) -> bool {
+    // SAFETY: Read-only property of the supplied window; no browser messages.
+    let command = unsafe {
+        let Ok(store) = SHGetPropertyStoreForWindow::<IPropertyStore>(hwnd) else {
+            return false;
+        };
+        store.GetValue(&PKEY_AppUserModel_RelaunchCommand).ok()
+    };
+    command.is_some_and(|command| web_app_arguments(&command.to_string()))
+}
+
 fn remember(visual: Visual) {
     let Ok(mut cache) = metadata().lock() else {
         return;
@@ -397,7 +469,7 @@ fn command_line(value: &str) -> Option<Vec<String>> {
         if args.is_null() {
             return None;
         }
-        let result = if (1..=4).contains(&count) {
+        let result = if (1..=16).contains(&count) {
             std::slice::from_raw_parts(args, count as usize)
                 .iter()
                 .map(|arg| arg.to_string().ok())

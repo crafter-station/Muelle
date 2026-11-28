@@ -30,7 +30,7 @@ use crate::{
     appearance::{Look, Material},
     gfx::{Gfx, LabelBrush},
 };
-use muelle_shell::icons::IconImage;
+use muelle_shell::{app_badges::Badge, icons::IconImage};
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct Theme {
@@ -500,6 +500,93 @@ mod attention_tests {
 
     #[test]
     #[ignore = "Requires Windows desktop composition"]
+    fn windows_app_badges_show_counts_and_dots_at_the_icons_corner() -> Result<()> {
+        use muelle_shell::app_badges::Badge;
+        use windows::Win32::System::WinRT::{
+            CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+            DispatcherQueueOptions,
+        };
+        let _queue = unsafe {
+            CreateDispatcherQueueController(DispatcherQueueOptions {
+                dwSize: size_of::<DispatcherQueueOptions>() as u32,
+                threadType: DQTYPE_THREAD_CURRENT,
+                apartmentType: DQTAT_COM_STA,
+            })?
+        };
+        let gfx = Gfx::new()?;
+        let scale = 1.25;
+        let layout = layout(
+            &[ItemKind::Icon, ItemKind::Icon],
+            &Metrics::DEFAULT.scaled(scale),
+        );
+        let contents = [SlotContent::default(); 2];
+        let mut scene = Scene::build(
+            &gfx,
+            &SceneInput {
+                layout: &layout,
+                contents: &contents,
+                theme: Theme::new(Look {
+                    material: crate::appearance::Material::Standard,
+                    light: true,
+                    glass: true,
+                }),
+                scale,
+                frame: DockFrame::new(DockEdge::Bottom, (0.0, 0.0), layout.height),
+                remove_label: None,
+            },
+        )?;
+        let visual = |scene: &Scene, index: usize| {
+            scene.counts[index]
+                .as_ref()
+                .map(|(_, visual, aspect)| (visual.clone(), *aspect))
+        };
+        scene.set_counts(&gfx, [Some(Badge::Count(7)), Some(Badge::Dot)].into_iter())?;
+        let (seven, round) = visual(&scene, 0).ok_or_else(|| anyhow::anyhow!("no count"))?;
+        let (_, dot) = visual(&scene, 1).ok_or_else(|| anyhow::anyhow!("no dot"))?;
+        // One digit and a dot are circles.
+        assert!((round - 1.0).abs() < 0.01 && (dot - 1.0).abs() < 0.01);
+        // The same badge keeps its visual; another count makes a new one,
+        // wider for more digits.
+        scene.set_counts(&gfx, [Some(Badge::Count(7)), Some(Badge::Dot)].into_iter())?;
+        assert!(visual(&scene, 0).is_some_and(|(kept, _)| kept == seven));
+        scene.set_counts(
+            &gfx,
+            [Some(Badge::Count(128)), Some(Badge::Dot)].into_iter(),
+        )?;
+        let (many, wide) = visual(&scene, 0).ok_or_else(|| anyhow::anyhow!("no count"))?;
+        assert!(many != seven && wide > 1.3);
+        let state = magnify(
+            &layout,
+            24.0 * scale,
+            1.0,
+            &Magnifier {
+                range: 144.0 * scale,
+                max_scale: 1.6,
+            },
+        );
+        scene.apply(&Frame {
+            state: &state,
+            hovered: None,
+            lifts: &[0.0, 0.0],
+            drag: None,
+            target: None,
+            slide: 0.0,
+            snap: true,
+        })?;
+        // At the icon's top right, ending where an overlay would.
+        let icon = state.rects[0];
+        let corner = overlay_rect(icon);
+        let (size, offset) = (many.Size()?, many.Offset()?);
+        assert!(size.Y > 0.0 && size.X > size.Y);
+        assert!((offset.X + size.X - (corner.x + corner.width)).abs() <= 1.0);
+        assert!(offset.Y <= icon.y + 1.0);
+        scene.set_counts(&gfx, [None, None].into_iter())?;
+        assert!(scene.counts.iter().all(Option::is_none));
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "Requires Windows desktop composition"]
     fn native_app_overlays_keep_their_visual_follow_the_icon_and_go() -> Result<()> {
         use windows::Win32::System::WinRT::{
             CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
@@ -744,6 +831,9 @@ pub struct Scene {
     /// Each app's own overlay icon, from its taskbar button, and the image
     /// it shows (see `overlays`).
     overlays: Vec<Option<(Rc<IconImage>, SpriteVisual)>>,
+    /// Each app's notification badge (issue #74): what it shows, its visual
+    /// and its width for its height.
+    counts: Vec<Option<(Badge, SpriteVisual, f32)>>,
     attention_theme: Theme,
     scale: f32,
     indicators: Vec<Option<ShapeVisual>>,
@@ -897,6 +987,7 @@ impl Scene {
             badges,
             attention: (0..layout.slots.len()).map(|_| None).collect(),
             overlays: (0..layout.slots.len()).map(|_| None).collect(),
+            counts: (0..layout.slots.len()).map(|_| None).collect(),
             attention_theme: theme,
             scale,
             indicators,
@@ -934,6 +1025,32 @@ impl Scene {
                 visual.SetBrush(&brush)?;
                 self.content.Children()?.InsertAtTop(&visual)?;
                 *slot = Some((image, visual));
+            }
+        }
+        Ok(())
+    }
+
+    /// Each slot's notification badge, if any (issue #74). A visual is made
+    /// only when what it shows changes.
+    pub fn set_counts(
+        &mut self,
+        gfx: &Gfx,
+        badges: impl Iterator<Item = Option<Badge>>,
+    ) -> Result<()> {
+        for (slot, badge) in self.counts.iter_mut().zip(badges) {
+            if slot.as_ref().map(|(shown, _, _)| *shown) == badge {
+                continue;
+            }
+            if let Some((_, visual, _)) = slot.take() {
+                self.content.Children()?.Remove(&visual)?;
+            }
+            if let Some(badge) = badge {
+                let drawn = gfx.badge_brush(&badge.text(), self.attention_theme.light)?;
+                drawn.brush.SetStretch(CompositionStretch::Fill)?;
+                let visual = gfx.compositor.CreateSpriteVisual()?;
+                visual.SetBrush(&drawn.brush)?;
+                self.content.Children()?.InsertAtTop(&visual)?;
+                *slot = Some((badge, visual, drawn.width / drawn.height));
             }
         }
         Ok(())
@@ -1060,6 +1177,26 @@ impl Scene {
                     1.0
                 })?;
             }
+            if let Some(Some((_, count, aspect))) = self.counts.get(index) {
+                // Where an overlay would go, as tall; a longer count grows
+                // to the left from the same right edge.
+                let corner = overlay_rect(Rect {
+                    x,
+                    y,
+                    width,
+                    height,
+                });
+                let wide = corner.height * aspect;
+                count.SetSize(v2(fit(wide), fit(corner.height)))?;
+                count.SetOffset(v3(fit(corner.x + corner.width - wide), fit(corner.y)))?;
+                count.SetOpacity(if dragged.is_some_and(|drag| drag.ghost) {
+                    0.35
+                } else if dragged.is_some_and(|drag| drag.removing) {
+                    0.55
+                } else {
+                    1.0
+                })?;
+            }
             if let Some(Some(notice)) = self.attention.get(index) {
                 notice.place(
                     Rect {
@@ -1142,6 +1279,10 @@ impl Scene {
             if let Some(Some((_, overlay))) = index.and_then(|index| self.overlays.get(index)) {
                 children.Remove(overlay)?;
                 children.InsertAtTop(overlay)?;
+            }
+            if let Some(Some((_, count, _))) = index.and_then(|index| self.counts.get(index)) {
+                children.Remove(count)?;
+                children.InsertAtTop(count)?;
             }
         }
         self.raised.set(index);

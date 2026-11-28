@@ -64,6 +64,36 @@ mod tests {
     use super::*;
     use crate::app::visibility::tests::{Fixture, queue};
     #[test]
+    fn turning_weather_off_only_changes_its_saved_preference() -> Result<()> {
+        struct Folder(std::path::PathBuf);
+        impl Drop for Folder {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let folder = std::env::temp_dir().join(format!(
+            "muelle-disable-weather-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&folder)?;
+        let folder = Folder(folder);
+        let path = folder.0.join("config.json");
+        let mut saved = muelle_config::Config {
+            weather: true,
+            icon_size: 64,
+            language: muelle_config::Language::Fr,
+            ..Default::default()
+        };
+        muelle_config::save(&path, &saved)?;
+        super::super::disable_weather(&path)?;
+        let loaded =
+            muelle_config::load(&path)?.ok_or_else(|| anyhow::anyhow!("missing saved settings"))?;
+        saved.weather = false;
+        assert_eq!(serde_json::to_value(loaded)?, serde_json::to_value(saved)?);
+        Ok(())
+    }
+    #[test]
     #[ignore = "Offscreen owned preview/card only; no live app, focus, location or network changes"]
     fn window_preview_retains_weather_visibility_but_never_requests_a_forecast() -> Result<()> {
         use crate::{
