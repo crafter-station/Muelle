@@ -115,6 +115,8 @@ impl Theme {
             (Material::LiquidGlass, true) => (76, [245, 95, 25, 220]),
             (Material::LiquidGlass, false) => (60, [220, 70, 20, 185]),
         };
+        // The specular rim reads as a hard white frame against busy or dark wallpapers; keep only a hint of it so the glass edge stays quiet.
+        let rim = rim.map(|alpha| (f32::from(alpha) * 0.4) as u8);
         let panel_tint = match material {
             // Text-bearing panels keep a denser surface than the icon-only
             // dock. Reducing the dock's tint must not wash out popup content.
