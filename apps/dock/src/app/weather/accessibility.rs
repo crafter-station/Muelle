@@ -7,7 +7,7 @@ impl App {
         };
         self.close_weather_popup();
         let data = self.weather_popup_data(context);
-        let items = items(&data, context.language, context.has_data);
+        let items = items(&data, context.language);
         let r = context.anchor;
         let (anchor, placement) = match context.edge {
             muelle_core::frame::DockEdge::Bottom => (
@@ -43,11 +43,7 @@ impl App {
     }
 }
 
-fn items(
-    data: &weather::popup::data::Data,
-    language: muelle_config::Language,
-    has_data: bool,
-) -> Vec<MenuItem> {
+fn items(data: &weather::popup::data::Data, language: muelle_config::Language) -> Vec<MenuItem> {
     let t = weather::text::text(language);
     let words = weather::popup::text::text(language);
     let mut lines = vec![format!(
@@ -71,12 +67,6 @@ fn items(
         lines.push(format!(
             "{} · {} · {} / {}",
             day.label, day.condition, day.low, day.high
-        ));
-    }
-    if has_data {
-        lines.push(format!(
-            "{} {} · {} {}",
-            words.sunrise, data.sunrise, words.sunset, data.sunset
         ));
     }
     let mut items = vec![MenuItem::Header(t.title.into())];
@@ -115,7 +105,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let rows = items(&data, muelle_config::Language::Es, true);
+        let rows = items(&data, muelle_config::Language::Es);
         let mut info = 0;
         for row in rows {
             if let MenuItem::Action {
@@ -136,7 +126,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(info, 3 + data.hours.len() + data.days.len());
+        assert_eq!(info, 2 + data.hours.len() + data.days.len());
         Ok(())
     }
 }

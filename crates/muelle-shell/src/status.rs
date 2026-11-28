@@ -364,6 +364,11 @@ pub struct TaskbarButtons {
 const ADVANCED: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced");
 const SEARCH: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Search");
 
+fn search_icon_visible(mode: Option<u32>) -> bool {
+    // SearchboxTaskbarMode 2 is a search box, whose magnifier is already inside it.
+    matches!(mode.unwrap_or(1), 1 | 3)
+}
+
 fn dword(key: PCWSTR, value: &str) -> Option<u32> {
     let mut data = 0u32;
     let mut size = size_of::<u32>() as u32;
@@ -400,11 +405,25 @@ pub fn alt_tab_lists_more_than_windows(edge_open: bool) -> bool {
 #[must_use]
 pub fn taskbar_buttons() -> TaskbarButtons {
     TaskbarButtons {
-        search: dword(SEARCH, "SearchboxTaskbarMode").unwrap_or(1) != 0,
+        search: search_icon_visible(dword(SEARCH, "SearchboxTaskbarMode")),
         task_view: dword(ADVANCED, "ShowTaskViewButton").unwrap_or(1) != 0,
         // Windows 10 has no Widgets (its value is never written there, so it
         // would read as shown), and Win+W opens Windows Ink instead.
         widgets: crate::system::is_windows_11() && dword(ADVANCED, "TaskbarDa").unwrap_or(1) != 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::search_icon_visible;
+
+    #[test]
+    fn shows_search_icon_only_when_windows_displays_a_separate_icon() {
+        assert!(!search_icon_visible(Some(0)));
+        assert!(search_icon_visible(Some(1)));
+        assert!(!search_icon_visible(Some(2)));
+        assert!(search_icon_visible(Some(3)));
+        assert!(search_icon_visible(None));
     }
 }
 

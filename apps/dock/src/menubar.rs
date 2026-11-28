@@ -62,8 +62,8 @@ use windows::{
             SWP_SHOWWINDOW, SetCursor, SetTimer, SetWindowPos, SetWindowsHookExW,
             UnhookWindowsHookEx, WH_MOUSE_LL, WM_ACTIVATE, WM_APP, WM_CAPTURECHANGED, WM_CHAR,
             WM_CLOSE, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE,
-            WM_MOUSEWHEEL, WM_NCHITTEST, WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETTINGCHANGE,
-            WM_TIMECHANGE, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW, WS_EX_NOACTIVATE,
+            WM_MOUSEWHEEL, WM_NCHITTEST, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
+            WM_SETTINGCHANGE, WM_TIMECHANGE, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW, WS_EX_NOACTIVATE,
             WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
@@ -79,7 +79,7 @@ use crate::{
     mascot,
     media::{self, Control as MediaControl, Track},
     scene::Theme,
-    strings,
+    strings, tray,
     usage::{
         self, ActiveProviders, Monitor as UsageMonitor, Provider, ProviderUsage, Snapshot, State,
     },
@@ -93,6 +93,8 @@ const ITEM_GAP: f32 = 16.0;
 const HIT_SLOP: f32 = 7.0;
 
 const MEDIA_CHANGED: u32 = WM_APP + 28;
+const TRAY_CHANGED: u32 = WM_APP + 52;
+const TRAY_REGISTRY_CHANGED: u32 = WM_APP + 53;
 const VOLUME_CAPTURE_LOST: u32 = WM_APP + 31;
 const AUDIO_CHANGED: u32 = WM_APP + 32;
 const AUDIO_TICK: u32 = WM_APP + 33;
@@ -252,6 +254,7 @@ enum Action {
     TaskView,
     Widgets,
     HiddenIcons,
+    TrayIcon(u64),
     InputLanguage,
     Microphone,
     Camera,
@@ -293,6 +296,7 @@ struct Status {
 /// What the bar was last drawn for.
 #[derive(Clone, PartialEq)]
 struct Look {
+    tray: tray::Snapshot,
     accessories: [Option<AccessoryReading>; 2],
     /// The system monitor's lines (see `MenuBar::monitor_lines`) while on.
     monitor: Option<[String; 4]>,
@@ -611,6 +615,8 @@ pub struct MenuBar {
     appbar: Option<AppBar>,
     app_name: String,
     look: Option<Look>,
+    tray: Option<tray::Watch>,
+    tray_registry: Option<RegistryWatch>,
     /// Clickable spans, in window pixels.
     zones: Vec<(f32, f32, Action)>,
     visible: bool,
@@ -671,6 +677,9 @@ pub struct MenuBar {
     visual_height: i32,
     triggers_span: Span,
     panel_span: Span,
+    /// The widest free stretch of the bar, where the mascot can walk (see
+    /// `walkway`), in window pixels; empty when there is too little.
+    walk_span: Span,
     island_hits: Vec<IslandHit>,
     outside_click_hook: Option<HHOOK>,
     keyboard: Option<keyboard::MusicKeyboard>,
@@ -710,6 +719,7 @@ pub enum MirrorEvent {
     Press(f32, f32),
     /// Button up: ends a drag, or else is a click.
     Release(f32, f32),
+    Context(f32, f32),
     /// The mouse capture was lost during a drag.
     CaptureLost,
     PointerMoved(f32, f32),
@@ -736,6 +746,10 @@ unsafe extern "system" fn mirror_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM
         WM_LBUTTONUP => {
             let (x, y) = at();
             MirrorEvent::Release(x, y)
+        }
+        WM_RBUTTONUP => {
+            let (x, y) = at();
+            MirrorEvent::Context(x, y)
         }
         WM_MOUSEMOVE => {
             let (x, y) = at();
@@ -806,6 +820,11 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
             }
         }
         MUSIC_FOCUS_LOST => app::menu_bar_music_focus_lost(),
+        TRAY_CHANGED => app::menu_bar_tray_changed(false),
+        TRAY_REGISTRY_CHANGED => app::menu_bar_tray_changed(true),
+        WM_RBUTTONUP => {
+            app::menu_bar_tray_context((l.0 & 0xFFFF) as i16 as f32, (l.0 >> 16) as i16 as f32)
+        }
         WM_LBUTTONDOWN => {
             launcher::note_menu_bar_press();
             app::menu_bar_slider_press((l.0 & 0xFFFF) as i16 as f32, (l.0 >> 16) as i16 as f32);
@@ -1492,6 +1511,7 @@ impl MenuBar {
             visual_height: 0,
             triggers_span: Span::default(),
             panel_span: Span::default(),
+            walk_span: Span::default(),
             island_hits: Vec::new(),
             outside_click_hook: None,
             keyboard: None,
@@ -1504,6 +1524,19 @@ impl MenuBar {
                 .flatten(),
             privacy_watch: primary
                 .then(|| status::watch_privacy(hwnd.0 as isize, REGISTRY_CHANGED))
+                .flatten(),
+            tray: primary
+                .then(|| tray::Watch::new(hwnd.0 as isize, TRAY_CHANGED))
+                .flatten(),
+            tray_registry: primary
+                .then(|| {
+                    RegistryWatch::new(
+                        tray::registry_path(),
+                        true,
+                        hwnd.0 as isize,
+                        TRAY_REGISTRY_CHANGED,
+                    )
+                })
                 .flatten(),
             settings_watch: primary
                 .then(|| status::watch_taskbar_settings(hwnd.0 as isize, REGISTRY_CHANGED))
@@ -1731,10 +1764,12 @@ impl MenuBar {
         bar.media = self.media.take();
         bar.audio = self.audio.take();
         bar.usage = self.usage.take();
+        bar.tray = self.tray.take();
         let result = action(bar);
         self.media = bar.media.take();
         self.audio = bar.audio.take();
         self.usage = bar.usage.take();
+        self.tray = bar.tray.take();
         result
     }
 
@@ -2426,6 +2461,40 @@ impl MenuBar {
         }
     }
 
+    pub fn tray_changed(&mut self, gfx: &Gfx, registry: bool) -> Result<()> {
+        if registry {
+            if let Some(watch) = &mut self.tray_registry {
+                watch.arm();
+            }
+            if let Some(tray) = &self.tray {
+                tray.refresh();
+            }
+            return Ok(());
+        }
+        if let Some(mut look) = self.look.clone() {
+            look.tray = self
+                .tray
+                .as_ref()
+                .map_or_else(tray::Snapshot::default, tray::Watch::snapshot);
+            self.apply_look(gfx, look)?;
+        }
+        Ok(())
+    }
+
+    pub fn tray_context(&self, x: f32, y: f32) {
+        if y < 0.0 || y >= HEIGHT * self.look.as_ref().map_or(1.0, |look| look.scale) {
+            return;
+        }
+        if let Some((_, _, Action::TrayIcon(id))) = self
+            .zones
+            .iter()
+            .find(|(left, right, _)| x >= *left && x < *right)
+            && let Some(tray) = &self.tray
+        {
+            tray.invoke(*id, true);
+        }
+    }
+
     pub fn click(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<()> {
         if let Some(action) = self
             .island_hits
@@ -2499,6 +2568,11 @@ impl MenuBar {
             )
         });
         match hit.map(|(_, _, action)| *action) {
+            Some(Action::TrayIcon(id)) => {
+                if let Some(tray) = &self.tray {
+                    tray.invoke(id, false);
+                }
+            }
             Some(Action::AccessoryIndicator) => {}
             Some(Action::QuickSettings) => launcher::open_quick_settings(),
             Some(Action::Notifications) => launcher::open_notifications(),
@@ -2598,6 +2672,10 @@ impl MenuBar {
         }
         let appearance = appearance::menu_bar();
         let look = Look {
+            tray: self
+                .tray
+                .as_ref()
+                .map_or_else(tray::Snapshot::default, tray::Watch::snapshot),
             accessories: self.accessories.as_ref().map_or([None, None], |monitor| {
                 accessory_readings(&monitor.snapshot())
             }),
@@ -2809,6 +2887,33 @@ impl MenuBar {
     }
 
     /// Whether the bar is on screen now.
+    /// Where the mascot can walk in the bar now, with the bar's scale: the
+    /// primary bar's free stretch while it shows, with no popup open.
+    pub fn walkway(&self) -> Option<(RECT, f32)> {
+        let look = self.look.as_ref()?;
+        (self.mirror.is_none()
+            && self.shown()
+            && self.hide_until.is_none()
+            && self.panel.is_none()
+            && self.walk_span.width() > 0.0)
+            .then(|| {
+                (
+                    RECT {
+                        left: self.bounds.left + self.walk_span.left as i32,
+                        top: self.bounds.top,
+                        right: self.bounds.left + self.walk_span.right as i32,
+                        bottom: self.bounds.bottom,
+                    },
+                    look.scale,
+                )
+            })
+    }
+
+    /// The bar's window: what keeps the mascot above it while it walks there.
+    pub fn window(&self) -> HWND {
+        self.hwnd
+    }
+
     fn shown(&self) -> bool {
         self.visible && (!self.auto_hide || self.revealed)
     }
@@ -2946,6 +3051,7 @@ impl MenuBar {
 
         self.zones.clear();
         let mut left_end = px(SIDE_MARGIN);
+        let slop = px(HIT_SLOP);
         if !look.app_name.is_empty() {
             let name = gfx.text_brush_fitted(
                 &look.app_name,
@@ -2962,8 +3068,52 @@ impl MenuBar {
             left_end += name.width;
         }
 
+        if let Some(lines) = &look.monitor {
+            let brushes = lines
+                .iter()
+                .map(|line| gfx.text_brush_sized(line, scale, MONITOR_FONT, false, ink))
+                .collect::<Result<Vec<_>>>()?;
+            if self.monitor_widths.0 != scale {
+                self.monitor_widths = (scale, [0.0; 2]);
+            }
+            for (column, pair) in brushes.chunks(2).enumerate() {
+                let widest = pair.iter().map(|brush| brush.width).fold(0.0, f32::max);
+                self.monitor_widths.1[column] = self.monitor_widths.1[column].max(widest);
+            }
+            let widths = self.monitor_widths.1;
+            let zone_left = left_end + px(ITEM_GAP);
+            let mut left = zone_left;
+            for column in 0..2 {
+                for (row, brush) in brushes[column * 2..column * 2 + 2].iter().enumerate() {
+                    let top = if row == 0 {
+                        height / 2.0 - brush.height + px(MONITOR_TUCK)
+                    } else {
+                        height / 2.0 - px(MONITOR_TUCK)
+                    };
+                    let visual = c.CreateSpriteVisual()?;
+                    visual.SetSize(Vector2 {
+                        X: brush.width,
+                        Y: brush.height,
+                    })?;
+                    visual.SetOffset(Vector3 {
+                        X: left.round(),
+                        Y: top.round(),
+                        Z: 0.0,
+                    })?;
+                    visual.SetBrush(&brush.brush)?;
+                    layers.InsertAtTop(&visual)?;
+                }
+                left += widths[column];
+                if column == 0 {
+                    left += px(MONITOR_COLUMN_GAP);
+                }
+            }
+            self.zones
+                .push((zone_left - slop, left + slop, Action::SystemMonitor));
+            left_end = left + px(ITEM_GAP);
+        }
+
         // Right side, from the edge inward.
-        let slop = px(HIT_SLOP);
         let mut right = width - px(SIDE_MARGIN);
         let status = look.status;
         let symbol = |layers: &[(char, f32)]| gfx.glyph_brush(layers, scale, ink);
@@ -3052,6 +3202,17 @@ impl MenuBar {
                 Action::InputLanguage,
             ));
         }
+        for icon in look.tray.icons().iter().rev() {
+            let side = px(16.0);
+            items.push((
+                LabelBrush {
+                    brush: gfx.icon_brush(&icon.image, side as u32)?,
+                    width: side,
+                    height: side,
+                },
+                Action::TrayIcon(icon.id),
+            ));
+        }
         // The notification area (antivirus, OneDrive, apps in the background)
         // lives only in the hidden taskbar; this arrow opens its flyout.
         items.push((symbol(&[(glyph::HIDDEN_ICONS, 1.0)])?, Action::HiddenIcons));
@@ -3086,53 +3247,6 @@ impl MenuBar {
             right = left - px(ITEM_GAP);
         }
 
-        // The system monitor (issue #64), left of the status icons: two
-        // small stacked columns, CPU over memory, then upload over download.
-        if let Some(lines) = &look.monitor {
-            let brushes = lines
-                .iter()
-                .map(|line| gfx.text_brush_sized(line, scale, MONITOR_FONT, false, ink))
-                .collect::<Result<Vec<_>>>()?;
-            if self.monitor_widths.0 != scale {
-                self.monitor_widths = (scale, [0.0; 2]);
-            }
-            for (column, pair) in brushes.chunks(2).enumerate() {
-                let widest = pair.iter().map(|brush| brush.width).fold(0.0, f32::max);
-                self.monitor_widths.1[column] = self.monitor_widths.1[column].max(widest);
-            }
-            let widths = self.monitor_widths.1;
-            let zone_right = right;
-            let mut left = right;
-            for column in [1, 0] {
-                left -= widths[column];
-                for (row, brush) in brushes[column * 2..column * 2 + 2].iter().enumerate() {
-                    let top = if row == 0 {
-                        height / 2.0 - brush.height + px(MONITOR_TUCK)
-                    } else {
-                        height / 2.0 - px(MONITOR_TUCK)
-                    };
-                    let visual = c.CreateSpriteVisual()?;
-                    visual.SetSize(Vector2 {
-                        X: brush.width,
-                        Y: brush.height,
-                    })?;
-                    visual.SetOffset(Vector3 {
-                        X: left.round(),
-                        Y: top.round(),
-                        Z: 0.0,
-                    })?;
-                    visual.SetBrush(&brush.brush)?;
-                    layers.InsertAtTop(&visual)?;
-                }
-                if column == 1 {
-                    left -= px(MONITOR_COLUMN_GAP);
-                }
-            }
-            self.zones
-                .push((left - slop, zone_right + slop, Action::SystemMonitor));
-            right = left - px(ITEM_GAP);
-        }
-
         self.island_hits.clear();
         self.volume_controls = None;
         self.progress_controls = None;
@@ -3140,6 +3254,26 @@ impl MenuBar {
         self.triggers_span = Span::default();
         self.panel_span = Span::default();
         self.draw_island(gfx, look, &layers, width, height, left_end, right)?;
+        // The free stretches either side of the island, or the whole middle
+        // without one: the widest, kept clear of the items, is the mascot's.
+        let clear = px(16.0);
+        let gaps = if self.triggers_span.width() > 0.0 {
+            [
+                (left_end, self.triggers_span.left),
+                (self.triggers_span.right, right),
+            ]
+        } else {
+            [(left_end, right), (0.0, 0.0)]
+        };
+        self.walk_span = gaps
+            .into_iter()
+            .map(|(from, to)| Span {
+                left: from + clear,
+                right: to - clear,
+            })
+            .max_by(|a, b| a.width().total_cmp(&b.width()))
+            .filter(|span| span.width() >= px(120.0))
+            .unwrap_or_default();
         let speaker_zone = speaker.filter(|_| look.panel == Some(Island::Volume));
         self.volume_row_span = Span::default();
         if let Some((left, right)) = speaker_zone
@@ -5115,6 +5249,8 @@ fn draw_bubble_player(
 
 impl Drop for MenuBar {
     fn drop(&mut self) {
+        self.tray_registry = None;
+        self.tray = None;
         self.keyboard = None;
         self.cancel_progress();
         self.search_watch = None;
@@ -5150,6 +5286,58 @@ impl Drop for MenuBar {
 #[cfg(test)]
 mod island_tests {
     use super::*;
+
+    #[test]
+    #[ignore = "Hidden compositor fixture; reads current tray icons without invoking them"]
+    fn native_tray_icons_build_their_own_click_zones() -> Result<()> {
+        use anyhow::Context;
+        use windows::Win32::System::WinRT::{
+            CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+            DispatcherQueueOptions,
+        };
+        let _queue = unsafe {
+            CreateDispatcherQueueController(DispatcherQueueOptions {
+                dwSize: size_of::<DispatcherQueueOptions>() as u32,
+                threadType: DQTYPE_THREAD_CURRENT,
+                apartmentType: DQTAT_COM_STA,
+            })?
+        };
+        let gfx = Gfx::new()?;
+        let mut bar = MenuBar::create(&gfx, false, false, false, MenuBarWidgets::default())?;
+        bar.set_visible(false)?;
+        let start = Instant::now();
+        while bar
+            .tray
+            .as_ref()
+            .is_none_or(|t| t.snapshot().icons().is_empty())
+            && start.elapsed() < Duration::from_secs(8)
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let snapshot = bar.tray.as_ref().context("tray worker")?.snapshot();
+        anyhow::ensure!(
+            !snapshot.icons().is_empty(),
+            "no Windows-visible tray icons on this desktop"
+        );
+        let mut look = bar.look.clone().context("initial menu bar look")?;
+        look.tray = snapshot.clone();
+        for light in [false, true] {
+            look.light = light;
+            bar.apply_look(&gfx, look.clone())?;
+            for icon in snapshot.icons() {
+                let zones: Vec<_> = bar
+                    .zones
+                    .iter()
+                    .filter(|(_, _, a)| *a == Action::TrayIcon(icon.id))
+                    .collect();
+                assert_eq!(zones.len(), 1);
+                assert!(zones[0].1 > zones[0].0);
+            }
+            assert!(bar.zones.iter().any(|(_, _, a)| *a == Action::HiddenIcons));
+            assert!(!bar.visible);
+        }
+        Ok(())
+    }
 
     #[test]
     fn each_bar_keeps_its_own_popup_clicks() {
@@ -5539,7 +5727,7 @@ mod island_tests {
 
     #[test]
     #[ignore = "Hidden compositor fixture; synthetic monitor readings"]
-    fn native_system_monitor_keeps_its_place_and_samples_only_while_shown() -> Result<()> {
+    fn native_system_monitor_sits_beside_the_app_name_and_samples_only_while_shown() -> Result<()> {
         use anyhow::Context;
         use windows::Win32::System::WinRT::{
             CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
@@ -5568,6 +5756,17 @@ mod island_tests {
             right: 1920,
             bottom: 1080,
         };
+        look.scale = 1.0;
+        look.app_name = "Explorador de Windows".into();
+        let title = gfx.text_brush_fitted(
+            &look.app_name,
+            look.scale,
+            13.0,
+            true,
+            if look.light { Ink::Dark } else { Ink::Light },
+            220.0_f32.min(1920.0 * 0.22),
+        )?;
+        let app_name_end = SIDE_MARGIN + title.width;
         let lines = |cpu: &str, down: &str| {
             [
                 format!("CPU {cpu}"),
@@ -5588,18 +5787,14 @@ mod island_tests {
         look.monitor = Some(lines("5%", "0 KB/s"));
         bar.apply_look(&gfx, look.clone())?;
         let narrow = zone(&bar).context("monitor zone")?;
-        // The last zone pushed is the leftmost: the monitor sits left of
-        // every status icon.
-        assert_eq!(
-            bar.zones.last().map(|(_, _, action)| *action),
-            Some(Action::SystemMonitor)
-        );
+        assert!(narrow.0 > app_name_end);
+        assert!(narrow.1 < 1920.0 / 2.0);
         look.monitor = Some(lines("100%", "35,5 MB/s"));
         bar.apply_look(&gfx, look.clone())?;
         let wide = zone(&bar).context("monitor zone")?;
-        assert!(wide.0 < narrow.0 && wide.1 == narrow.1);
+        assert!(wide.0 == narrow.0 && wide.1 > narrow.1);
         // Narrower digits again: the columns keep their widest size, so the
-        // rest of the bar does not shift back and forth.
+        // app title and island do not shift back and forth.
         look.monitor = Some(lines("5%", "0 KB/s"));
         bar.apply_look(&gfx, look)?;
         assert_eq!(zone(&bar), Some(wide));

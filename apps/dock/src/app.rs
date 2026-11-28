@@ -17,6 +17,7 @@
 mod activation;
 mod assets;
 mod companion;
+pub(crate) use companion::companion_poke;
 mod drag;
 mod events;
 mod feedback;
@@ -98,9 +99,9 @@ pub use events::{
     menu_bar_finish_hide, menu_bar_media_changed, menu_bar_mirror_event, menu_bar_monitor_tick,
     menu_bar_music_focus_lost, menu_bar_music_key, menu_bar_pointer_moved, menu_bar_progress_tick,
     menu_bar_registry_changed, menu_bar_scrolled, menu_bar_slider_press, menu_bar_slider_release,
-    menu_bar_tick, menu_bar_volume_flush, multi_window_view_dismiss,
-    multi_window_view_middle_click, multi_window_view_press, multi_window_view_release,
-    multi_window_view_scroll, multi_window_view_tick,
+    menu_bar_tick, menu_bar_tray_changed, menu_bar_tray_context, menu_bar_volume_flush,
+    multi_window_view_dismiss, multi_window_view_middle_click, multi_window_view_press,
+    multi_window_view_release, multi_window_view_scroll, multi_window_view_tick,
 };
 pub(crate) use input::primary_button_down;
 pub use lifecycle::{request_quit, run};

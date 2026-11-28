@@ -291,8 +291,7 @@ const OVERFLOW_CLASSES: [PCWSTR; 2] = [
 /// opens on Enter's key-down, the flyout then puts the focus on its first
 /// icon, and Enter's key-up started that app (issue #52). Space opens it on
 /// its key-up, once the key is over. The taskbar itself
-/// stays invisible while Muelle runs; only its flyout shows. Windows offers
-/// no other way: the button is not exposed while the taskbar is hidden.
+/// stays invisible while Muelle runs; only its flyout shows.
 ///
 /// Windows opens the flyout at the bottom of the screen, above where the
 /// taskbar would be, so it is then moved under the arrow that opened it:

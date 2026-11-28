@@ -61,8 +61,6 @@ pub struct Data {
     pub wind: String,
     pub hours: Vec<Hour>,
     pub days: Vec<Day>,
-    pub sunrise: String,
-    pub sunset: String,
     pub range: Option<(f32, f32)>,
 }
 
@@ -194,8 +192,6 @@ impl Data {
             wind: "—".into(),
             hours: Vec::new(),
             days: Vec::new(),
-            sunrise: "—".into(),
-            sunset: "—".into(),
             range: None,
         };
         let Some(forecast) = forecast else {
@@ -237,21 +233,19 @@ impl Data {
         let selected_calendar = selected.map_or(today, |d| calendar_day(d.time));
         view.future = selected_calendar > today;
         view.selection.day = selected_time;
-        if let Some(day) = selected {
-            view.sunrise = day.sunrise.map_or_else(|| "—".into(), |v| time(v, false));
-            view.sunset = day.sunset.map_or_else(|| "—".into(), |v| time(v, false));
-            if view.future {
-                let label = time(day.time, true);
-                view.title = format!("{} · {}", t.title, label);
-                view.hourly_title = format!("{} · {}", p.hours, label);
-                // A future day is not a current observation. Its main icon and
-                // details are filled from the selected hourly row below.
-                view.degrees = "—".into();
-                view.condition = t.unavailable;
-                view.glyph = WeatherGlyph::Unknown;
-                view.wind = "—".into();
-                view.feels = "—".into();
-            }
+        if let Some(day) = selected
+            && view.future
+        {
+            let label = time(day.time, true);
+            view.title = format!("{} · {}", t.title, label);
+            view.hourly_title = format!("{} · {}", p.hours, label);
+            // A future day is not a current observation. Its main icon and
+            // details are filled from the selected hourly row below.
+            view.degrees = "—".into();
+            view.condition = t.unavailable;
+            view.glyph = WeatherGlyph::Unknown;
+            view.wind = "—".into();
+            view.feels = "—".into();
         }
         // Paging reuses the same five-day snapshot, never the network. Bound
         // both iteration and output even if a caller supplies a bogus page.
@@ -495,7 +489,6 @@ mod tests {
         assert_eq!(page.selection.page, 3);
         assert_eq!(page.hours[0].degrees, "18°");
         assert!(page.previous_hours && !page.next_hours);
-        assert_ne!(data.sunrise, "—");
         assert!(data.title.contains("Clima") && data.hourly_title.contains("Por horas"));
         let rolled = Data::for_selection(
             Some(&forecast),

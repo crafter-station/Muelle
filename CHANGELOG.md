@@ -10,6 +10,11 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Windows-visible tray icons appear beside Muelle’s caret and keep their native
+  left/right-click actions. Windows controls visibility; no extra setting.
+  The caret keeps its overflow popup without revealing the Windows taskbar.
+  Background event handling and shared snapshots avoid periodic tray polling.
+
 - AI quota errors no longer mistake forbidden Claude requests or temporarily
   locked credential files for logout. Gemini honors GEMINI_CLI_HOME and valid
   near-expiry tokens; Antigravity keeps its own source and clears incompatible
@@ -18,6 +23,22 @@ copia la sección de la versión que se publica a la release de GitHub.
 - Hidden Dock recovery also watches the screen edge on single-monitor setups,
   so a covered input strip can recover without changing desktop focus. Reuses
   the shared observer; Always visible stops it when no menu bar needs it.
+
+- The always-visible mascot is livelier: turned on, it says hello at once
+  with a double hop; on the Dock it walks further, hops, blinks and smiles
+  between shorter rests. Now and then it hops off and walks inside the menu
+  bar, smaller, in its free stretch, then comes back; with the Dock hidden by
+  a window, it still visits the bar. Only while the bar shows (automatic and
+  intelligent hiding respected) and with animations on; one timer between
+  acts, no polling. In the bar every character stands as tall (the crab,
+  the cat and the mochi were smaller). Hovering it makes it smile and hop;
+  clicking it, a loving face and two hops; it never takes the focus. Always
+  visible is now on by default.
+
+- Weather icons redrawn as the Weather apps show them: a glowing sun with
+  a warm gradient, soft clouds with depth, a crescent moon with stars, bright
+  rain, snowflakes, a lightning bolt and fog bands. The same 40 x 40
+  illustrations in the Dock and the forecast, drawn once per update.
 
 - Weather can be turned off from its Dock context menu; saves only that
   preference and stops its watchers/updates. Window previews are more compact,
@@ -156,6 +177,11 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
+- Los iconos visibles de la bandeja de Windows aparecen junto al caret de Muelle
+  y conservan sus acciones de clic izquierdo/derecho. Windows controla cuáles
+  aparecen, sin ajustes adicionales. El caret mantiene su popup de iconos
+  ocultos sin mostrar la barra nativa; eventos y lectura compartida evitan sondeos periódicos.
+
 - Los errores de cuota ya no confunden rechazos de permisos de Claude ni archivos
   de sesión bloqueados temporalmente con un cierre de sesión. Gemini respeta
   GEMINI_CLI_HOME y tokens aún vigentes; Antigravity conserva su propia fuente y
@@ -165,6 +191,24 @@ copia la sección de la versión que se publica a la release de GitHub.
   para recuperarse de una franja de entrada tapada sin cambiar el foco del
   escritorio. Reutiliza el observador compartido; Siempre visible lo detiene
   cuando tampoco lo necesita la barra superior.
+
+- La mascota siempre visible tiene más vida: al activarla saluda al momento
+  con un doble salto; en el Dock camina más, salta, parpadea y sonríe entre
+  descansos más cortos. De vez en cuando se va de un salto y camina dentro de
+  la barra superior, más pequeña, por su hueco libre, y vuelve; con el Dock
+  oculto por una ventana, también visita la barra. Solo mientras la barra se
+  ve (respeta la ocultación automática e inteligente) y con animaciones
+  activadas; un temporizador entre actos, sin sondeos. En la barra todos los
+  personajes miden lo mismo (el cangrejo, el gato y el mochi salían más
+  pequeños). Al pasar el ratón sonríe y salta; al hacer clic, pone cara de
+  cariño y salta dos veces, sin quitar el foco. «Siempre visible» viene
+  activado por defecto.
+
+- Iconos del clima redibujados como los muestran las apps del Tiempo: un sol
+  luminoso con degradado cálido, nubes suaves con volumen, una luna creciente
+  con estrellas, lluvia brillante, copos de nieve, un rayo y bandas de niebla.
+  Las mismas ilustraciones en el Dock y en el pronóstico, dibujadas una vez
+  por actualización.
 
 - El clima se puede desactivar desde su menú contextual del Dock; guarda solo
   esa preferencia y detiene sus suscripciones/actualizaciones. Previews más

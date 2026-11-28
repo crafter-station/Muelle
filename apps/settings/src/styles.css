@@ -703,7 +703,7 @@ input:focus-visible {
 
 
 /* Masonry: balanced columns of tiles in a repeating mix of shapes. */
-.wallpaper-grid { columns: 4; column-gap: 10px; padding: 0 14px; }
+.wallpaper-grid { columns: 4; column-gap: 10px; padding: 10px 14px 0; }
 .wallpaper-choice { display: block; width: 100%; margin: 0 0 10px; padding: 0; border: 0; break-inside: avoid; color: var(--text); background: none; font: inherit; text-align: start; cursor: default; }
 .wallpaper-image { position: relative; display: block; overflow: hidden; aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: 8px; background: var(--hover); }
 .wallpaper-choice:nth-child(6n + 1) .wallpaper-image { aspect-ratio: 4 / 3; }

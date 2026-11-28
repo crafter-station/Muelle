@@ -9,21 +9,53 @@ pub(super) struct Geometry {
     pub crab: (f32, f32),
     pub crab_top: f32,
     pub cell: f32,
+    /// In the menu bar, the exact size its poses are drawn at (see
+    /// `super::shrink`): every character as tall, whatever its grid.
+    pub sprite: Option<(u32, u32)>,
 }
 
 impl Geometry {
     pub fn new(character: Character, place: Place, scale: f32) -> Self {
-        let cell_px = (scale * 1.6).round().max(2.0) as u32;
-        let cell = cell_px as f32;
         let (columns, rows) = cells(character);
-        let crab = (
-            (columns as u32 * cell_px) as f32,
-            (rows as u32 * cell_px) as f32,
+        let cell_px = (scale * 1.6).round().max(2.0) as u32;
+        // In the menu bar every character stands as tall, about three
+        // quarters of the bar, whatever its grid's rows (the crab and the
+        // mochi have 15, the girl 26): a fraction of a cell each.
+        let sprite = match place {
+            Place::Bar { top, bottom, .. } => {
+                let tall = ((bottom - top) as f32 * 0.76).round().max(8.0);
+                let wide = (tall * columns as f32 / rows as f32).round();
+                Some((wide as u32, tall as u32))
+            }
+            _ => None,
+        };
+        let cell = sprite.map_or(cell_px as f32, |(_, tall)| tall as f32 / rows as f32);
+        let crab = sprite.map_or(
+            (
+                (columns as u32 * cell_px) as f32,
+                (rows as u32 * cell_px) as f32,
+            ),
+            |(wide, tall)| (wide as f32, tall as f32),
         );
         // Room above the crab for hops and the emote.
         let headroom = 14.0 * cell;
         let height = crab.1 + headroom;
         let (rect, crab_top) = match place {
+            // Feet two pixels above the bar's bottom edge.
+            Place::Bar {
+                left,
+                right,
+                top,
+                bottom,
+            } => (
+                RECT {
+                    left,
+                    top,
+                    right,
+                    bottom,
+                },
+                ((bottom - top) as f32 - crab.1 - 2.0).max(0.0),
+            ),
             Place::Under { x, top } => {
                 let width = crab.0 + 8.0 * cell;
                 let left = x - (width / 2.0) as i32;
@@ -97,6 +129,7 @@ impl Geometry {
             crab,
             crab_top,
             cell,
+            sprite,
         }
     }
 }

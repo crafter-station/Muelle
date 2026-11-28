@@ -141,8 +141,9 @@ pub struct Config {
     /// Which one: Claude's crab by default, the cat, the fox, the capybara,
     /// the mochi or the girl.
     pub mascot_character: MascotCharacter,
-    /// Keep a quiet companion on the visible Dock between events. Opt-in;
-    /// does not prevent automatic hiding or animate in energy saver.
+    /// Keep a lively companion on the visible Dock between events, visiting
+    /// the menu bar now and then. On by default; does not prevent automatic
+    /// hiding or animate in energy saver.
     pub mascot_always_visible: bool,
     /// The mascot also suggests a break after 90 minutes of work without a
     /// pause. Off by default: a reminder is only welcome when asked for.
@@ -541,7 +542,7 @@ impl Default for Config {
             bounce_on_open: true,
             mascot: true,
             mascot_character: MascotCharacter::Crab,
-            mascot_always_visible: false,
+            mascot_always_visible: true,
             mascot_break_reminder: false,
             check_updates: true,
             auto_update: true,
@@ -1195,9 +1196,9 @@ mod tests {
         assert!(!Config::default().mascot_break_reminder);
         let older: Config = serde_json::from_str("{}")?;
         assert_eq!(older.mascot_character, MascotCharacter::Crab);
-        assert!(!older.mascot_always_visible);
-        let persistent: Config = serde_json::from_str(r#"{"mascotAlwaysVisible":true}"#)?;
-        assert!(persistent.mascot_always_visible);
+        assert!(older.mascot_always_visible);
+        let quiet: Config = serde_json::from_str(r#"{"mascotAlwaysVisible":false}"#)?;
+        assert!(!quiet.mascot_always_visible);
         let cat: Config = serde_json::from_str(r#"{"mascotCharacter":"cat"}"#)?;
         assert_eq!(cat.mascot_character, MascotCharacter::Cat);
         let fox: Config = serde_json::from_str(r#"{"mascotCharacter":"fox"}"#)?;

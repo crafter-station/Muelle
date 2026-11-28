@@ -190,7 +190,14 @@ impl App {
         let moved = config.dock_position != self.config.dock_position;
         apply_explorer_pin(&mut self.roster, config.pin_explorer);
         self.slide.omega = config.dock_auto_hide_speed.omega();
+        // Turned always visible (or the mascot turned on with it): hello.
+        let greet = config.mascot
+            && config.mascot_always_visible
+            && !(self.config.mascot && self.config.mascot_always_visible);
         self.config = config;
+        if greet {
+            self.greet_companion();
+        }
         if moved {
             // A hidden dock comes out of its new edge on every display.
             self.apply_edge_settings();

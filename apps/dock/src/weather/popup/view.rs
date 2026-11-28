@@ -228,23 +228,6 @@ pub fn build(gfx: &Gfx, context: Context, layout: Layout, data: &Data) -> Result
             }
             p.text(&day.high, (320.0, y + 3.0), 60.0, 12.0, true, 0.98)?;
         }
-        p.fill(20.0, 495.0, 360.0, 0.7, 0.0, muted)?;
-        p.text(
-            &format!("{}  {}", words.sunrise, data.sunrise),
-            (20.0, 504.0),
-            176.0,
-            10.0,
-            false,
-            0.72,
-        )?;
-        p.text(
-            &format!("{}  {}", words.sunset, data.sunset),
-            (214.0, 504.0),
-            166.0,
-            10.0,
-            false,
-            0.72,
-        )?;
     } else {
         p.text(data.status, (20.0, 155.0), 360.0, 11.0, false, 0.65)?;
     }

@@ -1079,6 +1079,59 @@ fn paint(grid: &[Vec<u8>], cell: u32) -> IconImage {
     }
 }
 
+/// `image` reduced to `width` x `height`, each pixel the average of the area
+/// it covers: pixel art at any size without uneven cells. The poses are
+/// opaque or fully transparent, so averaging their premultiplied colors is
+/// exact.
+fn shrink(image: &IconImage, width: u32, height: u32) -> IconImage {
+    let (width, height) = (width.max(1), height.max(1));
+    let fx = image.width as f32 / width as f32;
+    let fy = image.height as f32 / height as f32;
+    let mut bgra = vec![0u8; (width * height * 4) as usize];
+    for ty in 0..height {
+        let (y0, y1) = (ty as f32 * fy, (ty + 1) as f32 * fy);
+        for tx in 0..width {
+            let (x0, x1) = (tx as f32 * fx, (tx + 1) as f32 * fx);
+            let mut sum = [0.0f32; 4];
+            let mut area = 0.0f32;
+            let mut sy = y0.floor() as u32;
+            while (sy as f32) < y1 && sy < image.height {
+                let wy = (y1.min(sy as f32 + 1.0) - y0.max(sy as f32)).max(0.0);
+                let mut sx = x0.floor() as u32;
+                while (sx as f32) < x1 && sx < image.width {
+                    let wx = (x1.min(sx as f32 + 1.0) - x0.max(sx as f32)).max(0.0);
+                    let at = ((sy * image.width + sx) * 4) as usize;
+                    for (total, &value) in sum.iter_mut().zip(&image.bgra[at..at + 4]) {
+                        *total += f32::from(value) * wx * wy;
+                    }
+                    area += wx * wy;
+                    sx += 1;
+                }
+                sy += 1;
+            }
+            let at = ((ty * width + tx) * 4) as usize;
+            for (out, total) in bgra[at..at + 4].iter_mut().zip(sum) {
+                *out = if area > 0.0 {
+                    (total / area).round().clamp(0.0, 255.0) as u8
+                } else {
+                    0
+                };
+            }
+        }
+    }
+    IconImage {
+        width,
+        height,
+        bgra,
+    }
+}
+
+/// `character`'s pose drawn at exactly `width` x `height` (the menu bar).
+fn pose_image_sized(character: Character, face: Face, step: bool, size: (u32, u32)) -> IconImage {
+    // Large enough that the reduction has detail to average.
+    shrink(&pose_image(character, face, step, 8), size.0, size.1)
+}
+
 /* ------------------------------------------------------------------ Acts */
 
 /// Why the crab comes out.
@@ -1148,6 +1201,14 @@ pub enum Place {
         right: i32,
         top: i32,
         edge: DockEdge,
+    },
+    /// Walking inside the menu bar, smaller: `left..right` is free room in
+    /// it and `top..bottom` the bar.
+    Bar {
+        left: i32,
+        right: i32,
+        top: i32,
+        bottom: i32,
     },
 }
 
@@ -1461,10 +1522,11 @@ impl Mascot {
             crab,
             crab_top,
             cell,
+            ..
         } = placement::Geometry::new(character, place, scale);
         let script = Script::new(act, turn.width, crab.0);
 
-        let hwnd = create_window(rect)?;
+        let hwnd = create_window(rect, None)?;
         let built = || -> Result<(DesktopWindowTarget, ContainerVisual, SpriteVisual)> {
             // SAFETY: `hwnd` is the live window created above.
             let target = unsafe {
@@ -1803,7 +1865,9 @@ fn sprite(gfx: &Gfx, image: &IconImage) -> Result<SpriteVisual> {
     Ok(sprite)
 }
 
-fn create_window(rect: RECT) -> Result<HWND> {
+/// `owner`, when given, keeps the window above it (the menu bar, which
+/// raises itself whenever it redraws).
+fn create_window(rect: RECT, owner: Option<HWND>) -> Result<HWND> {
     static CLASS: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     let class = w!("MuelleMascot");
     // SAFETY: The class is registered once; the window is destroyed by
@@ -1833,7 +1897,7 @@ fn create_window(rect: RECT) -> Result<HWND> {
             rect.top,
             rect.right - rect.left,
             rect.bottom - rect.top,
-            None,
+            owner,
             None,
             Some(instance.into()),
             None,

@@ -278,7 +278,6 @@ export function App() {
   const themeChoices = THEMES.map((theme) => ({
     value: theme,
     label: themeName(t, theme),
-    detail: theme === "auto" || theme === "frosted" || theme === "liquidGlass" ? t.themeAutoDetail : undefined,
     preview: <ThemePreview appearance={theme} wallpaper={wallpaper} />,
   }));
   const appWindow = getCurrentWindow();
@@ -518,7 +517,7 @@ export function App() {
                 <SubRow label={t.mascotAlwaysVisible} hint={t.mascotAlwaysVisibleHint} open={config.mascot}>
                   <Toggle
                     label={t.mascotAlwaysVisible}
-                    checked={config.mascotAlwaysVisible ?? false}
+                    checked={config.mascotAlwaysVisible ?? true}
                     onChange={(mascotAlwaysVisible) => update({ mascotAlwaysVisible })}
                   />
                 </SubRow>

@@ -46,7 +46,7 @@ impl Layout {
         if !requested.is_finite() || requested <= 0.0 {
             return None;
         }
-        let (width, height) = (400.0_f32, if has_data { 536.0_f32 } else { 188.0 });
+        let (width, height) = (400.0_f32, if has_data { 496.0_f32 } else { 188.0 });
         // Fit into the space away from the Dock, not the whole screen.
         // Otherwise a short/high-DPI display clamps the panel over its card.
         let (room_width, room_height) = match edge {

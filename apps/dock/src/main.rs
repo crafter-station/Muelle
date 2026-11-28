@@ -35,6 +35,7 @@ mod scene;
 mod shell_work;
 mod strings;
 mod thumbnails;
+mod tray;
 mod usage;
 mod weather;
 

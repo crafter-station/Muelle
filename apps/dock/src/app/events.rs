@@ -145,6 +145,23 @@ pub fn menu_bar_clicked(x: f32, y: f32) {
     });
 }
 
+pub fn menu_bar_tray_changed(registry: bool) {
+    with_app("iconos de bandeja", |app| {
+        if let Some(bar) = &mut app.menubar {
+            bar.tray_changed(&app.gfx, registry)?;
+        }
+        Ok(())
+    });
+}
+pub fn menu_bar_tray_context(x: f32, y: f32) {
+    with_app("menú de bandeja", |app| {
+        if let Some(bar) = &app.menubar {
+            bar.tray_context(x, y);
+        }
+        Ok(())
+    });
+}
+
 /// The pointer or a timer on a copy of the menu bar on another display: the
 /// same handling as the primary bar's. Returns whether a scroll was used.
 pub fn menu_bar_mirror_event(hwnd: HWND, event: crate::menubar::MirrorEvent) -> bool {
@@ -158,6 +175,7 @@ pub fn menu_bar_mirror_event(hwnd: HWND, event: crate::menubar::MirrorEvent) -> 
         };
         let outside = primary.with_bar(&gfx, hwnd.0 as isize, |bar| {
             match event {
+                MirrorEvent::Context(x, y) => bar.tray_context(x, y),
                 MirrorEvent::Press(x, y) => {
                     if !bar.press_progress(&gfx, x, y)? {
                         bar.press_volume(&gfx, x, y)?;
