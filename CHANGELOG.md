@@ -10,6 +10,11 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- AI quota errors no longer mistake forbidden Claude requests or temporarily
+  locked credential files for logout. Gemini honors GEMINI_CLI_HOME and valid
+  near-expiry tokens; Antigravity keeps its own source and clears incompatible
+  cached quotas. Client-specific guidance is translated into all eight languages.
+
 - Hidden Dock recovery also watches the screen edge on single-monitor setups,
   so a covered input strip can recover without changing desktop focus. Reuses
   the shared observer; Always visible stops it when no menu bar needs it.
@@ -150,6 +155,11 @@ copia la sección de la versión que se publica a la release de GitHub.
   the Dock no longer redraws the menu bar.
 
 ### Español
+
+- Los errores de cuota ya no confunden rechazos de permisos de Claude ni archivos
+  de sesión bloqueados temporalmente con un cierre de sesión. Gemini respeta
+  GEMINI_CLI_HOME y tokens aún vigentes; Antigravity conserva su propia fuente y
+  descarta cuotas guardadas de otro cliente. Avisos específicos en los ocho idiomas.
 
 - La recuperación del Dock oculto también observa el borde con una sola pantalla,
   para recuperarse de una franja de entrada tapada sin cambiar el foco del

@@ -1315,6 +1315,7 @@ fn draw_usage_row(
         let message = match usage.state {
             State::Loading => text.usage_loading,
             State::SignIn if provider == Provider::Claude => text.usage_claude_sign_in,
+            State::SignIn if provider == Provider::Gemini => text.usage_gemini_sign_in,
             State::SignIn => text.usage_sign_in,
             State::Ready | State::Unavailable => text.usage_unavailable,
         };

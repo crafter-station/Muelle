@@ -30,6 +30,8 @@ use windows::Win32::{
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
+mod auth;
+
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum State {
     Loading,
@@ -37,6 +39,9 @@ pub enum State {
     SignIn,
     Unavailable,
 }
+
+#[cfg(test)]
+mod auth_tests;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Window {
@@ -173,15 +178,26 @@ impl ActiveProviders {
 /// Only show a provider while its local client is running. A stored login by
 /// itself does not imply the client is in use.
 pub fn active_providers() -> ActiveProviders {
+    active_clients().providers
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct ActiveClients {
+    providers: ActiveProviders,
+    antigravity: bool,
+}
+
+fn active_clients() -> ActiveClients {
     // SAFETY: The snapshot handle is closed before this function returns.
     let Ok(snapshot) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }) else {
-        return ActiveProviders::default();
+        return ActiveClients::default();
     };
     let mut entry = PROCESSENTRY32W {
         dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
         ..Default::default()
     };
     let mut active = ActiveProviders::default();
+    let mut antigravity = false;
     // SAFETY: `entry` has the documented size and belongs to this snapshot.
     if unsafe { Process32FirstW(snapshot, &mut entry) }.is_ok() {
         loop {
@@ -204,13 +220,12 @@ pub fn active_providers() -> ActiveProviders {
                     active.0[Provider::Zai as usize] = true;
                 }
                 "zai.exe" => active.0[Provider::Zai as usize] = true,
-                "gemini.exe" | "antigravity.exe" | "agy.exe" => {
+                "gemini.exe" => active.0[Provider::Gemini as usize] = true,
+                "antigravity.exe" | "agy.exe" => {
                     active.0[Provider::Gemini as usize] = true;
+                    antigravity = true;
                 }
                 _ => {}
-            }
-            if active.count() == Provider::COUNT {
-                break;
             }
             // SAFETY: The snapshot and entry remain valid for this iteration.
             if unsafe { Process32NextW(snapshot, &mut entry) }.is_err() {
@@ -222,7 +237,10 @@ pub fn active_providers() -> ActiveProviders {
     unsafe {
         let _ = CloseHandle(snapshot);
     }
-    active
+    ActiveClients {
+        providers: active,
+        antigravity,
+    }
 }
 
 fn claude_process_in_use(pid: u32) -> bool {
@@ -389,7 +407,7 @@ pub struct Monitor {
     running: Arc<AtomicBool>,
     alive: Arc<AtomicBool>,
     last_started: Option<Instant>,
-    last_active: ActiveProviders,
+    last_active: ActiveClients,
     hwnd: isize,
     changed_message: u32,
 }
@@ -401,7 +419,7 @@ impl Monitor {
             running: Arc::new(AtomicBool::new(false)),
             alive: Arc::new(AtomicBool::new(true)),
             last_started: None,
-            last_active: ActiveProviders::default(),
+            last_active: ActiveClients::default(),
             hwnd,
             changed_message,
         }
@@ -419,15 +437,30 @@ impl Monitor {
     }
 
     pub fn mark_inactive(&mut self) {
-        self.last_active = ActiveProviders::default();
+        self.last_active = ActiveClients::default();
+    }
+
+    fn record_active(&mut self, active: ActiveClients) {
+        if active.providers.has(Provider::Gemini)
+            && (!self.last_active.providers.has(Provider::Gemini)
+                || active.antigravity != self.last_active.antigravity)
+        {
+            // A stale quota from Gemini CLI cannot stand in for Antigravity
+            // (or vice versa) while the newly active client is unavailable.
+            self.current
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .providers[Provider::Gemini as usize] = ProviderUsage::default();
+        }
+        self.last_active = active;
     }
 
     pub fn refresh(&mut self, force: bool) {
         if self.running.swap(true, Ordering::AcqRel) {
             return;
         }
-        let active = active_providers();
-        if !active.any() {
+        let active = active_clients();
+        if !active.providers.any() {
             self.running.store(false, Ordering::Release);
             self.mark_inactive();
             return;
@@ -442,7 +475,7 @@ impl Monitor {
             return;
         }
         self.last_started = Some(Instant::now());
-        self.last_active = active;
+        self.record_active(active);
         let current = Arc::clone(&self.current);
         let running = Arc::clone(&self.running);
         let alive = Arc::clone(&self.alive);
@@ -471,6 +504,8 @@ impl Monitor {
 
 pub fn worker_main() -> anyhow::Result<()> {
     serde_json::to_writer(std::io::stdout().lock(), &fetch_all())?;
+    // This one-shot process exits before the Dock's normal log drain runs.
+    muelle_shell::log::flush();
     Ok(())
 }
 
@@ -509,18 +544,18 @@ fn fetch_all() -> Snapshot {
     let Ok(client) = Client::builder().timeout(Duration::from_secs(6)).build() else {
         return unavailable_snapshot();
     };
-    let active = active_providers();
+    let active = active_clients();
     Snapshot {
         providers: std::array::from_fn(|index| {
             let provider = Provider::ALL[index];
-            if !active.has(provider) {
+            if !active.providers.has(provider) {
                 return ProviderUsage::default();
             }
             match provider {
                 Provider::Claude => fetch_claude(&client),
                 Provider::Codex => fetch_codex(&client),
                 Provider::OpenCode => fetch_opencode(&client),
-                Provider::Gemini => fetch_gemini(&client),
+                Provider::Gemini => fetch_gemini(&client, active.antigravity),
                 Provider::Zai => fetch_zai(&client),
             }
         }),
@@ -560,17 +595,23 @@ fn home() -> Option<PathBuf> {
 }
 
 fn fetch_claude(client: &Client) -> ProviderUsage {
-    let Some(root) = env::var_os("CLAUDE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .or_else(|| home().map(|path| path.join(".claude")))
-    else {
-        return sign_in();
-    };
-    let Ok(contents) = fs::read(root.join(".credentials.json")) else {
-        return sign_in();
-    };
-    let Ok(credentials) = serde_json::from_slice::<Value>(&contents) else {
+    let config = env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from);
+    let home = home();
+    let Some(path) = auth::claude_path(config.as_deref(), home.as_deref()) else {
         return unavailable();
+    };
+    fetch_claude_at(client, &path, "https://api.anthropic.com/api/oauth/usage")
+}
+
+fn fetch_claude_at(client: &Client, path: &Path, endpoint: &str) -> ProviderUsage {
+    let credentials = match auth::read_credentials(path, Provider::Claude) {
+        Ok(value) => value,
+        Err(state) => {
+            return ProviderUsage {
+                state,
+                ..Default::default()
+            };
+        }
     };
     let Some(token) = credentials
         .pointer("/claudeAiOauth/accessToken")
@@ -580,21 +621,21 @@ fn fetch_claude(client: &Client) -> ProviderUsage {
         return sign_in();
     };
     let Ok(response) = client
-        .get("https://api.anthropic.com/api/oauth/usage")
+        .get(endpoint)
         .bearer_auth(token)
         .header("anthropic-beta", "oauth-2025-04-20")
         .send()
     else {
         return unavailable();
     };
-    if response.status().as_u16() == 401 || response.status().as_u16() == 403 {
-        return sign_in();
-    }
-    let Ok(body) = response.error_for_status().and_then(|value| value.text()) else {
-        return unavailable();
-    };
-    let Ok(value) = serde_json::from_str::<Value>(&body) else {
-        return unavailable();
+    let value = match auth::response_json(response, Provider::Claude) {
+        Ok(value) => value,
+        Err(state) => {
+            return ProviderUsage {
+                state,
+                ..Default::default()
+            };
+        }
     };
     let windows = parse_claude(&value);
     if windows.is_empty() {
@@ -956,20 +997,35 @@ fn parse_zai(value: &Value) -> Vec<Window> {
     windows
 }
 
-fn fetch_gemini(client: &Client) -> ProviderUsage {
+fn fetch_gemini(client: &Client, antigravity: bool) -> ProviderUsage {
     // Antigravity and Gemini CLI have distinct accounts and quotas. Prefer the
     // running desktop app's own local quota service when it is available.
-    if let Some(usage) = fetch_antigravity() {
-        return usage;
+    if antigravity {
+        // A failed IDE query must not fall through to another client's account
+        // or claim that signing into Gemini CLI would repair Antigravity.
+        return fetch_antigravity().unwrap_or_else(unavailable);
     }
-    let Some(path) = home().map(|path| path.join(".gemini/oauth_creds.json")) else {
+    let config = env::var_os("GEMINI_CLI_HOME").map(PathBuf::from);
+    let home = home();
+    let Some(path) = auth::gemini_path(config.as_deref(), home.as_deref()) else {
         return unavailable();
     };
-    let Ok(contents) = fs::read(path) else {
-        return unavailable();
-    };
-    let Ok(auth) = serde_json::from_slice::<Value>(&contents) else {
-        return unavailable();
+    fetch_gemini_cli_at(
+        client,
+        &path,
+        "https://cloudcode-pa.googleapis.com/v1internal",
+    )
+}
+
+fn fetch_gemini_cli_at(client: &Client, path: &Path, endpoint: &str) -> ProviderUsage {
+    let auth = match auth::read_credentials(path, Provider::Gemini) {
+        Ok(value) => value,
+        Err(state) => {
+            return ProviderUsage {
+                state,
+                ..Default::default()
+            };
+        }
     };
     let Some(token) = auth
         .get("access_token")
@@ -981,28 +1037,37 @@ fn fetch_gemini(client: &Client) -> ProviderUsage {
     if auth
         .get("expiry_date")
         .and_then(Value::as_i64)
-        .is_some_and(|expiry_ms| expiry_ms < Utc::now().timestamp_millis() + 60_000)
+        .is_some_and(|expiry_ms| expiry_ms <= Utc::now().timestamp_millis())
     {
         return sign_in();
     }
-    let project = client
-        .post("https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")
+    let Ok(response) = client
+        .post(format!("{endpoint}:loadCodeAssist"))
         .bearer_auth(token)
         .header("Content-Type", "application/json")
         .body(r#"{"metadata":{"ideType":"GEMINI_CLI","pluginType":"GEMINI"}}"#)
         .send()
-        .ok()
-        .filter(|response| response.status().is_success())
-        .and_then(|response| response.text().ok())
-        .and_then(|body| serde_json::from_str::<Value>(&body).ok())
-        .and_then(|value| value.get("cloudaicompanionProject").cloned())
-        .and_then(|value| value.as_str().map(str::to_owned));
-    let body = project.map_or_else(
-        || "{}".to_owned(),
-        |project| serde_json::json!({"project": project}).to_string(),
-    );
+    else {
+        return unavailable();
+    };
+    let project = match auth::response_json(response, Provider::Gemini) {
+        Ok(value) => value,
+        Err(state) => {
+            return ProviderUsage {
+                state,
+                ..Default::default()
+            };
+        }
+    };
+    let body = project
+        .get("cloudaicompanionProject")
+        .and_then(Value::as_str)
+        .map_or_else(
+            || "{}".to_owned(),
+            |project| serde_json::json!({"project": project}).to_string(),
+        );
     let Ok(response) = client
-        .post("https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")
+        .post(format!("{endpoint}:retrieveUserQuota"))
         .bearer_auth(token)
         .header("Content-Type", "application/json")
         .body(body)
@@ -1010,17 +1075,14 @@ fn fetch_gemini(client: &Client) -> ProviderUsage {
     else {
         return unavailable();
     };
-    if matches!(response.status().as_u16(), 401 | 403) {
-        return unavailable();
-    }
-    let Ok(body) = response
-        .error_for_status()
-        .and_then(|response| response.text())
-    else {
-        return unavailable();
-    };
-    let Ok(value) = serde_json::from_str::<Value>(&body) else {
-        return unavailable();
+    let value = match auth::response_json(response, Provider::Gemini) {
+        Ok(value) => value,
+        Err(state) => {
+            return ProviderUsage {
+                state,
+                ..Default::default()
+            };
+        }
     };
     let windows = parse_gemini(&value);
     if windows.is_empty() {
