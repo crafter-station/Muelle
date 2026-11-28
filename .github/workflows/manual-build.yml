@@ -1,0 +1,67 @@
+name: Manual Build
+
+# Manual build from the Actions tab: compiles the dock and the settings app
+# in release mode and, optionally, the one-step NSIS installer. No signing,
+# no draft release, no updater output — the artifacts are for testing only.
+# Code checks (fmt / clippy / tests) live in ci.yml.
+on:
+  workflow_dispatch:
+    inputs:
+      installer:
+        description: "Also build the NSIS installer (Muelle_<version>_x64-setup.exe)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/settings/pnpm-lock.yaml
+      # rust-toolchain.toml selects stable; the windows runner's rustup
+      # defaults to the MSVC host the project needs.
+      - uses: Swatinem/rust-cache@v2
+
+      # The settings app embeds its built front end at compile time.
+      - name: Build settings UI
+        working-directory: apps/settings
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Build dock and settings
+        run: cargo build --release -p muelle -p muelle-settings
+
+      # Reuses the cargo cache; bundles the dock as a sidecar and produces
+      # target/release/bundle/nsis/Muelle_<version>_x64-setup.exe (unsigned).
+      - name: Build installer
+        if: ${{ inputs.installer }}
+        shell: pwsh
+        run: ./scripts/build-installer.ps1
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/muelle.exe dist/
+          Copy-Item target/release/muelle-settings.exe dist/
+          Get-ChildItem target/release/bundle/nsis/*-setup.exe -ErrorAction SilentlyContinue |
+            Copy-Item -Destination dist/
+
+      - name: Upload build
+        uses: actions/upload-artifact@v7
+        with:
+          name: muelle-windows-x64
+          path: dist/
+          retention-days: 14
+          if-no-files-found: error
