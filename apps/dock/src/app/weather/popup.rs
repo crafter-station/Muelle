@@ -1,8 +1,8 @@
 //! Weather popup ownership, data invalidation and actions. No new polling.
 use super::*;
 use crate::weather::popup::{
-    Context, Popup,
-    data::{Data, Status},
+    Action, Context, Popup,
+    data::{Data, Selection, Status},
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, WindowFromPoint};
 
@@ -28,8 +28,16 @@ impl App {
         })
     }
     pub(super) fn weather_popup_data(&self, context: Context) -> Data {
+        let selection = self
+            .weather
+            .popup
+            .as_ref()
+            .map_or_else(Selection::default, Popup::selection);
+        self.weather_popup_data_for(context, selection)
+    }
+    fn weather_popup_data_for(&self, context: Context, selection: Selection) -> Data {
         let cache = self.weather.service.cached(Instant::now());
-        let mut data = Data::new(
+        let mut data = Data::for_selection(
             cache.as_ref().map(|c| c.forecast),
             context.language,
             now(),
@@ -44,8 +52,9 @@ impl App {
                         .weather_location
                         .is_some_and(|loc| now().saturating_sub(loc.updated_at as i64) > 6 * 3600),
             },
+            selection,
         );
-        if let Some(city) = self.config.selected_weather_city() {
+        if let Some(city) = self.config.display_weather_city() {
             data.location.clone_from(&city.label);
         }
         data
@@ -143,10 +152,26 @@ impl App {
         if popup.hwnd() != source {
             return Ok(None);
         }
-        let Some(_) = popup.action(event)? else {
+        let Some(action) = popup.action(event) else {
             return Ok(None);
         };
-        self.close_weather_popup();
+        match action {
+            Action::Close => self.close_weather_popup(),
+            Action::Select(selection) => {
+                let Some(context) = self.weather_popup_context() else {
+                    return Ok(None);
+                };
+                let data = self.weather_popup_data_for(context, selection);
+                self.queue_weather_graphics_trim();
+                if let Some(popup) = &mut self.weather.popup
+                    && let Err(error) = popup.update(&self.gfx, context, Some(&data))
+                {
+                    crate::recovery::graphics_error(&error);
+                    muelle_shell::log::line(&format!("popup del clima: {error:#}"));
+                    self.close_weather_popup();
+                }
+            }
+        }
         self.render()?;
         Ok(None)
     }

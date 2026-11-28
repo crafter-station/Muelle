@@ -10,6 +10,26 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Weather popup headers now follow the selected hourly forecast, with a
+  matching icon, temperature, wind and feels-like value. Click an hour to
+  inspect it; Today starts with current conditions. Daily weather codes are
+  used only for daily summary rows. No extra requests when changing hours.
+
+- Weather no longer disappears and leaves an empty Dock slot when a window
+  preview or app group opens. Keeps the existing card while forecast requests
+  remain paused during these interactions.
+
+- Automatic weather location now shows its detected city in Settings, the Dock
+  and the forecast popup. Resolves once after a fresh Windows fix, caches the
+  name and keeps manual cities separate. Removed the saved-location helper
+  text and the data-credit row from weather preferences; source credits remain
+  in the project documentation and existing weather context menu.
+
+- Fixed the weather card shifting and opening an empty gap on hover: its
+  reserved space now stays rigid during icon magnification. Select a forecast
+  day to view its hours, daily temperature range and sunrise/sunset. Hour paging reuses the same bounded five-day cache, with no
+  extra requests or timers; Today keeps the current observation.
+
 - Weather uses automatic Windows location by default, with an optional saved
   city in Settings → Dock → Weather. City search runs only on submission, with
   bounded requests and stale-result protection. The forecast popup removes its
@@ -85,6 +105,26 @@ copia la sección de la versión que se publica a la release de GitHub.
   the Dock no longer redraws the menu bar.
 
 ### Español
+
+- La cabecera del popup sigue el pronóstico de la hora seleccionada: icono,
+  temperatura, viento y sensación coherentes. Clic en una hora para consultarla;
+  Hoy empieza con las condiciones actuales. El código diario solo se usa en
+  las filas de resumen por días. Cambiar de hora no hace peticiones adicionales.
+
+- La tarjeta del clima ya no desaparece ni deja un hueco al abrir previews de
+  ventanas o grupos. Conserva la tarjeta existente y mantiene pausadas las
+  consultas meteorológicas durante esas interacciones.
+
+- La ubicación automática del clima muestra la ciudad detectada en Ajustes,
+  el Dock y el popup. Resuelve el nombre tras un fix reciente de Windows y lo
+  reutiliza sin consultas periódicas; la ciudad manual se guarda por separado.
+  Eliminados el aviso de ubicación guardada y la fila de créditos de esta
+  sección; las fuentes siguen en la documentación y el menú contextual del clima.
+
+- Corregido el desplazamiento y hueco al pasar el cursor sobre el clima: su
+  espacio permanece rígido durante la ampliación de iconos. Seleccionar un día
+  muestra sus horas, rango diario de temperatura y amanecer/atardecer. Las páginas de horas usan la misma caché acotada de cinco
+  días, sin peticiones ni timers extra; Hoy conserva la observación actual.
 
 - El clima usa por defecto la ubicación automática de Windows y permite elegir
   una ciudad en Ajustes → Dock → Clima. La búsqueda solo consulta al enviarla,

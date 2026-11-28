@@ -248,6 +248,9 @@ impl App {
             dock = make_layout(&metrics);
         }
         dock.width = dock.width.round();
+        if !key.weather {
+            dock.elastic_width = dock.width;
+        }
         dock.height = dock.height.round();
 
         self.entries = key.entries.clone();

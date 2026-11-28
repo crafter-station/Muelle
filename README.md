@@ -151,12 +151,12 @@ pnpm build
 ## Privacy
 
 Muelle collects no data, has no telemetry and never sends anything to the
-project. It makes two kinds of network requests, both optional:
+project. Its network features are optional:
 
 - **Updates:** Settings asks GitHub Releases for a newer version when it
   opens, and once a day, a couple of minutes after you turn on the computer,
-  Muelle does the same in the background and installs what it finds (the dock
-  itself never uses the network). Turn off the installing in Settings → System
+  Muelle does the same in the background and installs what it finds. Turn off
+  the installing in Settings → System
   → *Install updates automatically*, or everything with *Check for updates
   automatically*.
 - **AI provider usage:** while a supported client is running, Muelle reads its
@@ -168,5 +168,20 @@ project. It makes two kinds of network requests, both optional:
   the key from OpenCode's local `auth.json` or `ZAI_API_KEY` /
   `ZHIPU_API_KEY`, then sends it to Z.ai's quota service. Turn usage queries
   off in Settings → Menu bar → *Show AI provider usage*.
+
+- **Weather:** when enabled, approximate Windows coordinates are sent to
+  Open-Meteo for a cached forecast (every 30 minutes while visible, or 60 in
+  energy saver). Settings resolves the current device's city through
+  BigDataCloud after Windows location consent, caching the name at the same
+  approximate coordinates. No IP fallback is used. BigDataCloud may use
+  anonymous location/IP pairings to improve its geolocation data. Manual city
+  search uses Open-Meteo only when submitted. Turning weather off stops these
+  requests.
+
+Weather data: [Open-Meteo](https://open-meteo.com/) · location search:
+[GeoNames](https://www.geonames.org/) via Open-Meteo ·
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+Temperatures are rounded and hourly values grouped for display.
+Automatic city names: [BigDataCloud](https://www.bigdatacloud.com/docs/free-api/free-reverse-geocode-to-city-api).
 
 Details: [muelle.crafter.run/privacy](https://muelle.crafter.run/privacy).

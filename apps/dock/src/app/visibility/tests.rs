@@ -335,16 +335,19 @@ fn native_weather_hover_keeps_the_dock_open_and_disabling_releases_it() -> Resul
         revision: 0,
         language: muelle_config::Language::En,
     };
-    app.weather.card = Some(Card::new(
-        &app.gfx,
-        key,
-        &Model {
-            degrees: "17°".into(),
-            title: "Partly cloudy".into(),
-            subtitle: "Current location".into(),
-            glyph: WeatherGlyph::PartlyCloudy,
-        },
-    )?);
+    let make_card = |gfx: &Gfx| {
+        Card::new(
+            gfx,
+            key,
+            &Model {
+                degrees: "17°".into(),
+                title: "Partly cloudy".into(),
+                subtitle: "Current location".into(),
+                glyph: WeatherGlyph::PartlyCloudy,
+            },
+        )
+    };
+    app.weather.card = Some(make_card(&app.gfx)?);
     let source = app
         .weather
         .card
@@ -356,6 +359,25 @@ fn native_weather_hover_keeps_the_dock_open_and_disabling_releases_it() -> Resul
         !app.weather_holds_open(),
         "ignore an event from a stale/foreign input window"
     );
+    app.hovering = true;
+    app.amount.target = 1.0;
+    app.weather_event(source, 1)?;
+    assert!(!app.hovering);
+    assert_eq!(
+        app.amount.target, 0.0,
+        "weather stops app magnification without losing its reveal hold"
+    );
+    // This fixture deliberately owns no Stage. Rendering the hover exit must
+    // discard its orphaned card rather than retain an invisible reveal hold.
+    assert!(app.weather.card.is_none());
+    assert!(!app.weather_holds_open());
+    app.weather.card = Some(make_card(&app.gfx)?);
+    let source = app
+        .weather
+        .card
+        .as_ref()
+        .map(Card::hwnd)
+        .unwrap_or_default();
     app.weather_event(source, 1)?;
     app.hide_if_unused()?;
     assert!(app.weather_holds_open());

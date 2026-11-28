@@ -1,6 +1,7 @@
 //! Foreground, one-shot Windows location. The Dock never borrows Settings'
 //! identity/permission: only an approximate fix crosses the config boundary.
-use muelle_config::WeatherLocation;
+use muelle_config::{WeatherCity, WeatherLocation};
+use serde::Serialize;
 use std::{
     sync::{
         Arc, Condvar, Mutex,
@@ -105,9 +106,10 @@ fn wait<T: windows_core::RuntimeType + 'static>(
 
 #[tauri::command]
 pub async fn locate_weather(
+    language: String,
     window: tauri::WebviewWindow,
     request: State<'_, LocationRequest>,
-) -> Result<WeatherLocation, String> {
+) -> Result<LocatedWeather, String> {
     if request
         .busy
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -179,7 +181,7 @@ pub async fn locate_weather(
             let position = locator
                 .GetGeopositionAsyncWithAgeAndTimeout(
                     TimeSpan {
-                        Duration: 6 * 3600 * 10_000_000,
+                        Duration: 5 * 60 * 10_000_000,
                     },
                     TimeSpan {
                         Duration: 15 * 10_000_000,
@@ -211,11 +213,20 @@ pub async fn locate_weather(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_err(|_| "unavailable")?
                 .as_secs();
-            if now.saturating_sub(seconds as u64) > 6 * 3600 || seconds as u64 > now + 900 {
+            if now.saturating_sub(seconds as u64) > 5 * 60 || seconds as u64 > now + 900 {
                 return Err("unavailable".into());
             }
-            WeatherLocation::from_degrees(point.Latitude, point.Longitude, seconds as u64)
-                .ok_or("unavailable".into())
+            let location =
+                WeatherLocation::from_degrees(point.Latitude, point.Longitude, seconds as u64)
+                    .ok_or("unavailable")?;
+            if generation.load(Ordering::Acquire) != expected {
+                return Err("cancelled".into());
+            }
+            let city = crate::weather_locality::resolve(location, &language);
+            if generation.load(Ordering::Acquire) != expected {
+                return Err("cancelled".into());
+            }
+            Ok(LocatedWeather { location, city })
         })();
         unsafe {
             CoUninitialize();
@@ -224,6 +235,14 @@ pub async fn locate_weather(
     })
     .await
     .map_err(|_| "unavailable".to_owned())?
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocatedWeather {
+    #[serde(flatten)]
+    location: WeatherLocation,
+    city: Option<WeatherCity>,
 }
 
 #[tauri::command]

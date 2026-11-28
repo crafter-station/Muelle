@@ -73,18 +73,17 @@ impl Client {
             ("temperature_unit", "celsius".into()),
             ("wind_speed_unit", "kmh".into()),
             ("forecast_days", "5".into()),
-            ("forecast_hours", "24".into()),
             (
                 "current",
                 "temperature_2m,apparent_temperature,weather_code,is_day,wind_speed_10m".into(),
             ),
             (
                 "hourly",
-                "temperature_2m,precipitation_probability,weather_code,is_day".into(),
+                "temperature_2m,apparent_temperature,wind_speed_10m,precipitation_probability,weather_code,is_day".into(),
             ),
             (
                 "daily",
-                "weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset".into(),
+                "weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,wind_speed_10m_max,precipitation_probability_max".into(),
             ),
         ]);
         let response = self

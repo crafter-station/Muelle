@@ -10,6 +10,7 @@
 mod wallpapers;
 mod weather;
 mod weather_cities;
+mod weather_locality;
 
 use std::{env, io, path::PathBuf, process::Command, sync::Mutex, time::Duration};
 

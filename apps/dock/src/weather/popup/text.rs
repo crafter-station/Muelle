@@ -1,6 +1,7 @@
 use muelle_config::Language;
 
 pub struct Text {
+    pub hours: &'static str,
     pub hourly: &'static str,
     pub days: &'static str,
     pub today: &'static str,
@@ -122,7 +123,18 @@ pub fn text(language: Language) -> Text {
             "Offline",
         ],
     };
+    let hours = match language {
+        Language::Es => "Por horas",
+        Language::Fr => "Par heure",
+        Language::Pt => "Por hora",
+        Language::Zh => "逐小时",
+        Language::Hi => "प्रति घंटा",
+        Language::Ar => "كل ساعة",
+        Language::Bn => "প্রতি ঘণ্টা",
+        _ => "Hourly",
+    };
     Text {
+        hours,
         hourly,
         days,
         today,

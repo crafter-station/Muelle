@@ -736,10 +736,8 @@ input:focus-visible {
  .window[dir="rtl"] .row-hint { line-height: 1.6; }
 
 .weather-settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.weather-credit { border: 0; background: none; color: inherit; opacity: .65; font-size: 11px; padding: 4px; cursor: default; }
 .weather-city-search { display: flex; gap: 8px; width: 100%; }
 .weather-city-search input { min-width: 0; flex: 1; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--hover); color: inherit; font: inherit; }
 .weather-city-results { list-style: none; margin: 8px 0 0; padding: 0; width: 100%; }
 .weather-city-results button { width: 100%; text-align: start; font: inherit; color: inherit; background: transparent; border: 0; border-radius: 8px; padding: 9px 10px; }
 .weather-city-results button:hover, .weather-city-results button[aria-pressed="true"] { background: var(--hover); }
-.weather-settings-credit { padding: 8px 18px 12px; }

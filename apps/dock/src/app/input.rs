@@ -79,6 +79,26 @@ impl App {
         // Keep the active-area boundary aligned with the icons as they grow.
         let rise = stage.icon * (stage.magnifier.max_scale - 1.0) * self.amount.value;
         let (along, across) = stage.to_dock(point);
+        // The fixed weather card occupies the same Dock input bounds, but
+        // must never start icon magnification when Windows routes a move here.
+        let over_weather = stage.weather_place.is_some_and(|p| {
+            let start = stage
+                .to_dock(POINT {
+                    x: p.bounds.left,
+                    y: p.bounds.top,
+                })
+                .0;
+            let end = stage
+                .to_dock(POINT {
+                    x: p.bounds.right,
+                    y: p.bounds.bottom,
+                })
+                .0;
+            along >= start.min(end)
+        });
+        if over_weather && self.drag.is_none() {
+            return self.on_mouse_leave();
+        }
         if self.hovering && across < -rise - LEAVE_HALO * stage.scale {
             return self.on_mouse_leave();
         }

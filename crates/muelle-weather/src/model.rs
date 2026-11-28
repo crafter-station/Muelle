@@ -84,6 +84,8 @@ pub struct Current {
 pub struct Hour {
     pub time: i64,
     pub temperature_c: f32,
+    pub feels_like_c: Option<f32>,
+    pub wind_kmh: Option<f32>,
     pub condition: Condition,
     pub precipitation_percent: Option<u8>,
     pub is_day: Option<bool>,
@@ -95,6 +97,8 @@ pub struct Day {
     pub low_c: f32,
     pub high_c: f32,
     pub condition: Condition,
+    pub wind_max_kmh: Option<f32>,
+    pub precipitation_percent: Option<u8>,
     /// Polar day/night or missing data have no invented sunrise/sunset.
     pub sunrise: Option<i64>,
     pub sunset: Option<i64>,
@@ -133,6 +137,10 @@ struct RawHours {
     weather_code: Vec<Option<u16>>,
     precipitation_probability: Vec<Option<u8>>,
     is_day: Vec<Option<u8>>,
+    #[serde(default)]
+    apparent_temperature: Vec<Option<f32>>,
+    #[serde(default)]
+    wind_speed_10m: Vec<Option<f32>>,
 }
 #[derive(Deserialize)]
 struct RawDays {
@@ -142,6 +150,10 @@ struct RawDays {
     weather_code: Vec<Option<u16>>,
     sunrise: Vec<Option<i64>>,
     sunset: Vec<Option<i64>>,
+    #[serde(default)]
+    wind_speed_10m_max: Vec<Option<f32>>,
+    #[serde(default)]
+    precipitation_probability_max: Vec<Option<u8>>,
 }
 #[derive(Deserialize)]
 struct Raw {
@@ -191,17 +203,22 @@ pub fn decode(bytes: &[u8]) -> Result<Forecast, Error> {
     let d = raw.daily;
     let hn = h.time.len();
     let dn = d.time.len();
-    if hn > 24
+    if hn > 120
         || dn > 5
         || hn != h.temperature_2m.len()
         || hn != h.weather_code.len()
         || hn != h.precipitation_probability.len()
         || hn != h.is_day.len()
+        || (!h.apparent_temperature.is_empty() && hn != h.apparent_temperature.len())
+        || (!h.wind_speed_10m.is_empty() && hn != h.wind_speed_10m.len())
         || dn != d.temperature_2m_min.len()
         || dn != d.temperature_2m_max.len()
         || dn != d.weather_code.len()
         || dn != d.sunrise.len()
         || dn != d.sunset.len()
+        || (!d.wind_speed_10m_max.is_empty() && dn != d.wind_speed_10m_max.len())
+        || (!d.precipitation_probability_max.is_empty()
+            && dn != d.precipitation_probability_max.len())
         || !ascending(&h.time)
         || !ascending(&d.time)
         || !(1..=MAX_UNIX).contains(&raw.current.time)
@@ -236,6 +253,13 @@ pub fn decode(bytes: &[u8]) -> Result<Forecast, Error> {
             Some(Hour {
                 time: h.time[i],
                 temperature_c: temperature(h.temperature_2m[i])?,
+                feels_like_c: temperature(h.apparent_temperature.get(i).copied().flatten()),
+                wind_kmh: h
+                    .wind_speed_10m
+                    .get(i)
+                    .copied()
+                    .flatten()
+                    .filter(|v| v.is_finite() && (0.0..=500.0).contains(v)),
                 condition: h.weather_code[i]
                     .map(Condition::from_wmo)
                     .unwrap_or(Condition::Unknown),
@@ -262,6 +286,18 @@ pub fn decode(bytes: &[u8]) -> Result<Forecast, Error> {
                 condition: d.weather_code[i]
                     .map(Condition::from_wmo)
                     .unwrap_or(Condition::Unknown),
+                wind_max_kmh: d
+                    .wind_speed_10m_max
+                    .get(i)
+                    .copied()
+                    .flatten()
+                    .filter(|v| v.is_finite() && (0.0..=500.0).contains(v)),
+                precipitation_percent: d
+                    .precipitation_probability_max
+                    .get(i)
+                    .copied()
+                    .flatten()
+                    .filter(|v| *v <= 100),
                 sunrise: d.sunrise[i].filter(|v| (1..=MAX_UNIX).contains(v)),
                 sunset: d.sunset[i].filter(|v| (1..=MAX_UNIX).contains(v)),
             })

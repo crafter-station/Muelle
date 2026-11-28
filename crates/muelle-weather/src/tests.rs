@@ -120,3 +120,55 @@ fn diagnostics_never_include_payloads_locations_or_urls() {
         "rate_limited"
     );
 }
+
+#[test]
+fn five_day_hourly_forecast_and_daily_details_are_bounded_and_validated()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut raw = fixture()?;
+    let start = raw["current"]["time"].as_i64().ok_or("fixture time")?;
+    raw["daily"]["wind_speed_10m_max"] = serde_json::json!([25.0, -1.0]);
+    raw["daily"]["precipitation_probability_max"] = serde_json::json!([65, 101]);
+    raw["hourly"] = serde_json::json!({
+        "time": (0..120).map(|h| start + h * 3600).collect::<Vec<_>>(),
+        "temperature_2m": vec![17; 120], "weather_code": vec![2; 120],
+        "precipitation_probability": vec![50; 120], "is_day": vec![1; 120],
+    });
+    let forecast = decode(&serde_json::to_vec(&raw)?)?;
+    assert_eq!(forecast.hours.len(), 120);
+    assert_eq!(forecast.days[0].wind_max_kmh, Some(25.0));
+    assert_eq!(forecast.days[0].precipitation_percent, Some(65));
+    assert_eq!(forecast.days[1].wind_max_kmh, None);
+    assert_eq!(forecast.days[1].precipitation_percent, None);
+    raw["daily"]["wind_speed_10m_max"] = serde_json::json!([25]);
+    assert!(decode(&serde_json::to_vec(&raw)?).is_err());
+    raw["daily"]["wind_speed_10m_max"] = serde_json::json!([25, 20]);
+    raw["hourly"]["time"]
+        .as_array_mut()
+        .ok_or("fixture hours")?
+        .push((start + 120 * 3600).into());
+    assert!(decode(&serde_json::to_vec(&raw)?).is_err());
+    Ok(())
+}
+
+#[test]
+fn current_hourly_and_daily_conditions_remain_independent() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut raw = fixture()?;
+    raw["current"]["weather_code"] = serde_json::json!(0);
+    raw["hourly"]["weather_code"] = serde_json::json!([61, 71, 95]);
+    raw["hourly"]["apparent_temperature"] = serde_json::json!([18.0, -4.0, null]);
+    raw["hourly"]["wind_speed_10m"] = serde_json::json!([2.0, 8.0, -1.0]);
+    raw["daily"]["weather_code"] = serde_json::json!([95, 61]);
+    let forecast = decode(&serde_json::to_vec(&raw)?)?;
+    assert_eq!(forecast.current.condition, Condition::Clear);
+    assert_eq!(forecast.hours[0].condition, Condition::Snow);
+    assert_eq!(forecast.hours[1].condition, Condition::Thunderstorm);
+    assert_eq!(forecast.days[0].condition, Condition::Thunderstorm);
+    assert_eq!(forecast.hours[0].feels_like_c, Some(-4.0));
+    assert_eq!(forecast.hours[0].wind_kmh, Some(8.0));
+    assert_eq!(forecast.hours[1].wind_kmh, None);
+    assert_eq!(forecast.hours[1].feels_like_c, None);
+    raw["hourly"]["wind_speed_10m"] = serde_json::json!([8]);
+    assert!(decode(&serde_json::to_vec(&raw)?).is_err());
+    Ok(())
+}

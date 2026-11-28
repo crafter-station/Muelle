@@ -64,6 +64,114 @@ mod tests {
     use super::*;
     use crate::app::visibility::tests::{Fixture, queue};
     #[test]
+    #[ignore = "Offscreen owned preview/card only; no live app, focus, location or network changes"]
+    fn window_preview_retains_weather_visibility_but_never_requests_a_forecast() -> Result<()> {
+        use crate::{
+            appearance::{Look, Material},
+            gfx::WeatherGlyph,
+            multi_window_view::{Anchor, MultiWindowView},
+            scene::Theme,
+            weather::{Key, Model, Placement},
+        };
+        use muelle_core::frame::DockEdge;
+        use windows::Win32::{
+            Foundation::RECT,
+            UI::{
+                Input::KeyboardAndMouse::GetCapture,
+                WindowsAndMessaging::{GetForegroundWindow, IsWindow},
+            },
+        };
+        let _queue = queue()?;
+        let mut fixture = Fixture::new()?;
+        let app = &mut fixture.app;
+        app.config.weather = true;
+        let screen = RECT {
+            left: -33000,
+            top: -33000,
+            right: -30000,
+            bottom: -30000,
+        };
+        let anchor = RECT {
+            left: -32000,
+            top: -31000,
+            right: -31780,
+            bottom: -30952,
+        };
+        let look = Look {
+            material: Material::Frosted,
+            light: false,
+            glass: false,
+        };
+        app.weather.card = Some(Card::new(
+            &app.gfx,
+            Key {
+                placement: Placement {
+                    bounds: anchor,
+                    compact: false,
+                },
+                screen,
+                look,
+                scale: 1.0,
+                revision: 0,
+                language: muelle_config::Language::Es,
+            },
+            &Model {
+                degrees: "19°".into(),
+                title: "Llovizna".into(),
+                subtitle: "Lima".into(),
+                glyph: WeatherGlyph::Rain,
+            },
+        )?);
+        let card = app
+            .weather
+            .card
+            .as_ref()
+            .map(Card::hwnd)
+            .unwrap_or_default();
+        let foreground = unsafe { GetForegroundWindow() };
+        let capture = unsafe { GetCapture() };
+        assert!(app.weather_visible());
+        for _ in 0..3 {
+            app.preview = Some(MultiWindowView::show(
+                &app.gfx,
+                "owned-source".into(),
+                vec![app.visual.0 as isize],
+                &Anchor {
+                    icon: anchor,
+                    screen,
+                    edge: DockEdge::Bottom,
+                },
+                1.0,
+                Theme::new(look),
+            )?);
+            assert!(
+                app.weather_visible(),
+                "opening a preview must not leave an empty weather slot"
+            );
+            assert!(
+                !app.weather_demand().visible,
+                "preview rendering must not add weather fetches"
+            );
+            assert_eq!(app.weather.card.as_ref().map(Card::hwnd), Some(card));
+            assert!(unsafe { IsWindow(Some(card)) }.as_bool());
+            app.close_preview();
+            assert!(app.weather_visible());
+        }
+        assert!(app.weather.pending.is_none() && app.weather.network.is_none());
+        assert_eq!(unsafe { GetForegroundWindow() }, foreground);
+        assert_eq!(unsafe { GetCapture() }, capture);
+        // Actual hiding policies still win, unlike a temporary preview.
+        app.fullscreen = true;
+        assert!(!app.weather_visible());
+        app.fullscreen = false;
+        app.weather.sleeping = true;
+        assert!(!app.weather_visible());
+        app.weather.sleeping = false;
+        app.weather.locked = true;
+        assert!(!app.weather_visible());
+        Ok(())
+    }
+    #[test]
     #[ignore = "Owned fixture only; no running apps, live location, network request or taskbar change"]
     fn recovery_is_opt_in_and_uses_one_deadline_without_spawning_work() -> Result<()> {
         let _queue = queue()?;

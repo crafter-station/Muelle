@@ -12,6 +12,7 @@ export type DockHidingMode = "visible" | "automatic" | "intelligent";
 /** `auto` follows Windows' light or dark mode. */
 export type Appearance = "auto" | "light" | "dark" | "frosted" | "clear" | "liquidGlass";
 export interface WeatherLocation { latitudeE2: number; longitudeE2: number; updatedAt: number }
+export interface LocatedWeather extends WeatherLocation { city?: WeatherCity | null }
 export type WeatherLocationMode = "auto" | "city";
 export interface WeatherCity { label: string; latitudeE2: number; longitudeE2: number }
 
@@ -50,6 +51,7 @@ export interface Config {
   accessoryBattery: boolean;
   weather?: boolean;
   weatherLocation?: WeatherLocation | null;
+  weatherAutoCity?: WeatherCity | null;
   weatherLocationMode?: WeatherLocationMode;
   weatherCity?: WeatherCity | null;
   menuBarSystemMonitor?: boolean;
@@ -108,7 +110,7 @@ export const checkUpdate = () => invoke<UpdateInfo | null>("check_update");
 export const openReleaseNotes = (url: string) => invoke<void>("open_release_notes", { url });
 /** Fixed project URL, opened only when the user asks. */
 export const openRepository = () => invoke<void>("open_repository");
-export const locateWeather = () => invoke<WeatherLocation>("locate_weather");
+export const locateWeather = (language: string) => invoke<LocatedWeather>("locate_weather", { language });
 export const searchWeatherCities = (query: string, language: string) =>
   invoke<WeatherCity[]>("search_weather_cities", { query, language });
 export const cancelWeatherLocation = () => invoke<void>("cancel_weather_location");

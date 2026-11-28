@@ -710,7 +710,7 @@ test("weather is opt-in and ignores a late location after disabling", async () =
     view.change(texts.en.weatherShow, false);
     resolve({ latitudeE2: 3872, longitudeE2: -914, updatedAt: 123 });
     await settle();
-    assert.deepEqual(view.calls, [{ weather: true }, { weather: false, weatherLocation: null }]);
+    assert.deepEqual(view.calls, [{ weather: true }, { weather: false, weatherLocation: null, weatherAutoCity: null }]);
     assert.deepEqual(view.weatherCalls, ["locate", "cancel"]);
   } finally { unmount(); }
 });
@@ -730,7 +730,7 @@ test("quick weather off/on serializes location prompts and keeps only the latest
     const latest = { latitudeE2: 3872, longitudeE2: -914, updatedAt: Math.floor(Date.now()/1000) };
     resolvers[1](latest);
     await settle();
-    assert.deepEqual(view.calls.at(-1), { weatherLocation: latest });
+    assert.deepEqual(view.calls.at(-1), { weatherLocation: latest, weatherAutoCity: null });
     assert.ok(!view.calls.some((patch) => patch.weatherLocation?.latitudeE2 === 100));
   } finally { unmount(); }
 });
@@ -741,7 +741,7 @@ test("weather permission denial has recovery controls and never invents a locati
   try {
     view.change(texts.en.weatherShow, true);
     await settle();
-    assert.deepEqual(view.calls.at(-1), { weatherLocation: null });
+    assert.deepEqual(view.calls.at(-1), { weatherLocation: null, weatherAutoCity: null });
     const html = renderToStaticMarkup(view.body());
     assert.ok(html.includes(texts.en.weatherDenied));
     view.button(texts.en.weatherLocationPrivacy);
@@ -755,7 +755,8 @@ test("fresh weather locations are reused and old fixes refresh only while Settin
   const now = Math.floor(Date.now()/1000);
   for (const age of [0, 7*3600]) {
     const location = { latitudeE2: 3872, longitudeE2: -914, updatedAt: now-age };
-    const view = fixture("weather", { weather: true, weatherLocation: location }, undefined,
+    const view = fixture("weather", { weather: true, weatherLocation: location,
+      weatherAutoCity: { label: "Lisboa", latitudeE2: 3872, longitudeE2: -914 } }, undefined,
       { locateWeather: async () => ({ ...location, updatedAt: now }) });
     const unmount = await view.mount();
     try {
@@ -843,5 +844,36 @@ test("city search can retry after a network failure without changing the saved c
     assert.equal(attempts, 2);
     assert.ok(renderToStaticMarkup(view.body()).includes(texts.en.weatherNoCities));
     assert.deepEqual(view.calls, []);
+  } finally { unmount(); }
+});
+
+
+test("automatic weather saves and displays the resolved city without the removed helper/footer", async () => {
+  const city = { label: "Lima", latitudeE2: -1205, longitudeE2: -7704 };
+  const fix = { latitudeE2: city.latitudeE2, longitudeE2: city.longitudeE2, updatedAt: Math.floor(Date.now()/1000) };
+  const view = fixture("weather", {}, undefined, { locateWeather: async () => ({ ...fix, city }) });
+  const unmount = await view.mount();
+  try {
+    view.change(texts.en.weatherShow, true); await settle();
+    assert.deepEqual(view.calls.at(-1), { weatherLocation: fix, weatherAutoCity: city });
+    const html = renderToStaticMarkup(view.body());
+    assert.ok(html.includes("Lima"));
+    assert.ok(!html.includes(texts.en.weatherLocationSaved));
+    assert.ok(!html.includes(texts.en.weatherAttribution));
+    assert.equal(view.timers.size, 0);
+  } finally { unmount(); }
+});
+
+test("old automatic fixes without city names are resolved once and failures keep valid weather", async () => {
+  const fix = { latitudeE2: 3872, longitudeE2: -914, updatedAt: Math.floor(Date.now()/1000) };
+  const view = fixture("weather", { weather: true, weatherLocation: fix }, undefined,
+    { locateWeather: async () => ({ ...fix, city: null }) });
+  const unmount = await view.mount();
+  try {
+    assert.deepEqual(view.weatherCalls, ["locate"]);
+    assert.deepEqual(view.calls.at(-1), { weatherLocation: fix, weatherAutoCity: null });
+    view.render();
+    assert.equal(view.weatherCalls.length, 1);
+    assert.equal(view.timers.size, 0);
   } finally { unmount(); }
 });

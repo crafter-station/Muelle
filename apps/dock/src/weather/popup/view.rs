@@ -143,9 +143,8 @@ pub fn build(gfx: &Gfx, context: Context, layout: Layout, data: &Data) -> Result
         ink: if theme.light { Ink::Dark } else { Ink::Light },
         icons: Vec::with_capacity(8),
     };
-    let t = crate::weather::text::text(context.language);
     let words = text::text(context.language);
-    p.text(t.title, (20.0, 17.0), 310.0, 14.0, true, 1.0)?;
+    p.text(&data.title, (20.0, 17.0), 310.0, 14.0, true, 1.0)?;
     p.text(
         &data.location,
         (20.0, 39.0),
@@ -163,7 +162,23 @@ pub fn build(gfx: &Gfx, context: Context, layout: Layout, data: &Data) -> Result
     p.text(&data.feels, (328.0, 104.0), 52.0, 13.0, false, 1.0)?;
     if context.has_data {
         p.fill(20.0, 156.0, 360.0, 0.7, 0.0, muted)?;
-        p.text(words.hourly, (20.0, 169.0), 245.0, 12.0, true, 0.9)?;
+        p.text(&data.hourly_title, (20.0, 169.0), 192.0, 12.0, true, 0.9)?;
+        for (x, arrow, enabled) in [
+            (221.0, "‹", data.previous_hours),
+            (249.0, "›", data.next_hours),
+        ] {
+            if enabled {
+                p.fill(x, 165.0, 24.0, 25.0, 8.0, muted)?;
+            }
+            p.centered(
+                arrow,
+                (x + 12.0, 164.0),
+                24.0,
+                19.0,
+                false,
+                if enabled { 0.9 } else { 0.25 },
+            )?;
+        }
         p.text(
             &format!("{} %", words.rain),
             (290.0, 171.0),
@@ -174,7 +189,7 @@ pub fn build(gfx: &Gfx, context: Context, layout: Layout, data: &Data) -> Result
         )?;
         for (i, hour) in data.hours.iter().enumerate() {
             let x = 20.0 + i as f32 * 60.0;
-            if i == 0 {
+            if hour.selected {
                 p.fill(x, 194.0, 56.0, 96.0, 13.0, muted)?;
             }
             p.centered(&hour.label, (x + 28.0, 201.0), 54.0, 10.0, false, 0.74)?;
@@ -182,11 +197,24 @@ pub fn build(gfx: &Gfx, context: Context, layout: Layout, data: &Data) -> Result
             p.centered(&hour.degrees, (x + 28.0, 249.0), 54.0, 14.0, true, 1.0)?;
             p.centered(&hour.rain, (x + 28.0, 271.0), 54.0, 10.0, false, 0.62)?;
         }
+        if data.hours.is_empty() {
+            p.text(
+                crate::weather::text::text(context.language).unavailable,
+                (20.0, 230.0),
+                360.0,
+                12.0,
+                false,
+                0.65,
+            )?;
+        }
         p.fill(20.0, 300.0, 360.0, 0.7, 0.0, muted)?;
         p.text(words.days, (20.0, 313.0), 360.0, 12.0, true, 0.9)?;
         for (i, day) in data.days.iter().enumerate() {
             let y = 338.0 + i as f32 * 30.0;
-            p.text(&day.label, (20.0, y + 3.0), 66.0, 12.0, i == 0, 0.92)?;
+            if day.selected {
+                p.fill(12.0, y - 1.0, 376.0, 30.0, 8.0, muted)?;
+            }
+            p.text(&day.label, (20.0, y + 3.0), 66.0, 12.0, day.selected, 0.92)?;
             p.icon(day.glyph, 90.0, y, 24.0)?;
             p.text(&day.low, (124.0, y + 3.0), 42.0, 12.0, false, 0.55)?;
             p.fill(172.0, y + 11.0, 128.0, 4.0, 2.0, muted)?;

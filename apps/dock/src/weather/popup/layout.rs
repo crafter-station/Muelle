@@ -1,5 +1,13 @@
 use muelle_core::frame::DockEdge;
-use windows::Win32::Foundation::RECT;
+use windows::Win32::Foundation::{POINT, RECT};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hit {
+    Day(usize),
+    Hour(usize),
+    PreviousHours,
+    NextHours,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Layout {
@@ -9,6 +17,25 @@ pub struct Layout {
     pub height: f32,
 }
 impl Layout {
+    pub fn hit(self, point: POINT) -> Option<Hit> {
+        let (x, y) = (point.x as f32 / self.scale, point.y as f32 / self.scale);
+        if (20.0..380.0).contains(&x) && (338.0..488.0).contains(&y) {
+            Some(Hit::Day(((y - 338.0) / 30.0) as usize))
+        } else if (20.0..380.0).contains(&x) && (194.0..290.0).contains(&y) {
+            let offset = x - 20.0;
+            ((offset % 60.0) < 56.0).then_some(Hit::Hour((offset / 60.0) as usize))
+        } else if (165.0..190.0).contains(&y) {
+            if (221.0..245.0).contains(&x) {
+                Some(Hit::PreviousHours)
+            } else if (249.0..273.0).contains(&x) {
+                Some(Hit::NextHours)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
     pub fn new(
         anchor: RECT,
         screen: RECT,

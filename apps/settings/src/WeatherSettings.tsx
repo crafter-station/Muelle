@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type Config, type WeatherLocation, type WeatherCity, type WeatherLocationMode, locateWeather, searchWeatherCities, cancelWeatherLocation, openWeatherLocationSettings, openWeatherAttribution } from "./config";
+import { type Config, type LocatedWeather, type WeatherCity, type WeatherLocationMode, locateWeather, searchWeatherCities, cancelWeatherLocation, openWeatherLocationSettings } from "./config";
 import { Card, Row, SubRow, Toggle, Select } from "./controls";
 import type { Texts } from "./i18n";
 
@@ -21,7 +21,10 @@ export function WeatherSettings({ config, texts: t, onChange }: {
   const desired = useRef(!!config.weather && mode === "auto");
   const generation = useRef(0);
   const mounted = useRef(true);
-  const pending = useRef<Promise<WeatherLocation> | null>(null);
+  const pending = useRef<Promise<LocatedWeather> | null>(null);
+  const locale = useRef(config.language);
+  locale.current = config.language;
+  const attempted = useRef("");
   const change = useRef(onChange);
   change.current = onChange;
 
@@ -29,17 +32,20 @@ export function WeatherSettings({ config, texts: t, onChange }: {
     if (!desired.current || pending.current || !mounted.current) return;
     const expected = generation.current;
     setStatus("locating");
-    const request = locateWeather();
+    const language = locale.current === "auto" ? navigator.language.split("-")[0] : locale.current;
+    const request = locateWeather(language);
     pending.current = request;
     request.then((location) => {
       if (mounted.current && desired.current && generation.current === expected) {
-        change.current({ weatherLocation: location });
+        const { city, ...fix } = location;
+        attempted.current = `${fix.latitudeE2}:${fix.longitudeE2}:${fix.updatedAt}`;
+        change.current({ weatherLocation: fix, weatherAutoCity: city ?? null });
         setStatus("");
       }
     }).catch((error: unknown) => {
       if (mounted.current && desired.current && generation.current === expected) {
         setStatus(typeof error === "string" ? error : "unavailable");
-        if (error === "denied") change.current({ weatherLocation: null });
+        if (error === "denied") change.current({ weatherLocation: null, weatherAutoCity: null });
       }
     }).finally(() => {
       pending.current = null;
@@ -68,8 +74,14 @@ export function WeatherSettings({ config, texts: t, onChange }: {
       return;
     }
     if (status && status !== "locating") return;
-    if (!config.weatherLocation || Date.now() / 1000 - config.weatherLocation.updatedAt > 6 * 3600) locate();
-  }, [config.weather, config.weatherLocation, mode, locate, status]);
+    const fix = config.weatherLocation;
+    const key = fix ? `${fix.latitudeE2}:${fix.longitudeE2}:${fix.updatedAt}` : "";
+    const named = fix && config.weatherAutoCity?.latitudeE2 === fix.latitudeE2 && config.weatherAutoCity?.longitudeE2 === fix.longitudeE2;
+    if (!fix || Date.now() / 1000 - fix.updatedAt > 6 * 3600 || (!named && attempted.current !== key)) {
+      attempted.current = key;
+      locate();
+    }
+  }, [config.weather, config.weatherLocation, config.weatherAutoCity, mode, locate, status]);
 
   const toggle = (enabled: boolean) => {
     generation.current += 1;
@@ -78,7 +90,7 @@ export function WeatherSettings({ config, texts: t, onChange }: {
     setResults([]);
     setSearchStatus("");
     setStatus("");
-    onChange(enabled ? { weather: true } : { weather: false, weatherLocation: null });
+    onChange(enabled ? { weather: true } : { weather: false, weatherLocation: null, weatherAutoCity: null });
     if (desired.current) locate();
     else if (pending.current) void cancelWeatherLocation().catch(() => {});
   };
@@ -113,7 +125,9 @@ export function WeatherSettings({ config, texts: t, onChange }: {
     : status === "denied" ? t.weatherDenied
     : status === "focus" ? t.weatherNeedsFocus
     : status ? t.weatherUnavailable
-    : config.weatherLocation ? t.weatherLocationSaved : t.weatherNeedsLocation;
+    : !config.weatherLocation ? t.weatherNeedsLocation : "";
+  const autoCity = config.weatherAutoCity && config.weatherAutoCity.latitudeE2 === config.weatherLocation?.latitudeE2
+    && config.weatherAutoCity.longitudeE2 === config.weatherLocation?.longitudeE2 ? config.weatherAutoCity.label : "";
 
   return <Card title={t.weatherTitle}>
     <Row label={t.weatherShow} hint={t.weatherHint}>
@@ -124,7 +138,7 @@ export function WeatherSettings({ config, texts: t, onChange }: {
         { value: "auto", label: t.weatherAutomatic }, { value: "city", label: t.weatherChooseCity },
       ]} />
     </SubRow>
-    <SubRow label={t.weatherAutomatic} hint={message} open={!!config.weather && mode === "auto"} stacked>
+    <SubRow label={autoCity || t.weatherAutomatic} hint={message || undefined} open={!!config.weather && mode === "auto"} stacked>
       <div className="weather-settings-actions" aria-live="polite">
         <span className="sr-only" role="status">{message}</span>
         <button type="button" className="push" disabled={status === "locating"}
@@ -156,10 +170,6 @@ export function WeatherSettings({ config, texts: t, onChange }: {
         </li>)}
       </ul> : null}
     </SubRow>
-    {config.weather ? <div className="weather-settings-credit">
-      <button type="button" className="weather-credit" onClick={() => void openWeatherAttribution().catch(() => {})}>
-        {t.weatherAttribution}
-      </button>
-    </div> : null}
+
   </Card>;
 }

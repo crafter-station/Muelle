@@ -118,15 +118,19 @@ impl App {
             && !self.fullscreen
             && self.moving_since.is_none()
             && self.slide.value < 1.0
-            && self.preview.is_none()
-            && self.group_view.is_none()
             && self.drag.is_none()
             && !self.drag_over
             && !self.switching
     }
     fn weather_demand(&self) -> Demand {
         Demand {
-            visible: self.weather_visible() && self.weather.card.is_some() && !self.menu_open,
+            // Popovers do not remove a permanent Dock item. Retain its visual
+            // while keeping background fetches paused during these interactions.
+            visible: self.weather_visible()
+                && self.weather.card.is_some()
+                && !self.menu_open
+                && self.preview.is_none()
+                && self.group_view.is_none(),
             online: self.weather.online,
             energy_saver: self.power_seen.is_some_and(|(_, saver)| saver),
         }
@@ -142,7 +146,7 @@ impl App {
                 *enabled != self.config.weather
                     || *mode != self.config.weather_location_mode
                     || *fix != self.config.weather_location
-                    || *city != self.config.weather_city
+                    || city.as_ref() != self.config.display_weather_city()
             });
         if changed {
             let coordinates = self.config.weather_coordinates().and_then(|(lat, lon)| {
@@ -155,7 +159,7 @@ impl App {
                 self.config.weather,
                 self.config.weather_location_mode,
                 self.config.weather_location,
-                self.config.weather_city.clone(),
+                self.config.display_weather_city().cloned(),
             ));
             self.weather.failed = false;
             self.weather.view_retry = None;
@@ -249,7 +253,7 @@ impl App {
                     WeatherGlyph::Unknown,
                 ),
             };
-            let subtitle = if let Some(city) = self.config.selected_weather_city() {
+            let subtitle = if let Some(city) = self.config.display_weather_city() {
                 city.label.as_str()
             } else if self.config.weather_coordinates().is_none() {
                 text.settings
@@ -479,6 +483,9 @@ impl App {
         }
         if event < 2 {
             self.weather.hovering = event == 1;
+            if event == 1 && (self.hovering || self.pointed || self.amount.target != 0.0) {
+                self.on_mouse_leave()?;
+            }
             if event == 0 && self.config.hides_automatically() {
                 unsafe {
                     SetTimer(Some(self.input), HIDE_TIMER, HIDE_DELAY_MS, None);

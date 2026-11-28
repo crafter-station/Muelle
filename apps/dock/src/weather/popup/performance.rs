@@ -107,6 +107,8 @@ fn measure_weather_retained_ui_in_release() -> Result<()> {
         .map(|i| muelle_weather::Hour {
             time: forecast.current.time + i * 3600,
             temperature_c: 15.0 + (i % 7) as f32,
+            feels_like_c: Some(14.0),
+            wind_kmh: Some(9.0),
             condition: muelle_weather::Condition::PartlyCloudy,
             precipitation_percent: Some((i * 3) as u8),
             is_day: Some(i < 8),
@@ -118,6 +120,8 @@ fn measure_weather_retained_ui_in_release() -> Result<()> {
             low_c: 10.0 + i as f32,
             high_c: 19.0 + i as f32,
             condition: muelle_weather::Condition::PartlyCloudy,
+            wind_max_kmh: Some(18.0),
+            precipitation_percent: Some(30),
             sunrise: Some(start + i * 86400 + 6 * 3600),
             sunset: Some(start + i * 86400 + 18 * 3600),
         })
@@ -196,7 +200,7 @@ fn measure_weather_retained_ui_in_release() -> Result<()> {
     assert!(panel.target.Root()? == root);
     let start = Instant::now();
     for _ in 0..1000 {
-        panel.action(0)?;
+        let _ = panel.action(0);
     }
     let keyboard_us = start.elapsed().as_micros();
     drop(panel);

@@ -68,13 +68,33 @@ mod tests {
     };
 
     #[test]
+    fn weather_only_dock_has_no_phantom_magnification() {
+        let metrics = Metrics::DEFAULT;
+        let mut dock = layout(&[], &metrics);
+        reserve(&mut dock, &metrics, DockEdge::Bottom);
+        for cursor in [0.0, dock.width / 2.0, dock.width] {
+            let state = magnify(
+                &dock,
+                cursor,
+                1.0,
+                &Magnifier {
+                    range: 210.0,
+                    max_scale: 1.6,
+                },
+            );
+            assert_eq!((state.left, state.right), (0.0, dock.width));
+        }
+    }
+    #[test]
     fn weather_stays_inside_glass_without_overlapping_magnified_icons() -> Result<(), &'static str>
     {
         for scale in [0.6, 1.0, 1.25, 1.5, 2.0, 3.0] {
             for edge in [DockEdge::Bottom, DockEdge::Left, DockEdge::Right] {
                 let metrics = Metrics::DEFAULT.scaled(scale);
                 let mut dock = layout(&[ItemKind::Icon; 12], &metrics);
+                let apps = dock.clone();
                 reserve(&mut dock, &metrics, edge);
+                assert_eq!(dock.elastic_width, apps.width);
                 let frame = Frame::new(edge, (-2400.0, -1000.0), dock.height);
                 let mag = Magnifier {
                     range: 210.0 * scale,
@@ -82,6 +102,15 @@ mod tests {
                 };
                 for cursor in (0..dock.width as usize).step_by(11) {
                     let state = magnify(&dock, cursor as f32, 1.0, &mag);
+                    let app_state = magnify(&apps, cursor as f32, 1.0, &mag);
+                    assert_eq!(
+                        state.rects, app_state.rects,
+                        "a fixed card cannot stretch empty space or change app geometry"
+                    );
+                    assert_eq!(state.left, app_state.left);
+                    assert!(
+                        (state.right - app_state.right - (dock.width - apps.width)).abs() < 0.01
+                    );
                     let tile_start = state.right - metrics.padding - length(metrics.icon, edge);
                     for rect in &state.rects {
                         assert!(rect.x + rect.width <= tile_start + 0.1);
