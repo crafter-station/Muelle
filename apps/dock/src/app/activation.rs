@@ -626,6 +626,13 @@ impl App {
     /// to the window in front instead, or to the desktop when none is left,
     /// so that no tooltip of the invisible taskbar shows (issue #48).
     pub(super) fn leave_hidden_taskbar(&mut self) -> Result<()> {
+        // WinEvent delivery is asynchronous; a newer app activation wins.
+        if !muelle_shell::taskbar::is_hidden(HWND(tracker::foreground_window() as *mut _))
+            || launcher::opening_hidden_icons()
+        {
+            return Ok(());
+        }
+        muelle_shell::taskbar::dismiss_hidden_tooltips();
         self.on_foreground_changed()?;
         let windows: Vec<isize> = self.windows.iter().map(|window| window.hwnd).collect();
         launcher::focus_front_or_desktop(&windows);

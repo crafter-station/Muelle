@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use anyhow::Result;
-use muelle_shell::{pins::app_exists, tracker};
+use muelle_shell::{pins::app_exists, taskbar, tracker};
 use windows::Win32::{
     Foundation::{HWND, POINT},
     UI::{
@@ -105,6 +105,9 @@ impl App {
 
         self.cursor = along;
         if !self.hovering {
+            // Explorer can leave its Start tooltip on screen after the last
+            // app minimizes. Only dismiss tooltips of our hidden taskbar.
+            taskbar::dismiss_hidden_tooltips();
             self.hovering = true;
             self.amount.target = 1.0;
             self.slide.target = 0.0;

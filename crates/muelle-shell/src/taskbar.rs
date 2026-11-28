@@ -17,13 +17,15 @@ use std::{
 
 use windows::{
     Win32::{
-        Foundation::{COLORREF, HWND, LPARAM},
+        Foundation::{COLORREF, HWND, LPARAM, WPARAM},
         UI::{
+            Controls::TTM_POP,
             Shell::{ABM_GETSTATE, ABM_SETSTATE, ABS_AUTOHIDE, APPBARDATA, SHAppBarMessage},
             WindowsAndMessaging::{
-                FindWindowExW, FindWindowW, GWL_EXSTYLE, GetLayeredWindowAttributes,
-                GetWindowLongPtrW, IsWindow, LWA_ALPHA, SetLayeredWindowAttributes,
-                SetWindowLongPtrW, WS_EX_LAYERED, WS_EX_TRANSPARENT,
+                FindWindowExW, FindWindowW, GA_ROOT, GW_OWNER, GWL_EXSTYLE, GetAncestor,
+                GetLayeredWindowAttributes, GetWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
+                IsWindow, LWA_ALPHA, PostMessageW, SetLayeredWindowAttributes, SetWindowLongPtrW,
+                WS_EX_LAYERED, WS_EX_TRANSPARENT,
             },
         },
     },
@@ -183,13 +185,56 @@ fn restore_saved(file: &Path, mut restore: impl FnMut(Option<bool>) -> bool) -> 
 /// "Show hidden icons", in a popup of its own over the desktop (issue #48).
 #[must_use]
 pub fn is_hidden(hwnd: HWND) -> bool {
-    is_taskbar(hwnd) && is_ghosted(hwnd)
+    hidden_root(hwnd, &taskbars()).is_some()
 }
 
-/// Whether `hwnd` is the taskbar of one of the monitors, hidden or not.
+/// Whether `hwnd` is a monitor's taskbar or one of its child controls.
 #[must_use]
 pub fn is_taskbar(hwnd: HWND) -> bool {
-    taskbars().contains(&hwnd)
+    // Focus may belong to an internal taskbar control, not Shell_TrayWnd.
+    // GA_ROOT follows parents only: owned flyouts remain independent windows.
+    taskbars().contains(&unsafe { GetAncestor(hwnd, GA_ROOT) })
+}
+
+fn hidden_root(hwnd: HWND, bars: &[HWND]) -> Option<HWND> {
+    // SAFETY: Read-only lookup; invalid/destroyed handles yield no match.
+    let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+    bars.contains(&root)
+        .then_some(root)
+        .filter(|&bar| is_ghosted(bar))
+}
+
+/// Dismisses residual native tooltips owned by a taskbar Muelle has hidden.
+/// Called on Dock entry, never per mouse move/frame. Leaves all other apps'
+/// tooltips and the notification-area flyout alone; no synchronous Explorer call.
+pub fn dismiss_hidden_tooltips() {
+    dismiss_taskbar_tooltips(&taskbars());
+}
+
+fn dismiss_taskbar_tooltips(bars: &[HWND]) {
+    if !bars.iter().any(|&bar| is_ghosted(bar)) {
+        return;
+    }
+    // SAFETY: Read-only class/owner/PID checks, then a pointer-free asynchronous
+    // standard control message. No injection, remote memory or focus changes.
+    unsafe {
+        let mut previous = None;
+        while let Ok(tip) = FindWindowExW(None, previous, w!("tooltips_class32"), None) {
+            previous = Some(tip);
+            let Some(bar) = GetWindow(tip, GW_OWNER)
+                .ok()
+                .and_then(|owner| hidden_root(owner, bars))
+            else {
+                continue;
+            };
+            let (mut bar_pid, mut tip_pid) = (0, 0);
+            GetWindowThreadProcessId(bar, Some(&mut bar_pid));
+            GetWindowThreadProcessId(tip, Some(&mut tip_pid));
+            if bar_pid != 0 && bar_pid == tip_pid {
+                let _ = PostMessageW(Some(tip), TTM_POP, WPARAM(0), LPARAM(0));
+            }
+        }
+    }
 }
 
 fn taskbars() -> Vec<HWND> {
@@ -406,6 +451,88 @@ mod tests {
             assert!(restored);
             assert_eq!(styles & GHOST_STYLES, 0);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn tooltip_cleanup_targets_only_the_hidden_taskbars_owned_control() -> windows::core::Result<()>
+    {
+        use windows::Win32::UI::{
+            Controls::{ICC_WIN95_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx},
+            WindowsAndMessaging::{
+                CreateWindowExW, DestroyWindow, MSG, PM_REMOVE, PeekMessageW, WS_CHILD, WS_POPUP,
+            },
+        };
+        struct Windows(Vec<HWND>);
+        impl Drop for Windows {
+            fn drop(&mut self) {
+                for &hwnd in self.0.iter().rev() {
+                    // SAFETY: Test-owned windows only, destroyed child-first.
+                    unsafe {
+                        let _ = DestroyWindow(hwnd);
+                    }
+                }
+            }
+        }
+        let mut owned = Windows(Vec::new());
+        let mut create = |class, style, parent| -> windows::core::Result<HWND> {
+            // SAFETY: Hidden offscreen test windows, never the real taskbar.
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    Default::default(),
+                    class,
+                    w!(""),
+                    style,
+                    -32000,
+                    -32000,
+                    1,
+                    1,
+                    parent,
+                    None,
+                    None,
+                    None,
+                )?
+            };
+            owned.0.push(hwnd);
+            Ok(hwnd)
+        };
+        // SAFETY: Valid initialized size; registers the native tooltip class.
+        unsafe {
+            InitCommonControlsEx(&INITCOMMONCONTROLSEX {
+                dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
+                dwICC: ICC_WIN95_CLASSES,
+            })
+            .ok()?;
+        }
+        let bar = create(w!("STATIC"), WS_POPUP, None)?;
+        let child = create(w!("STATIC"), WS_CHILD, Some(bar))?;
+        let foreign = create(w!("STATIC"), WS_POPUP, None)?;
+        let flyout = create(w!("STATIC"), WS_POPUP, Some(bar))?;
+        let tip = create(w!("tooltips_class32"), WS_POPUP, Some(child))?;
+        let foreign_tip = create(w!("tooltips_class32"), WS_POPUP, Some(foreign))?;
+        let unowned_tip = create(w!("tooltips_class32"), WS_POPUP, None)?;
+        let flyout_tip = create(w!("tooltips_class32"), WS_POPUP, Some(flyout))?;
+        let has_pop = |hwnd| {
+            // SAFETY: Reads only the test thread's messages for its own HWND.
+            unsafe {
+                PeekMessageW(&mut MSG::default(), Some(hwnd), TTM_POP, TTM_POP, PM_REMOVE).as_bool()
+            }
+        };
+        assert_eq!(hidden_root(child, &[bar]), None);
+        dismiss_taskbar_tooltips(&[bar]);
+        assert!(!has_pop(tip));
+        assert!(set_ghost(bar, true));
+        assert_eq!(hidden_root(child, &[bar]), Some(bar));
+        assert_eq!(hidden_root(flyout, &[bar]), None);
+        assert_eq!(hidden_root(HWND::default(), &[bar]), None);
+        dismiss_taskbar_tooltips(&[bar]);
+        assert!(has_pop(tip));
+        for untouched in [foreign_tip, unowned_tip, flyout_tip] {
+            assert!(!has_pop(untouched));
+        }
+        assert!(set_ghost(bar, false));
+        dismiss_taskbar_tooltips(&[bar]);
+        assert!(!has_pop(tip));
         Ok(())
     }
 }

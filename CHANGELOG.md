@@ -10,6 +10,11 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Dismiss residual native Start/taskbar tooltips when entering the Dock after
+  minimizing the last app. Hidden-taskbar focus recovery also recognizes its
+  internal controls and ignores stale events after another app takes focus.
+  Other apps' tooltips and notification-area flyouts remain untouched; no polling.
+
 - Weather popup headers now follow the selected hourly forecast, with a
   matching icon, temperature, wind and feels-like value. Click an hour to
   inspect it; Today starts with current conditions. Daily weather codes are
@@ -105,6 +110,11 @@ copia la sección de la versión que se publica a la release de GitHub.
   the Dock no longer redraws the menu bar.
 
 ### Español
+
+- Se descartan las etiquetas nativas residuales de Inicio/barra de Windows al
+  entrar al Dock tras minimizar la última app. La recuperación del foco reconoce
+  controles internos y descarta eventos antiguos si otra app ya tiene el foco.
+  No afecta tooltips de otras apps ni el panel de iconos ocultos; sin sondeo.
 
 - La cabecera del popup sigue el pronóstico de la hora seleccionada: icono,
   temperatura, viento y sensación coherentes. Clic en una hora para consultarla;
