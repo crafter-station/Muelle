@@ -9,6 +9,7 @@ use windows::Win32::Foundation::{HWND, POINT};
 
 use crate::{
     folder_menu,
+    gfx::Gfx,
     menu::{self, MenuItem},
     shell_work::{self, Action as ShellAction},
     strings::{self, text},
@@ -25,7 +26,7 @@ use super::{
     preferences::{
         explorer_id, fixed_item_preference, forget_shortcuts_folder, hide_fixed_item, save_settings,
     },
-    shorten, window_of, with_app, with_app_then,
+    shorten, system_menu, window_of, with_app, with_app_then,
 };
 
 pub(super) fn run_outside(outside: Outside) {
@@ -133,6 +134,19 @@ pub(super) fn run_outside(outside: Outside) {
                 shell_work::notify_end_task_failed();
             }
         }
+        Outside::CalendarMenu {
+            gfx,
+            anchor,
+            look,
+            spring,
+        } => calendar_menu(&gfx, anchor, look, spring),
+        Outside::SystemMenu(request) => {
+            let next = system_menu::show(request, main_window());
+            with_app("menú del sistema cerrado", App::system_menu_closed);
+            if let Some(next) = next {
+                run_outside(next);
+            }
+        }
         Outside::Menu(request) => {
             let owner = HWND(MAIN_WINDOW.load(Ordering::Relaxed) as *mut _);
             with_app("abrir menú", |app| {
@@ -170,6 +184,67 @@ pub(super) fn run_outside(outside: Outside) {
                 submit(ShellAction::Open { id: path });
             }
         }
+    }
+}
+
+/// The menu of the calendar's round button: today, and what the clock and the
+/// Windows calendar flyout lead to. The calendar stays behind it.
+fn calendar_menu(gfx: &Gfx, anchor: POINT, look: crate::appearance::Look, spring: Option<POINT>) {
+    const TODAY: u32 = 1;
+    const NOTIFICATIONS: u32 = 2;
+    const CALENDAR_APP: u32 = 3;
+    const DATE_SETTINGS: u32 = 4;
+    const SETTINGS: u32 = 5;
+    let t = text();
+    let items = [
+        MenuItem::action(TODAY, t.calendar_today),
+        MenuItem::Separator,
+        MenuItem::action(NOTIFICATIONS, t.calendar_notifications),
+        MenuItem::action(CALENDAR_APP, t.calendar_open_app),
+        MenuItem::action(DATE_SETTINGS, t.calendar_date_settings),
+        MenuItem::Separator,
+        MenuItem::action(SETTINGS, t.system_muelle_settings),
+    ];
+    let hold = |app: &mut App, held: bool| {
+        if let Some(calendar) = &mut app.calendar {
+            calendar.hold(held);
+        }
+    };
+    with_app("menú del calendario", |app| {
+        app.menu_open = true;
+        hold(app, true);
+        app.render()
+    });
+    let chosen = match spring {
+        Some(origin) => menu::show_springing(gfx, main_window(), &items, anchor, look, origin),
+        None => menu::show_below(gfx, main_window(), &items, anchor, look),
+    };
+    with_app("menú del calendario cerrado", |app| {
+        hold(app, false);
+        match chosen {
+            Some(TODAY) => {
+                if let Some(calendar) = &mut app.calendar {
+                    calendar.show_today(&app.gfx)?;
+                }
+            }
+            // Anything else leads away from the calendar.
+            Some(_) => app.close_calendar(),
+            None => {}
+        }
+        app.after_menu()
+    });
+    let next = match chosen {
+        Some(NOTIFICATIONS) => {
+            launcher::open_notifications();
+            None
+        }
+        Some(CALENDAR_APP) => Some(Outside::Open("outlookcal:".into())),
+        Some(DATE_SETTINGS) => Some(Outside::Open("ms-settings:dateandtime".into())),
+        Some(SETTINGS) => Some(Outside::OpenSettings),
+        _ => None,
+    };
+    if let Some(next) = next {
+        run_outside(next);
     }
 }
 

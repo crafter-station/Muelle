@@ -121,6 +121,15 @@ impl App {
         if let Some(group) = &self.group_view {
             group.refresh_backdrops(&self.gfx)?;
         }
+        if let Some(center) = &self.control_center {
+            center.refresh_backdrops(&self.gfx)?;
+        }
+        if let Some(calendar) = &self.calendar {
+            calendar.refresh_backdrops(&self.gfx)?;
+        }
+        if let Some(menu) = &self.tray_menu {
+            menu.refresh_backdrops(&self.gfx)?;
+        }
         if let Some(card) = &self.weather.card {
             card.refresh_backdrops(&self.gfx)?;
         }

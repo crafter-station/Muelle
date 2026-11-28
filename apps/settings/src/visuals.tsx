@@ -122,6 +122,20 @@ export function IslandPreview({ style, wallpaper }: { style: IslandStyle; wallpa
   </span>;
 }
 
+/** The left end of the menu bar with one look of the icon. */
+export function MenuIconPreview({ icon, picture }: { icon: "ring" | "windows" | "custom"; picture?: string | null }) {
+  return <span className="preview-menu-icon">
+    {icon === "custom" && picture ? <img src={picture} alt="" /> : (
+      <svg viewBox="0 0 16 16" fill="currentColor">
+        {icon === "ring" ? <circle cx="8" cy="8" r="5.2" fill="none" stroke="currentColor" strokeWidth="1.6" /> : null}
+        {icon === "windows" ? <path d="M2 2h5.5v5.5H2zM8.5 2H14v5.5H8.5zM2 8.5h5.5V14H2zM8.5 8.5H14V14H8.5z" /> : null}
+        {icon === "custom" ? <path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /> : null}
+      </svg>
+    )}
+    <i />
+  </span>;
+}
+
 export function SpeedPreview({ speed }: { speed: GenieSpeed }) {
   return <svg className="preview-speed" viewBox="0 0 120 48" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
     <rect x="20" y="4" width="36" height="24" rx="4" opacity=".65" /><path d="M20 11h36" opacity=".35" />

@@ -13,6 +13,8 @@ use windows::Win32::{
     },
 };
 
+use crate::tray_host;
+
 pub const ABN_FULLSCREENAPP: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,14 +115,17 @@ impl AppBar {
             rc: wanted,
             ..Default::default()
         };
-        // SAFETY: `data` has its size initialized and remains valid for both synchronous calls.
-        unsafe {
-            SHAppBarMessage(ABM_QUERYPOS, &mut data);
-            // Another bar on the same edge (the Windows taskbar, before it is
-            // hidden) pushes the strip inward, so preserve its thickness.
-            data.rc = keep_thickness(edge, data.rc, thickness);
-            SHAppBarMessage(ABM_SETPOS, &mut data);
-        }
+        // Both answer back, which our own tray stand-in would lose.
+        tray_host::aside(|| {
+            // SAFETY: `data` has its size initialized and remains valid for both synchronous calls.
+            unsafe {
+                SHAppBarMessage(ABM_QUERYPOS, &mut data);
+                // Another bar on the same edge (the Windows taskbar, before it
+                // is hidden) pushes the strip inward, so preserve its thickness.
+                data.rc = keep_thickness(edge, data.rc, thickness);
+                SHAppBarMessage(ABM_SETPOS, &mut data);
+            }
+        });
         // Treat the reservation as complete only if the system granted the
         // requested area; otherwise, retry on the next call.
         self.reserved = granted(edge, data.rc, wanted).then_some(wanted);

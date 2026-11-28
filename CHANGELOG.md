@@ -10,6 +10,51 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- The menu bar's control center button opens Muelle's own control center, laid
+  out like the one on macOS: Wi-Fi, Bluetooth, nearby sharing, Focus, Task
+  View, casting, what is playing, screen brightness, volume, dark mode,
+  calculator, timer and screenshot. "More Controls" opens Windows' quick
+  settings. It springs out of its button and folds back into it, and holding
+  or right-clicking a tile grows it into a menu with more choices: Wi-Fi
+  networks, paired devices, sound outputs, the player, virtual desktops,
+  screen modes and captures. A click switches what a tile stands for (Wi-Fi,
+  Bluetooth, Do Not Disturb, dark mode, mute, playback), and a click anywhere
+  outside an open menu goes back to the tiles.
+- The menu bar's network icon opens that Wi-Fi menu by itself instead of
+  Windows' list of networks, which "Other Networks…" and a new network
+  still reach.
+- The menu bar's arrow opens Muelle's own tray menu, in the control center's
+  style, with each app's icon and name; left and right clicks reach the app,
+  and the last row opens Windows' own menu. An app's menu opens beside its
+  row, with the tray menu still behind it. An app that was already running
+  and ignores the request to add its icon again appears after it restarts.
+- The Widgets button no longer shows when a policy turns Widgets off.
+- Clicking the date in the menu bar opens Muelle's calendar: the month on glass,
+  today circled, arrows and the wheel to change months, the month's name to
+  return to today, and a round button with the notification center, the calendar
+  app and date settings. Settings can start the week on another day or turn it
+  off; an app chosen for the clock still takes its place.
+- A hollow circle now comes before the app's name in the menu bar, and the tray arrow
+  points down while its menu is closed and up while it is open.
+- Pressing the circle opens a menu like macOS's Apple menu: about this PC,
+  settings, the Microsoft Store, recent apps, Force Quit, Task Manager, sleep,
+  restart, shut down, lock and sign out. Whatever can lose unsaved work asks
+  first.
+- The circle and its menu move as they open and close: the ring fills while the
+  menu springs out of it. Settings can switch the ring for Windows' logo or a
+  picture of your own (PNG, ICO, JPG or BMP; square, 32 to 1024 pixels, up to
+  1 MB), or turn the movement off.
+- Settings → Menu bar can turn off the circle, its menu, the arrow's movement, and
+  Muelle's tray menu, Wi-Fi menu and control center (each then opens Windows'
+  own), and choose which tiles the control center shows.
+- The search process gives its memory back a few seconds after its window
+  closes, so an idle Muelle uses a fraction of what it did with search on.
+- Muelle has its own search window, opened with Alt+Space or the menu bar's
+  search button: apps, Windows settings, files by name and by content, a
+  calculator, web and keyword searches, and offline definitions once the
+  dictionary is added. It follows the dock's theme and language, and Settings →
+  Search configures it. Turn it off there to get Windows Search back.
+
 - AI quota errors no longer mistake forbidden Claude requests or temporarily
   locked credential files for logout. Gemini honors GEMINI_CLI_HOME and valid
   near-expiry tokens; Antigravity keeps its own source and clears incompatible
@@ -114,7 +159,9 @@ copia la sección de la versión que se publica a la release de GitHub.
   players keep only the latest pending destination, without extra polling.
 - The volume icon in the menu bar opens a volume slider under it, with the
   percentage and a mute button, as the music panel shows them; another click
-  closes it. Without an output device it still opens Windows' sound page
+  closes it, as do a click elsewhere, Escape or switching apps; moving the
+  pointer away does not. It springs out of the speaker and folds back into it. Without an output device it still opens Windows' sound
+  page
   (issue #55).
 - The menu bar shows on every display, as on macOS: each display has the same
   bar at its own scale, keeps its own strip for maximized windows and hides on
@@ -155,6 +202,65 @@ copia la sección de la versión que se publica a la release de GitHub.
   the Dock no longer redraws the menu bar.
 
 ### Español
+
+- El botón del centro de control de la barra superior abre un centro de control
+  propio de Muelle, dispuesto como el de macOS: Wi-Fi, Bluetooth, compartir con
+  dispositivos cercanos, Concentración, Vista de tareas, transmitir, lo que se
+  está reproduciendo, brillo de la pantalla, volumen, modo oscuro, calculadora,
+  temporizador y captura de pantalla. "Más controles" abre la configuración
+  rápida de Windows. Se despliega desde su botón y vuelve a plegarse en él, y
+  al mantener pulsada una ficha, o hacer clic derecho en ella, se amplía en un
+  menú con más opciones: redes Wi-Fi, dispositivos emparejados, salidas de
+  sonido, el reproductor, escritorios virtuales, modos de pantalla y capturas.
+  Un clic activa o desactiva lo que representa la ficha (Wi-Fi, Bluetooth, No
+  molestar, modo oscuro, silencio, reproducción), y un clic en cualquier punto
+  fuera de un menú abierto vuelve a las fichas.
+- El icono de red de la barra superior abre ese menú de Wi-Fi por sí solo en
+  lugar de la lista de redes de Windows, a la que siguen llevando «Otras
+  redes…» y una red nueva.
+- La flecha de la barra superior abre un menú de bandeja propio de Muelle,
+  con el estilo del centro de control y el icono y nombre de cada aplicación;
+  los clics izquierdo y derecho llegan a la aplicación, y la última fila abre
+  el menú de Windows. El menú de cada aplicación se abre junto a su fila, con
+  el de bandeja todavía detrás. Una aplicación que ya estaba abierta e ignora la
+  petición de volver a añadir su icono aparece cuando se reinicia.
+- El botón de Widgets ya no aparece si una directiva desactiva los Widgets.
+- Al pulsar la fecha en la barra superior se abre el calendario de Muelle: el mes
+  sobre cristal, hoy rodeado, flechas y rueda para cambiar de mes, el nombre del
+  mes para volver a hoy y un botón redondo con el centro de notificaciones, la
+  aplicación de calendario y la configuración de fecha. En Ajustes la semana puede
+  empezar otro día o desactivarse; una aplicación elegida para el reloj sigue
+  teniendo preferencia.
+- Un círculo hueco precede ahora al nombre de la aplicación en la barra superior, y la
+  flecha de la bandeja apunta hacia abajo con su menú cerrado y hacia arriba con
+  él abierto.
+- Al pulsar el círculo se abre un menú como el menú Apple de macOS: acerca de
+  este PC, configuración, Microsoft Store, aplicaciones recientes, forzar salida,
+  Administrador de tareas, suspender, reiniciar, apagar, bloquear y cerrar
+  sesión. Lo que puede perder trabajo sin guardar pregunta antes.
+- El círculo y su menú se mueven al abrirse y cerrarse: el anillo se rellena
+  mientras el menú brota de él. En Ajustes se puede cambiar el anillo por el
+  logotipo de Windows o por una imagen propia (PNG, ICO, JPG o BMP; cuadrada, de
+  32 a 1024 píxeles, de hasta 1 MB), o desactivar el movimiento.
+- En Ajustes → Barra superior se pueden desactivar el círculo, su menú, el movimiento de
+  la flecha y el menú de bandeja, el menú de Wi-Fi y el centro de control de
+  Muelle (cada botón abre entonces lo propio de Windows), y elegir qué fichas
+  muestra el centro de control.
+- El proceso de búsqueda devuelve su memoria unos segundos después de cerrarse
+  su ventana: Muelle en reposo con la búsqueda activada usa una fracción de la de
+  antes.
+- Muelle tiene su propia ventana de búsqueda, que se abre con Alt+Espacio o con
+  el botón de búsqueda de la barra superior: aplicaciones, configuración de
+  Windows, archivos por nombre y por contenido, calculadora, búsquedas web y
+  por palabra clave, y definiciones sin conexión si se añade el diccionario.
+  Sigue el tema y el idioma del dock y se configura en Ajustes → Búsqueda. Al
+  desactivarla ahí vuelve Windows Search.
+- El icono de volumen de la barra superior abre un control deslizante debajo,
+  con el porcentaje y un botón de silencio, como en el panel de música; otro
+  clic lo cierra. También un clic en otro sitio, Escape o
+  cambiar de aplicación; apartar el puntero no lo cierra. Se despliega desde el altavoz
+  y vuelve a plegarse en él. Sin dispositivo de
+  salida sigue abriendo la página de sonido de Windows (issue #55).
 
 - Los errores de cuota ya no confunden rechazos de permisos de Claude ni archivos
   de sesión bloqueados temporalmente con un cierre de sesión. Gemini respeta

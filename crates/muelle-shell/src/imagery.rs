@@ -14,6 +14,39 @@ use windows::Win32::{
 /// downscaled BGRA buffer is retained. No URI fetching or shell extensions.
 #[must_use]
 pub fn decode(bytes: &[u8], side: u32, max_pixels: u64) -> Option<IconImage> {
+    decode_frame(bytes, 0, side, max_pixels)
+}
+
+/// The index, width and height of the largest picture in the file, which for
+/// an `.ico` holds several. Caller initializes COM.
+#[must_use]
+pub fn largest_frame(bytes: &[u8]) -> Option<(u32, u32, u32)> {
+    if bytes.is_empty() || bytes.len() > 32 * 1024 * 1024 {
+        return None;
+    }
+    // SAFETY: Input bytes and all WIC objects remain alive during the queries.
+    unsafe {
+        let factory: IWICImagingFactory =
+            CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok()?;
+        let stream = SHCreateMemStream(Some(bytes))?;
+        let decoder = factory
+            .CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand)
+            .ok()?;
+        let count = decoder.GetFrameCount().ok()?.min(64);
+        (0..count)
+            .filter_map(|index| {
+                let frame = decoder.GetFrame(index).ok()?;
+                let (mut width, mut height) = (0, 0);
+                frame.GetSize(&mut width, &mut height).ok()?;
+                Some((index, width, height))
+            })
+            .max_by_key(|&(_, width, height)| u64::from(width) * u64::from(height))
+    }
+}
+
+/// Like `decode`, for the picture at `index` in the file.
+#[must_use]
+pub fn decode_frame(bytes: &[u8], index: u32, side: u32, max_pixels: u64) -> Option<IconImage> {
     if bytes.is_empty() || bytes.len() > 32 * 1024 * 1024 || !(1..=512).contains(&side) {
         return None;
     }
@@ -26,7 +59,7 @@ pub fn decode(bytes: &[u8], side: u32, max_pixels: u64) -> Option<IconImage> {
         let decoder = factory
             .CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand)
             .ok()?;
-        let frame = decoder.GetFrame(0).ok()?;
+        let frame = decoder.GetFrame(index).ok()?;
         let (mut width, mut height) = (0, 0);
         frame.GetSize(&mut width, &mut height).ok()?;
         if width == 0 || height == 0 || u64::from(width) * u64::from(height) > max_pixels {

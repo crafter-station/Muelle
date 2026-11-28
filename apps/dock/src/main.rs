@@ -8,6 +8,7 @@
 //! - `muelle --guard <pid>`       internal watchdog process
 //! - `muelle --usage-worker`      internal one-shot quota reader
 //! - `muelle --shell-worker`      internal one-shot shell action
+//! - `muelle --search-worker <pid>` internal search window process
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -16,6 +17,8 @@ mod app;
 mod appearance;
 mod assets;
 mod bluetooth;
+mod calendar;
+mod control_center;
 mod drop;
 mod edge_watch;
 mod flight;
@@ -32,9 +35,11 @@ mod multi_window_view;
 mod overlays;
 mod recovery;
 mod scene;
+mod search_worker;
 mod shell_work;
 mod strings;
 mod thumbnails;
+mod tray_menu;
 mod usage;
 mod weather;
 
@@ -97,6 +102,9 @@ fn main() -> Result<()> {
         [accessories::FLAG, visibility] => accessories::worker_main(Some(visibility)),
         [accessories::USB_FLAG] => accessories::usb_worker_main(),
         [shell_work::FLAG] => shell_work::worker_main(),
+        [muelle_search::FLAG, dock] => {
+            Ok(muelle_search::run(dock.parse().context("pid no válido")?)?)
+        }
         _ => bail!("uso: muelle [--quit | --restore | --autostart on|off]"),
     }
 }

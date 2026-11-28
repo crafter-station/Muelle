@@ -17,9 +17,17 @@ import {
   type WindowsPreferences,
   ICON_SIZE,
   MAX_MAGNIFIED_SIZE,
+  CONTROL_TILES,
+  type ControlTiles,
+  type IconProblem,
+  type MenuBarIcon,
+  type WeekStart,
+  menuIconPreview,
+  pickMenuIcon,
   checkUpdate,
   defaultConfig,
   getAutostart,
+  initialSection,
   openAnimationSettings,
   loadWindowsPreferences,
   installUpdate,
@@ -33,8 +41,9 @@ import {
   setAutostart,
 } from "./config";
 import { Card, Row, Segmented, Select, Slider, SubRow, Toggle, VisualChoices } from "./controls";
-import { DockDensityPreview, DockPreview, IslandPreview, MascotPreview, SettingIcon, SpeedPreview, ThemePreview } from "./visuals";
+import { DockDensityPreview, DockPreview, IslandPreview, MascotPreview, MenuIconPreview, SettingIcon, SpeedPreview, ThemePreview } from "./visuals";
 import { type SectionId, SectionIcon } from "./icons";
+import { SearchSection } from "./SearchSection";
 import { UpdateBanner } from "./UpdateBanner";
 import { WallpaperGallery } from "./WallpaperGallery";
 import { WeatherSettings } from "./WeatherSettings";
@@ -159,6 +168,13 @@ export function App() {
           .catch(() => alive && setUpdateState({ kind: "error" }));
       })
       .catch(() => alive && setFailed(true));
+    // The search window's "settings" result opens this app at its page.
+    initialSection()
+      .then((wanted) => { if (alive && wanted === "search") setSection("search"); })
+      .catch(() => { });
+    const shown = listen<string>("show-section", ({ payload }) => {
+      if (alive && payload === "search") setSection("search");
+    });
     getVersion()
       .then((current) => alive && setVersion(current))
       .catch(() => { });
@@ -190,6 +206,7 @@ export function App() {
       window.clearTimeout(timer.current);
       window.clearTimeout(resetTimer.current);
       progress.then((unlisten) => unlisten()).catch(() => { });
+      shown.then((unlisten) => unlisten()).catch(() => { });
       close.then((unlisten) => unlisten()).catch(() => { });
     };
   }, [flushSettings]);
@@ -250,10 +267,33 @@ export function App() {
     setConfirmingReset(false);
     defaultConfig()
       .then(({ pinned: _pinned, recent: _recent, shortcutsFolder: _folder, ...defaults }) =>
-        update(defaults),
+        // The folders and keywords the user added are theirs, too.
+        update(config?.search ? {
+          ...defaults,
+          search: {
+            ...defaults.search,
+            folders: config.search.folders,
+            excludedFolders: config.search.excludedFolders,
+            keywords: config.search.keywords,
+          },
+        } : defaults),
       )
       .catch(() => setFailed(true));
-  }, [confirmingReset, update]);
+  }, [config, confirmingReset, update]);
+
+  const [iconPreview, setIconPreview] = useState<string | null>(null);
+  const [iconProblem, setIconProblem] = useState<IconProblem | null>(null);
+  const iconFile = config?.menuBarIconFile;
+  useEffect(() => {
+    let alive = true;
+    setIconPreview(null);
+    if (iconFile) {
+      menuIconPreview(iconFile)
+        .then((picture) => { if (alive) setIconPreview(picture); })
+        .catch(() => { });
+    }
+    return () => { alive = false; };
+  }, [iconFile]);
 
   const appearance = config?.appearance ?? "auto";
   useEffect(() => {
@@ -274,6 +314,16 @@ export function App() {
       .then((target) => target && update({ menuBarClockTarget: target }))
       .catch(() => setFailed(true));
   };
+  const chooseMenuIcon = () => {
+    pickMenuIcon(config.menuBarIconFile ?? null, t.menuBarIconImages)
+      .then((file) => {
+        setIconProblem(null);
+        if (file) update({ menuBarIconFile: file });
+      })
+      .catch((code) => setIconProblem(ICON_PROBLEMS.find((problem) => problem === code) ?? "save"));
+  };
+  const menuIcon = config.menuBarIcon ?? "ring";
+  const iconShown = config.menuBarCircle ?? true;
   const ownMenuBarTheme = config.menuBarAppearance != null;
   const themeChoices = THEMES.map((theme) => ({
     value: theme,
@@ -711,7 +761,7 @@ export function App() {
                     onChange={(menuBarNotifications) => update({ menuBarNotifications })}
                   />
                 </SubRow>
-                <SubRow label={t.clockTarget} hint={config.menuBarClockTarget ?? t.clockTargetDefault} open={config.menuBar}>
+                <SubRow label={t.clockTarget} hint={config.menuBarClockTarget ?? ((config.calendar ?? true) ? t.clockTargetCalendar : t.clockTargetDefault)} open={config.menuBar}>
                   <div className="push-group">
                     {config.menuBarClockTarget ? (
                       <button type="button" className="push" onClick={() => update({ menuBarClockTarget: null })}>
@@ -724,7 +774,131 @@ export function App() {
                   </div>
                 </SubRow>
               </Card>
+              {config.menuBar ? (
+                <>
+                  <Card title={t.menuBarExtras}>
+                    <Row label={t.menuBarCircle}>
+                      <Toggle
+                        label={t.menuBarCircle}
+                        checked={config.menuBarCircle ?? true}
+                        onChange={(menuBarCircle) => update({ menuBarCircle })}
+                      />
+                    </Row>
+                    <SubRow label={t.menuBarIconStyle} stacked open={iconShown}>
+                      <VisualChoices<MenuBarIcon>
+                        label={t.menuBarIconStyle}
+                        hideLabel
+                        value={menuIcon}
+                        options={[
+                          { value: "ring", label: t.menuBarIconRing, preview: <MenuIconPreview icon="ring" /> },
+                          { value: "windows", label: t.menuBarIconWindows, preview: <MenuIconPreview icon="windows" /> },
+                          { value: "custom", label: t.menuBarIconCustom, preview: <MenuIconPreview icon="custom" picture={iconPreview} /> },
+                        ]}
+                        onChange={(menuBarIcon) => { setIconProblem(null); update({ menuBarIcon }); }}
+                      />
+                    </SubRow>
+                    <SubRow
+                      label={t.menuBarIconFile}
+                      hint={iconProblem ? `${t[ICON_PROBLEM_TEXTS[iconProblem]]} ${t.menuBarIconRules}` : t.menuBarIconRules}
+                      open={iconShown && menuIcon === "custom"}
+                    >
+                      <div className="push-group">
+                        {config.menuBarIconFile ? (
+                          <button type="button" className="push" onClick={() => { setIconProblem(null); update({ menuBarIconFile: null }); }}>
+                            {t.menuBarIconRemove}
+                          </button>
+                        ) : null}
+                        <button type="button" className="push" onClick={chooseMenuIcon}>
+                          {t.menuBarIconChoose}
+                        </button>
+                      </div>
+                    </SubRow>
+                    <SubRow label={t.menuBarIconAnimation} hint={t.menuBarIconAnimationHint} open={iconShown}>
+                      <Toggle
+                        label={t.menuBarIconAnimation}
+                        checked={config.menuBarIconAnimation ?? true}
+                        onChange={(menuBarIconAnimation) => update({ menuBarIconAnimation })}
+                      />
+                    </SubRow>
+                    <SubRow label={t.menuBarCircleMenu} hint={t.menuBarCircleMenuHint} open={config.menuBarCircle ?? true}>
+                      <Toggle
+                        label={t.menuBarCircleMenu}
+                        checked={config.menuBarCircleMenu ?? true}
+                        onChange={(menuBarCircleMenu) => update({ menuBarCircleMenu })}
+                      />
+                    </SubRow>
+                    <Row label={t.trayMenu} hint={t.trayMenuHint}>
+                      <Toggle
+                        label={t.trayMenu}
+                        checked={config.trayMenu ?? true}
+                        onChange={(trayMenu) => update({ trayMenu })}
+                      />
+                    </Row>
+                    <Row label={t.menuBarDynamicArrow} hint={t.menuBarDynamicArrowHint}>
+                      <Toggle
+                        label={t.menuBarDynamicArrow}
+                        checked={config.menuBarDynamicArrow ?? true}
+                        onChange={(menuBarDynamicArrow) => update({ menuBarDynamicArrow })}
+                      />
+                    </Row>
+                    <Row label={t.networkMenu} hint={t.networkMenuHint}>
+                      <Toggle
+                        label={t.networkMenu}
+                        checked={config.networkMenu ?? true}
+                        onChange={(networkMenu) => update({ networkMenu })}
+                      />
+                    </Row>
+                    <Row label={t.menuBarCalendar} hint={t.menuBarCalendarHint}>
+                      <Toggle
+                        label={t.menuBarCalendar}
+                        checked={config.calendar ?? true}
+                        onChange={(calendar) => update({ calendar })}
+                      />
+                    </Row>
+                    <SubRow label={t.weekStart} open={config.calendar ?? true}>
+                      <Select<WeekStart>
+                        label={t.weekStart}
+                        value={config.calendarWeekStart ?? "auto"}
+                        options={[
+                          { value: "auto", label: t.weekStartAuto },
+                          { value: "monday", label: t.weekStartMonday },
+                          { value: "sunday", label: t.weekStartSunday },
+                          { value: "saturday", label: t.weekStartSaturday },
+                        ]}
+                        onChange={(calendarWeekStart) => update({ calendarWeekStart })}
+                      />
+                    </SubRow>
+                  </Card>
+                  <Card title={t.controlCenterGroup}>
+                    <Row label={t.controlCenter} hint={t.controlCenterHint}>
+                      <Toggle
+                        label={t.controlCenter}
+                        checked={config.controlCenter ?? true}
+                        onChange={(controlCenter) => update({ controlCenter })}
+                      />
+                    </Row>
+                    {CONTROL_TILES.map((tile) => (
+                      <SubRow key={tile} label={t[TILE_LABELS[tile]]} open={config.controlCenter ?? true}>
+                        <Toggle
+                          label={t[TILE_LABELS[tile]]}
+                          checked={config.controlCenterTiles?.[tile] ?? true}
+                          onChange={(shown) => update({
+                            controlCenterTiles: { ...(config.controlCenterTiles ?? ALL_TILES), [tile]: shown },
+                          })}
+                        />
+                      </SubRow>
+                    ))}
+                  </Card>
+                </>
+              ) : null}
             </>
+          ) : section === "search" ? (
+            <SearchSection
+              t={t}
+              search={config.search}
+              onChange={(patch) => update({ search: { ...config.search, ...patch } })}
+              flush={flushSettings}
+            />
           ) : (
             <>
               <Card>
@@ -818,7 +992,36 @@ function updateHint(t: Texts, state: UpdateState, version: string): string {
   }
 }
 
-const SECTIONS: readonly SectionId[] = ["appearance", "dock", "windows", "menubar", "system"];
+const SECTIONS: readonly SectionId[] = ["appearance", "dock", "windows", "menubar", "search", "system"];
+
+const ALL_TILES = Object.fromEntries(CONTROL_TILES.map((tile) => [tile, true])) as ControlTiles;
+
+const ICON_PROBLEMS: readonly IconProblem[] = ["format", "size", "square", "dimensions", "save"];
+/** What each refusal says. */
+const ICON_PROBLEM_TEXTS = {
+  format: "menuBarIconBadFormat",
+  size: "menuBarIconTooBig",
+  square: "menuBarIconNotSquare",
+  dimensions: "menuBarIconBadSize",
+  save: "menuBarIconSaveFailed",
+} as const satisfies Record<IconProblem, keyof Texts>;
+
+/** Each tile's name among the texts. */
+const TILE_LABELS = {
+  network: "tileNetwork",
+  media: "tileMedia",
+  bluetooth: "tileBluetooth",
+  nearbySharing: "tileNearbySharing",
+  focus: "tileFocus",
+  taskView: "tileTaskView",
+  cast: "tileCast",
+  display: "tileDisplay",
+  sound: "tileSound",
+  darkMode: "tileDarkMode",
+  calculator: "tileCalculator",
+  timer: "tileTimer",
+  screenshot: "tileScreenshot",
+} as const satisfies Record<keyof ControlTiles, keyof Texts>;
 
 const THEMES: readonly Appearance[] = ["auto", "light", "dark", "frosted", "clear", "liquidGlass"];
 
@@ -853,6 +1056,8 @@ function sectionTitle(t: Texts, section: SectionId): string {
       return t.windows;
     case "menubar":
       return t.menuBar;
+    case "search":
+      return t.search;
     case "system":
       return t.system;
   }

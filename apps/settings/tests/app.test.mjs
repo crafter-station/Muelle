@@ -35,7 +35,21 @@ const base = {
   showOtherWorkspaces: false,
   menuBarIslandStyle: "notch", checkUpdates: false, appearance: "auto",
   pinned: [], recent: [], shortcutsFolder: null,
+  search: {
+    enabled: true, hotkey: "Alt+Space", monitor: "mouse", keepQuery: true, closeOnBlur: true,
+    width: 680, position: 17, maxRows: 10, compact: false, headers: true,
+    showApps: true, showSystemSettings: true, showFolders: true, showFiles: true, showContents: true,
+    showDefinitions: true, showCalculator: true, showAddresses: true, showWebSearch: true,
+    contentResults: 3, learn: true,
+    standardFolders: { desktop: true, documents: true, downloads: true, pictures: true, music: true, videos: true },
+    folders: [], excludedFolders: [], hiddenFiles: false, refreshMinutes: 2,
+    engine: "google", customSearch: "", keywordsEnabled: true,
+    keywords: [{ word: "yt", url: "https://www.youtube.com/results?search_query={query}" }],
+  },
 };
+const TILE_KEYS = ["tileNetwork", "tileMedia", "tileBluetooth", "tileNearbySharing", "tileFocus",
+  "tileTaskView", "tileCast", "tileDisplay", "tileSound", "tileDarkMode", "tileCalculator",
+  "tileTimer", "tileScreenshot"];
 const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 function* elements(node) {
   if (Array.isArray(node)) { for (const child of node) yield* elements(child); }
@@ -49,7 +63,7 @@ function fixture(section = "menubar", config = {}, save = async () => {}, galler
   const gallery = section === "gallery";
   const weather = section === "weather";
   const weatherCalls = [];
-  const wallpaperCalls = [], wallpaperPreviews = [], clockPicks = [], mascotPreviews = [];
+  const wallpaperCalls = [], wallpaperPreviews = [], clockPicks = [], mascotPreviews = [], iconPicks = [];
   const browser = {
     addEventListener(event, callback) { assert.ok(!listeners.has(event)); listeners.set(event, callback); },
     removeEventListener(event) { listeners.delete(event); },
@@ -86,10 +100,13 @@ function fixture(section = "menubar", config = {}, save = async () => {}, galler
         case "open_weather_attribution": weatherCalls.push("source"); return;
         case "get_config": return { ...loaded };
         case "get_autostart": return false;
+        case "initial_section": return galleryNative.section ?? null;
         case "windows_preferences": return { animations: true };
         case "wallpaper_preview": return null;
         case "wallpaper_selection": return typeof galleryNative.selection === "function" ? galleryNative.selection() : galleryNative.selection ?? null;
         case "apply_wallpaper": wallpaperCalls.push({ ...args }); return galleryNative.apply?.(args.id);
+        case "menu_icon_preview": return null;
+        case "pick_menu_icon": iconPicks.push({ ...args }); if (galleryNative.iconProblem) throw galleryNative.iconProblem; return galleryNative.icon ?? null;
         case "pick_clock_target": clockPicks.push({ ...args }); return galleryNative.clockTarget ?? null;
         case "default_config": return { ...base, autoHide: false, smartHide: true };
         case "set_config": calls.push({ ...args.patch }); mascotPreviews.push(args.previewMascot ?? false); return save(args.patch);
@@ -123,7 +140,7 @@ function fixture(section = "menubar", config = {}, save = async () => {}, galler
   }
   function find(predicate) { const node = [...elements(render())].find(predicate); assert.ok(node); return node; }
   return {
-    calls, timers, render, themes: nativeWindow.themes, wallpaperCalls, wallpaperPreviews, clockPicks, mascotPreviews, weatherCalls,
+    calls, timers, render, module: (name) => load(path.join(source, name)), themes: nativeWindow.themes, wallpaperCalls, wallpaperPreviews, clockPicks, mascotPreviews, iconPicks, weatherCalls,
     external(patch) { Object.assign(loaded, patch); },
     async focus() { listeners.get("focus")?.(); await settle(); },
     async mount() { render(); const cleanup = effects.map((effect) => effect()); await settle(); return () => cleanup.forEach((fn) => fn?.()); },
@@ -138,7 +155,7 @@ function fixture(section = "menubar", config = {}, save = async () => {}, galler
 }
 
 test("each section renders only its own controls, in every language and visibility state", () => {
-  const markers = { appearance: "themeHint", dock: "size", windows: "genie", menubar: "menuBarShow", system: "autostart" };
+  const markers = { appearance: "themeHint", dock: "size", windows: "genie", menubar: "menuBarShow", search: "searchEnabledHint", system: "autostart" };
   for (const language of Object.keys(texts)) for (const menuBar of [true, false]) {
     for (const section of Object.keys(markers)) {
       const view = fixture(section, { language, menuBar });
@@ -228,7 +245,10 @@ test("a late initial wallpaper read cannot overwrite an explicit successful choi
 test("Bluetooth has no duplicate setting even with an old saved visibility override", () => {
   for (const language of Object.keys(texts)) for (const menuBarBluetooth of [false, true]) {
     const view = fixture("menubar", { language, menuBar: true, menuBarBluetooth });
-    assert.doesNotMatch(renderToStaticMarkup(view.body()), /Bluetooth/i);
+    // The only one is the control center's tile.
+    const controls = [...elements(view.body())].filter((node) => "checked" in node.props
+      && /Bluetooth|蓝牙|ब्लूटूथ|بلوتوث|ব্লুটুথ/i.test(node.props.label));
+    assert.deepEqual(controls.map((node) => node.props.label), [texts[language].tileBluetooth]);
   }
 });
 
@@ -243,7 +263,12 @@ test("retired Windows status-item overrides expose no controls and create no sav
         texts[language].menuBarAllDisplays,
         texts[language].menuBarMusic, texts[language].aiUsage,
         texts[language].accessoryBattery, texts[language].menuBarSystemMonitor,
-        texts[language].menuBarNotifications]);
+        texts[language].menuBarNotifications, texts[language].menuBarCircle, texts[language].menuBarIconAnimation,
+        texts[language].menuBarCircleMenu,
+        texts[language].trayMenu,
+        texts[language].menuBarDynamicArrow, texts[language].networkMenu, texts[language].menuBarCalendar,
+        texts[language].controlCenter,
+        ...TILE_KEYS.map((key) => texts[language][key])]);
       view.fire(60);
       await settle();
       assert.deepEqual(view.calls, []);
@@ -252,10 +277,92 @@ test("retired Windows status-item overrides expose no controls and create no sav
   }
 });
 
+test("menu bar extras start on and each saves only its own choice", async () => {
+  const view = fixture("menubar");
+  const unmount = await view.mount();
+  try {
+    const checked = (label) => [...elements(view.body())].find((node) =>
+      node.props.label === label && "checked" in node.props).props.checked;
+    for (const key of ["menuBarCircle", "menuBarIconAnimation", "menuBarCircleMenu", "trayMenu", "menuBarDynamicArrow", "networkMenu", "calendar", "controlCenter"]) {
+      const text = texts.en[key === "calendar" ? "menuBarCalendar" : key];
+      assert.equal(checked(text), true, key);
+      view.change(text, false);
+      view.fire(60);
+      await settle();
+      assert.deepEqual(view.calls.at(-1), { [key]: false });
+    }
+    const tiles = () => view.calls.at(-1).controlCenterTiles;
+    view.change(texts.en.tileCalculator, false);
+    view.fire(60);
+    await settle();
+    view.change(texts.en.tileTimer, false);
+    view.fire(60);
+    await settle();
+    // A second choice keeps the first.
+    assert.equal(tiles().calculator, false);
+    assert.equal(tiles().timer, false);
+    assert.equal(tiles().network, true);
+    assert.equal(Object.keys(tiles()).length, TILE_KEYS.length);
+  } finally { unmount(); }
+});
+
+test("the menu bar icon starts as the ring and a refused picture says why without saving", async () => {
+  const native = { icon: "C:\\kept\\icon-1.png" };
+  const view = fixture("menubar", {}, async () => {}, native);
+  const unmount = await view.mount();
+  try {
+    const style = () => [...elements(view.body())].find((node) =>
+      node.props.label === texts.en.menuBarIconStyle && "options" in node.props);
+    // The clock has a button of the same name above it.
+    const choose = () => [...elements(view.body())].filter((node) => node.type === "button"
+      && node.props.children === texts.en.menuBarIconChoose).at(-1).props.onClick();
+    assert.equal(style().props.value, "ring");
+    assert.deepEqual(style().props.options.map((option) => option.value), ["ring", "windows", "custom"]);
+    const rules = () => renderToStaticMarkup(view.body());
+    assert.ok(rules().includes("up to 1 MB"), "the size and format rules are shown");
+    view.change(texts.en.menuBarIconStyle, "custom");
+    view.fire(60);
+    await settle();
+    assert.deepEqual(view.calls.at(-1), { menuBarIcon: "custom" });
+    choose();
+    await settle();
+    view.fire(60);
+    await settle();
+    assert.deepEqual(view.calls.at(-1), { menuBarIconFile: native.icon });
+    const saved = view.calls.length;
+    for (const [code, key] of [["square", "menuBarIconNotSquare"], ["size", "menuBarIconTooBig"], ["unknown", "menuBarIconSaveFailed"]]) {
+      native.iconProblem = code;
+      choose();
+      await settle();
+      assert.ok(rules().includes(texts.en[key]), code);
+    }
+    view.fire(60);
+    await settle();
+    assert.equal(view.calls.length, saved);
+    assert.equal(view.iconPicks.at(-1).current, native.icon);
+  } finally { unmount(); }
+});
+
+test("the calendar's week can start on a chosen day, which saves on its own", async () => {
+  const view = fixture("menubar");
+  const unmount = await view.mount();
+  try {
+    const start = () => [...elements(view.body())].find((node) =>
+      node.props.label === texts.en.weekStart && "options" in node.props);
+    assert.equal(start().props.value, "auto");
+    // With the calendar on, it is what the clock is said to open.
+    assert.ok(renderToStaticMarkup(view.body()).includes(texts.en.clockTargetCalendar));
+    view.change(texts.en.weekStart, "sunday");
+    view.fire(60);
+    await settle();
+    assert.deepEqual(view.calls, [{ calendarWeekStart: "sunday" }]);
+  } finally { unmount(); }
+});
+
 test("the notifications button is opt-in and the clock target can be chosen and reset", async () => {
   const picked = "C:\\Apps\\Calendar.lnk";
   const native = { clockTarget: picked };
-  const view = fixture("menubar", { menuBarNotifications: undefined, menuBarClockTarget: undefined }, async () => {}, native);
+  const view = fixture("menubar", { menuBarNotifications: undefined, menuBarClockTarget: undefined, calendar: false }, async () => {}, native);
   const bell = () => [...elements(view.body())].find((node) =>
     node.props.label === texts.en.menuBarNotifications && "checked" in node.props).props.checked;
   const markup = () => renderToStaticMarkup(view.body());
@@ -697,6 +804,55 @@ test("language uses one dropdown and changing it preserves other preferences", a
   }
 });
 
+test("search settings save the whole search group and leave the dock's alone", async () => {
+  const view = fixture("search");
+  const search = () => [...elements(view.body())].find((node) => node.props.search && node.props.onChange);
+  search().props.onChange({ maxRows: 6 });
+  view.fire(60); await settle();
+  assert.deepEqual(view.calls.at(-1), { search: { ...base.search, maxRows: 6 } });
+});
+
+test("reset keeps the folders and keywords the user added to search", async () => {
+  const added = { ...base.search, width: 900, folders: ["D:\\Work"], excludedFolders: ["D:\\Old"], keywords: [] };
+  const view = fixture("system", { search: added });
+  view.button(texts.en.resetButton);
+  view.button(texts.en.resetConfirm);
+  await settle(); view.fire(60); await settle();
+  const saved = view.calls.at(-1).search;
+  assert.equal(saved.width, base.search.width);
+  assert.deepEqual(saved.folders, added.folders);
+  assert.deepEqual(saved.excludedFolders, added.excludedFolders);
+  assert.deepEqual(saved.keywords, []);
+});
+
+test("Settings opens at the search page only when asked to", async () => {
+  for (const [wanted, title] of [["search", "search"], ["elsewhere", "dock"], [null, "dock"]]) {
+    const view = fixture("dock", {}, async () => {}, { section: wanted });
+    const cleanup = await view.mount();
+    assert.equal(view.body().key, title, String(wanted));
+    cleanup();
+  }
+});
+
+test("a recorded shortcut needs Ctrl, Alt or Win and a nameable key", () => {
+  const view = fixture("search");
+  view.render();
+  const { shortcutFrom, keywordFrom } = view.module("SearchSection.tsx");
+  const press = (keyCode, ...held) => shortcutFrom({
+    keyCode, ctrlKey: held.includes("ctrl"), altKey: held.includes("alt"),
+    shiftKey: held.includes("shift"), metaKey: held.includes("win"),
+  });
+  assert.equal(press(32, "alt"), "Alt+Space");
+  assert.equal(press(75, "shift", "ctrl"), "Ctrl+Shift+K");
+  assert.equal(press(123, "win"), "Win+F12");
+  assert.equal(press(18, "alt"), undefined);
+  assert.equal(press(65, "shift"), null);
+  assert.equal(press(188, "ctrl"), null);
+  assert.equal(press(115, "alt"), null);
+  assert.deepEqual(keywordFrom(" YT ", "https://a.com/{query}"), { word: "yt", url: "https://a.com/{query}" });
+  assert.equal(keywordFrom("run", "C:\\x.exe {query}"), null);
+  assert.equal(keywordFrom("in:", "https://a.com/{query}"), null);
+});
 
 test("weather is opt-in and ignores a late location after disabling", async () => {
   let resolve;

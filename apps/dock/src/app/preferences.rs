@@ -3,7 +3,7 @@
 use std::{env, path::Path};
 
 use anyhow::{Context, Result};
-use muelle_config::{Config, DockGroup};
+use muelle_config::{Config, DockGroup, MenuBarIcon};
 use muelle_core::roster::{Group, Roster};
 use muelle_shell::{
     pins::{app_exists, taskbar_pins, taskbar_pins_if_readable},
@@ -156,6 +156,9 @@ impl App {
     pub(super) fn reload_config(&mut self) -> Result<()> {
         self.close_preview();
         self.close_group_view();
+        self.drop_control_center();
+        self.drop_tray_menu();
+        self.drop_calendar();
         let Ok(Some(saved)) = muelle_config::load(&muelle_config::default_path()) else {
             return Ok(());
         };
@@ -188,9 +191,16 @@ impl App {
             || config.smart_hide != self.config.smart_hide;
         let workspaces_changed = config.show_other_workspaces != self.config.show_other_workspaces;
         let moved = config.dock_position != self.config.dock_position;
+        // The search window shares the theme and the language.
+        let search_changed = config.search != self.config.search
+            || config.appearance != self.config.appearance
+            || config.language != self.config.language;
         apply_explorer_pin(&mut self.roster, config.pin_explorer);
         self.slide.omega = config.dock_auto_hide_speed.omega();
         self.config = config;
+        if search_changed {
+            crate::search_worker::sync(self.config.search.enabled);
+        }
         if moved {
             // A hidden dock comes out of its new edge on every display.
             self.apply_edge_settings();
@@ -204,6 +214,7 @@ impl App {
         }
         self.sync_thumbnails();
         self.apply_menu_bar_setting();
+        self.sync_tray_host();
         self.update_menu_bar_app()?;
         self.calm_windows();
         self.refresh()?;
@@ -314,8 +325,16 @@ impl App {
             island_style: self.config.menu_bar_island_style,
             notifications: self.config.menu_bar_notifications,
             system_monitor: self.config.menu_bar_system_monitor,
+            circle: self.config.menu_bar_circle,
+            circle_menu: self.config.menu_bar_circle_menu,
+            icon: self.config.menu_bar_icon,
+            icon_animation: self.config.menu_bar_icon_animation,
+            dynamic_arrow: self.config.menu_bar_dynamic_arrow,
         };
         if !self.config.menu_bar {
+            self.drop_control_center();
+            self.drop_tray_menu();
+            self.drop_calendar();
             self.menubar = None;
         } else if self.menubar.is_none() {
             self.menubar = MenuBar::create(
@@ -336,6 +355,14 @@ impl App {
                 .and_then(|()| bar.set_usage_enabled(&self.gfx, self.config.ai_usage))
                 .and_then(|()| bar.set_media_enabled(&self.gfx, self.config.menu_bar_music))
                 .and_then(|()| bar.set_widgets(&self.gfx, widgets))
+                .and_then(|()| {
+                    let picture = self
+                        .config
+                        .menu_bar_icon_file
+                        .as_deref()
+                        .filter(|_| self.config.menu_bar_icon == MenuBarIcon::Custom);
+                    bar.set_picture(&self.gfx, picture)
+                })
                 .and_then(|()| {
                     let covered = primary_monitor()
                         .is_some_and(|monitor| tracker::foreground_is_fullscreen(monitor.screen));
@@ -374,7 +401,9 @@ impl App {
 
     /// Shows the name of the app in front, as the macOS menu bar does.
     pub(super) fn update_menu_bar_app(&mut self) -> Result<()> {
-        if self.menubar.is_none() {
+        // One of Muelle's own menus holds the focus: the app in front, whose
+        // name stays up as on macOS, has not changed.
+        if self.menubar.is_none() || self.menu_open {
             return Ok(());
         }
         let front = tracker::foreground_window();

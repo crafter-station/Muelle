@@ -16,6 +16,7 @@ windows-core = "0.62"
 windows-numerics = "0.3"
 muelle-config = { path = "crates/muelle-config" }
 muelle-core = { path = "crates/muelle-core" }
+muelle-search = { path = "crates/muelle-search" }
 muelle-shell = { path = "crates/muelle-shell" }
 
 [workspace.lints.clippy]

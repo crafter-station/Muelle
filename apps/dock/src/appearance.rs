@@ -10,37 +10,8 @@
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use muelle_config::Appearance;
+pub use muelle_config::{Look, Material, resolve};
 use muelle_shell::system::{transparency_enabled, uses_light_theme};
-
-/// What the glass is made of.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Material {
-    /// The dock as it always was: the light or dark macOS glass.
-    Standard,
-    Frosted,
-    Clear,
-    LiquidGlass,
-}
-
-#[cfg(test)]
-impl Material {
-    pub const ALL: [Self; 4] = [
-        Self::Standard,
-        Self::Frosted,
-        Self::Clear,
-        Self::LiquidGlass,
-    ];
-}
-
-/// What a surface is drawn for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Look {
-    pub material: Material,
-    /// Light surfaces with dark content; otherwise the reverse.
-    pub light: bool,
-    /// See `system::transparency_enabled`: without it every material is solid.
-    pub glass: bool,
-}
 
 static CHOICE: AtomicU8 = AtomicU8::new(Appearance::Auto as u8);
 /// The menu bar's own theme, or `SAME` for the dock's.
@@ -79,23 +50,6 @@ fn decode(stored: u8) -> Appearance {
         .into_iter()
         .find(|choice| *choice as u8 == stored)
         .unwrap_or_default()
-}
-
-#[must_use]
-pub fn resolve(choice: Appearance, system_light: bool, glass: bool) -> Look {
-    let (material, light) = match choice {
-        Appearance::Auto => (Material::Standard, system_light),
-        Appearance::Light => (Material::Standard, true),
-        Appearance::Dark => (Material::Standard, false),
-        Appearance::Frosted => (Material::Frosted, system_light),
-        Appearance::Clear => (Material::Clear, false),
-        Appearance::LiquidGlass => (Material::LiquidGlass, system_light),
-    };
-    Look {
-        material,
-        light,
-        glass,
-    }
 }
 
 fn look_of(choice: Appearance) -> Look {

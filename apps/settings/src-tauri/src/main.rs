@@ -7,6 +7,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod search;
 mod wallpapers;
 mod weather;
 mod weather_cities;
@@ -224,32 +225,74 @@ async fn open_repository() -> Result<(), String> {
 async fn wallpaper_preview(window: tauri::WebviewWindow) -> Option<String> {
     let hwnd = window.hwnd().ok()?.0 as isize;
     tauri::async_runtime::spawn_blocking(move || {
-        use base64::Engine;
-        let image = muelle_shell::imagery::wallpaper_preview(hwnd)?;
-        let mut rgba = image.bgra;
-        for pixel in rgba.as_chunks_mut::<4>().0 {
-            // Wallpaper decodes are opaque in normal use. Unpremultiply when
-            // a PNG wallpaper does carry alpha, before encoding straight RGBA.
-            let alpha = u32::from(pixel[3]);
-            pixel.swap(0, 2);
-            for value in &mut pixel[..3] {
-                *value = (u32::from(*value) * 255)
-                    .checked_div(alpha)
-                    .unwrap_or(0)
-                    .min(255) as u8;
-            }
+        data_uri(muelle_shell::imagery::wallpaper_preview(hwnd)?)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// A picture as a data URI, which the window may show.
+fn data_uri(image: muelle_shell::icons::IconImage) -> Option<String> {
+    use base64::Engine;
+    let mut rgba = image.bgra;
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        // The pixels are premultiplied; PNG keeps straight color and alpha.
+        let alpha = u32::from(pixel[3]);
+        pixel.swap(0, 2);
+        for value in &mut pixel[..3] {
+            *value = (u32::from(*value) * 255)
+                .checked_div(alpha)
+                .unwrap_or(0)
+                .min(255) as u8;
         }
-        let mut bytes = Vec::new();
-        {
-            let mut encoder = png::Encoder::new(&mut bytes, image.width, image.height);
-            encoder.set_color(png::ColorType::Rgba);
-            encoder.set_depth(png::BitDepth::Eight);
-            encoder.write_header().ok()?.write_image_data(&rgba).ok()?;
-        }
-        Some(format!(
-            "data:image/png;base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        ))
+    }
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, image.width, image.height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header().ok()?.write_image_data(&rgba).ok()?;
+    }
+    Some(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
+/// Asks for a picture for the menu bar's icon and keeps a copy of it, whose
+/// path it returns; `None` if the user cancels. A picture that breaks the
+/// rules shown beside the button is refused with its `Problem` code.
+#[tauri::command]
+async fn pick_menu_icon(
+    window: tauri::WebviewWindow,
+    current: Option<String>,
+    images: String,
+) -> Result<Option<String>, String> {
+    let owner = window
+        .hwnd()
+        .map(|hwnd| hwnd.0 as isize)
+        .unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(picked) = muelle_shell::folder::pick_image(owner, &images) else {
+            return Ok(None);
+        };
+        muelle_shell::menu_icon::import(
+            std::path::Path::new(&picked),
+            current.as_deref().map(std::path::Path::new),
+        )
+        .map(|copy| Some(copy.to_string_lossy().into_owned()))
+        .map_err(|problem| problem.code().to_owned())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// The chosen picture, to show in the window.
+#[tauri::command]
+async fn menu_icon_preview(path: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        data_uri(muelle_shell::menu_icon::load(std::path::Path::new(&path), 64).ok()?)
     })
     .await
     .ok()
@@ -345,10 +388,15 @@ fn main() {
     let result = tauri::Builder::default()
         // First, so a second launch exits before doing anything else.
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            let section = search::section_from(args.iter().cloned());
             // The open window checks for updates itself; a background update
             // started meanwhile has nothing to do.
             if !args.iter().any(|arg| arg == UPDATE_ARG) {
                 show_window(app);
+                // A window just opened reads the section for itself.
+                if let Some(section) = section {
+                    let _ = app.emit("show-section", section);
+                }
             }
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -373,6 +421,8 @@ fn main() {
             open_animation_settings,
             pick_folder,
             pick_clock_target,
+            pick_menu_icon,
+            menu_icon_preview,
             check_update,
             install_update,
             open_release_notes,
@@ -384,7 +434,12 @@ fn main() {
             weather::open_weather_attribution,
             wallpaper_preview,
             wallpapers::wallpaper_selection,
-            wallpapers::apply_wallpaper
+            wallpapers::apply_wallpaper,
+            search::search_status,
+            search::suspend_search_hotkey,
+            search::rebuild_search_index,
+            search::clear_search_history,
+            search::initial_section
         ])
         .run(tauri::generate_context!());
     if let Err(error) = result {

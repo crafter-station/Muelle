@@ -44,6 +44,13 @@
 - Appearance: follow Windows, or pick Light, Dark, Frosted glass, Clear or
   Aurora; plus an offline wallpaper gallery.
 - An optional system monitor in the menu bar: CPU, memory and network speed.
+- A search window, opened with Alt+Space or the menu bar's Search button:
+  apps, Windows settings, files by name and by content (through the Windows
+  Search index), a calculator, web and keyword searches, and offline
+  definitions. It follows the dock's theme and language; configure it, or turn
+  it off, in Settings → Search. Definitions are English only and need the
+  [WordNet 3.1](https://wordnet.princeton.edu/) dictionary: from a copy of
+  this repository, run `scripts\Get-Dictionary.ps1` once.
 - A pixel-art mascot for moments worth it: AI plans, the battery, the network,
   the recycle bin and a daily hello. Pick Claude's crab, a cat, a fox, a
   capybara, a mochi or a girl; an optional break reminder is off by default.
@@ -54,6 +61,36 @@
   the Search and Task View buttons if enabled on the Windows taskbar. The
   Widgets button is off by default and can be enabled in Settings. With more
   than one display, each display shows the bar.
+- A control center under the menu bar's button, as on macOS: Wi-Fi and
+  Bluetooth switches, what is playing, brightness (monitors that support
+  DDC/CI) and volume sliders, dark mode, and shortcuts to nearby sharing,
+  Focus, Task View, casting, the calculator, the clock and screenshots. A
+  click switches Wi-Fi, Bluetooth, Do Not Disturb, dark mode, mute or playback.
+  The menu bar's network icon opens the Wi-Fi menu by itself.
+  Hold a tile (or right-click it) for more: Wi-Fi networks, paired Bluetooth
+  devices, sound outputs, the player, virtual desktops, screen modes and
+  capture options. Windows lists the networks in range only with location
+  access on; without it the menu shows the connected and saved networks.
+- A tray menu in the same style under the menu bar's arrow, listing the
+  notification area's icons; left and right clicks reach each app, and its
+  menu opens beside its row with the tray menu still open. Windows
+  offers no list of them, so Muelle sits in front of the hidden taskbar and
+  passes on what apps send it. An app that ignores the request to add its
+  icon again appears after it is restarted; the menu's last row opens
+  Windows' own tray menu meanwhile. The arrow points down while the menu is
+  closed and up while it is open.
+- A calendar under the menu bar's date: arrows or the wheel change the month,
+  and its round button opens the notification center, the calendar app and date
+  settings.
+- A hollow circle before the app's name that opens a menu like macOS's Apple
+  menu: about this PC, settings, recent apps, Force Quit, sleep, restart, shut
+  down, lock and sign out, asking first before anything that can lose work.
+  The ring fills as the menu springs out of it. It can be Windows' logo or your
+  own picture instead: PNG (best, transparent), ICO, JPG or BMP; square, 32 to
+  1024 pixels, up to 1 MB. Settings → Menu bar turns it off, as well as
+  the arrow's movement, the tray menu, the Wi-Fi menu and the control center
+  (their buttons then open Windows' own), and chooses the control center's
+  tiles.
 - A curved island in the menu bar for usage limits from Claude Code, Codex,
   OpenCode Go, Z.ai GLM Coding Plan, Gemini CLI, and Antigravity. Z.ai shows
   its 5-hour and weekly limits; Gemini Pro and Flash quotas appear separately
@@ -146,6 +183,7 @@ pnpm build
 | `crates/muelle-core` | Platform-independent layout and animation logic |
 | `crates/muelle-shell` | Windows shell integration |
 | `crates/muelle-config` | Shared settings and persistence |
+| `crates/muelle-search` | Search window, run by the dock as a process of its own |
 | `muelle` | Astro website |
 
 ## Privacy
@@ -183,5 +221,10 @@ Weather data: [Open-Meteo](https://open-meteo.com/) · location search:
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 Temperatures are rounded and hourly values grouped for display.
 Automatic city names: [BigDataCloud](https://www.bigdatacloud.com/docs/free-api/free-reverse-geocode-to-city-api).
+
+Search happens on your PC: what you type is not sent anywhere, and a web search
+opens your browser only when you choose that result. What you open from it is
+remembered in `%APPDATA%\Muelle\search-history.tsv` to rank it higher; turn that
+off, or clear it, in Settings → Search.
 
 Details: [muelle.crafter.run/privacy](https://muelle.crafter.run/privacy).

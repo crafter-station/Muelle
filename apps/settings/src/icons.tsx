@@ -6,13 +6,14 @@
 
 import type { ReactNode } from "react";
 
-export type SectionId = "appearance" | "dock" | "windows" | "menubar" | "system";
+export type SectionId = "appearance" | "dock" | "windows" | "menubar" | "search" | "system";
 
 const TILES: Record<SectionId, [string, string]> = {
   appearance: ["#5c5c62", "#1c1c1e"],
   dock: ["#4aa3ff", "#0a6cf0"],
   windows: ["#b57bff", "#7d3ff0"],
   menubar: ["#ff9f45", "#f0640a"],
+  search: ["#4fd08a", "#17944f"],
   system: ["#a1a1a6", "#6e6e73"],
 };
 
@@ -48,6 +49,13 @@ const GLYPHS: Record<SectionId, ReactNode> = {
       <rect x="4" y="5" width="16" height="3.6" rx="1.6" fill="#fff" />
       <circle cx="16.8" cy="6.8" r="0.9" fill="#f0640a" />
     </>
+  ),
+  // A magnifying glass.
+  search: (
+    <g fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round">
+      <circle cx="10.5" cy="10.5" r="4.8" />
+      <path d="m14.2 14.2 4.3 4.3" />
+    </g>
   ),
   // A gear.
   system: (

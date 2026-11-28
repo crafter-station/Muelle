@@ -2259,6 +2259,7 @@ dependencies = [
  "chrono",
  "muelle-config",
  "muelle-core",
+ "muelle-search",
  "muelle-shell",
  "muelle-weather",
  "png",
@@ -2287,6 +2288,16 @@ name = "muelle-core"
 version = "0.1.26"
 
 [[package]]
+name = "muelle-search"
+version = "0.1.26"
+dependencies = [
+ "muelle-config",
+ "muelle-shell",
+ "windows",
+ "windows-numerics",
+]
+
+[[package]]
 name = "muelle-settings"
 version = "0.1.26"
 dependencies = [
@@ -2311,6 +2322,7 @@ dependencies = [
 name = "muelle-shell"
 version = "0.1.26"
 dependencies = [
+ "muelle-config",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

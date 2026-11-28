@@ -22,10 +22,10 @@ use windows::{
             Controls::TTM_POP,
             Shell::{ABM_GETSTATE, ABM_SETSTATE, ABS_AUTOHIDE, APPBARDATA, SHAppBarMessage},
             WindowsAndMessaging::{
-                FindWindowExW, FindWindowW, GA_ROOT, GW_OWNER, GWL_EXSTYLE, GetAncestor,
-                GetLayeredWindowAttributes, GetWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
-                IsWindow, LWA_ALPHA, PostMessageW, SetLayeredWindowAttributes, SetWindowLongPtrW,
-                WS_EX_LAYERED, WS_EX_TRANSPARENT,
+                FindWindowExW, GA_ROOT, GW_OWNER, GWL_EXSTYLE, GetAncestor,
+                GetLayeredWindowAttributes, GetPropW, GetWindow, GetWindowLongPtrW,
+                GetWindowThreadProcessId, IsWindow, LWA_ALPHA, PostMessageW,
+                SetLayeredWindowAttributes, SetWindowLongPtrW, WS_EX_LAYERED, WS_EX_TRANSPARENT,
             },
         },
     },
@@ -33,6 +33,9 @@ use windows::{
 };
 
 const PRIMARY: PCWSTR = w!("Shell_TrayWnd");
+/// A window property marking Muelle's own `Shell_TrayWnd` (see `tray_host`),
+/// which sits in front of Explorer's and is not a taskbar.
+pub(crate) const STAND_IN: PCWSTR = w!("MuelleTrayHost");
 const SECONDARY: PCWSTR = w!("Shell_SecondaryTrayWnd");
 const GHOST_STYLES: isize = (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0) as isize;
 
@@ -59,7 +62,7 @@ fn take_over_taskbars(bars: &[HWND], file: &std::path::Path) -> bool {
     // A logon task can run before Explorer creates Shell_TrayWnd. Saving
     // an absent shell's state would lose the user's original preference.
     // SAFETY: Read-only lookup; a secondary bar alone cannot supply GETSTATE.
-    if bars.is_empty() || unsafe { FindWindowW(PRIMARY, None) }.is_err() {
+    if bars.is_empty() || primary().is_none() {
         return false;
     }
     let Some(autohide) = autohide_enabled() else {
@@ -127,8 +130,7 @@ pub fn give_back_on_exit() {
 pub fn give_back() -> bool {
     restore_saved(&state_file(), |original| {
         let bars = taskbars();
-        // SAFETY: Read-only lookup of Explorer's primary taskbar.
-        if bars.is_empty() || unsafe { FindWindowW(PRIMARY, None) }.is_err() {
+        if bars.is_empty() || primary().is_none() {
             return original.is_none();
         }
         let mut restored = true;
@@ -237,13 +239,25 @@ fn dismiss_taskbar_tooltips(bars: &[HWND]) {
     }
 }
 
-fn taskbars() -> Vec<HWND> {
-    let mut found = Vec::new();
+/// Explorer's taskbar on the primary monitor.
+pub(crate) fn primary() -> Option<HWND> {
+    let mut previous = None;
     // SAFETY: Read-only calls with valid static strings.
     unsafe {
-        if let Ok(hwnd) = FindWindowW(PRIMARY, None) {
-            found.push(hwnd);
+        while let Ok(hwnd) = FindWindowExW(None, previous, PRIMARY, None) {
+            if GetPropW(hwnd, STAND_IN).is_invalid() {
+                return Some(hwnd);
+            }
+            previous = Some(hwnd);
         }
+    }
+    None
+}
+
+fn taskbars() -> Vec<HWND> {
+    let mut found: Vec<HWND> = primary().into_iter().collect();
+    // SAFETY: Read-only calls with valid static strings.
+    unsafe {
         let mut previous = None;
         while let Ok(hwnd) = FindWindowExW(None, previous, SECONDARY, None) {
             found.push(hwnd);
@@ -269,7 +283,7 @@ fn autohide_enabled() -> Option<bool> {
     let present = unsafe {
         !data.hWnd.is_invalid()
             && IsWindow(Some(data.hWnd)).as_bool()
-            && FindWindowW(PRIMARY, None).ok() == Some(data.hWnd)
+            && primary() == Some(data.hWnd)
     };
     present.then_some(state as u32 & ABS_AUTOHIDE != 0)
 }

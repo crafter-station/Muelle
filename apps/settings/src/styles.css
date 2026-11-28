@@ -375,6 +375,14 @@ input:focus-visible {
   border-top: 1px solid var(--line);
 }
 
+/* Added folders and keywords, each on a line of its own. */
+.list-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 14px 6px 28px; padding-inline: 28px 14px; border-top: 1px solid var(--line); font-size: 12px; }
+.list-item > span { min-width: 0; overflow-wrap: anywhere; text-align: start; }
+.list-form { flex-wrap: wrap; justify-content: flex-start; }
+.text-input { flex: 1; width: 100%; min-width: 0; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--content); color: inherit; font: inherit; font-size: 12px; }
+.text-input-short { flex: 0 0 90px; }
+.text-input[aria-invalid="true"] { border-color: #ff453a; }
+
 /* An option that depends on the row above: indented under it, with a divider
    that starts at the indent, and folded away while that row is off. */
 .row-sub {
@@ -519,6 +527,9 @@ input:focus-visible {
 .visual-check { position: absolute; top: 50%; right: 0; transform: translateY(-50%); display: grid; place-items: center; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); color: white; opacity: 0; }
 .visual-choice input:checked + .visual-choice-body .visual-check { opacity: 1; }
 
+.preview-menu-icon { display: flex; align-items: center; gap: 7px; width: 100%; height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--sidebar); }
+.preview-menu-icon svg, .preview-menu-icon img { width: 16px; height: 16px; flex: none; object-fit: contain; }
+.preview-menu-icon i { width: 34px; height: 4px; border-radius: 2px; background: currentColor; opacity: .35; }
 .preview-screen { display: block; position: relative; width: 100%; height: 72px; overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: linear-gradient(155deg, var(--preview-sky) 20%, var(--preview-land)); }
 .preview-wallpaper { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .preview-topbar { position: absolute; inset: 0 0 auto; height: 8px; display: flex; align-items: center; gap: 3px; padding: 0 5px; background: var(--sidebar); }

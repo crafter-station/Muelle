@@ -210,6 +210,26 @@ impl Theme {
         }
     }
 
+    /// The control center's tiles: the theme's material, clear enough to
+    /// show what is behind, dense enough for text over any wallpaper.
+    pub(crate) fn for_controls(look: Look) -> Self {
+        let pick = |clear: Color, solid: Color| if look.glass { clear } else { solid };
+        let panel_tint = match (look.material, look.light) {
+            (Material::Frosted, true) => pick(rgba(250, 251, 253, 170), rgba(236, 238, 242, 255)),
+            (Material::Frosted, false) => pick(rgba(30, 34, 42, 170), rgba(40, 44, 52, 255)),
+            (Material::Clear, _) => pick(rgba(20, 22, 28, 105), rgba(38, 40, 46, 255)),
+            (Material::LiquidGlass, true) => {
+                pick(rgba(245, 249, 255, 120), rgba(230, 234, 240, 255))
+            }
+            (_, true) => pick(rgba(248, 249, 252, 150), rgba(236, 236, 238, 255)),
+            (_, false) => pick(rgba(20, 26, 38, 146), rgba(40, 44, 52, 255)),
+        };
+        Self {
+            panel_tint,
+            ..Self::new(look)
+        }
+    }
+
     /// Uses the context menu tint with the same rim and sheen as the window picker.
     fn for_popup(light: bool, glass: bool) -> Self {
         let tint = crate::menu::popup_tint(!light, glass);
