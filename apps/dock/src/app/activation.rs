@@ -20,7 +20,7 @@ use windows::Win32::{
     },
 };
 
-use crate::flight::Flight;
+use crate::flight::{Flight, Placement as FlightPlacement};
 
 use super::{
     App, HIDE_TIMER, LAST_FRONT, Outside, Role, SWITCHER_APPEAR, SWITCHER_ECHO, SWITCHER_POLL_MS,
@@ -193,17 +193,17 @@ impl App {
                 hwnd,
                 snapshot,
                 slot,
-                screen,
+                FlightPlacement {
+                    screen,
+                    edge: self.position(),
+                    behind: (!self.config.show_minimized).then_some(self.visual),
+                },
                 self.config.genie_speed.seconds(),
-                self.position(),
             )
         });
         let Some(flight) = flight else {
             return false;
         };
-        if !self.config.show_minimized {
-            flight.tuck_under(self.visual);
-        }
         self.snapshots.remove(position);
         self.flights.push(flight);
         self.last_frame = Instant::now();
@@ -606,8 +606,13 @@ impl App {
     pub(super) fn on_foreground_changed(&mut self) -> Result<()> {
         self.close_preview();
         let foreground = tracker::foreground_window();
-        self.tracker.refresh_browser(foreground);
+        let identity_changed = self.tracker.refresh_browser(foreground);
         self.flights.retain(|flight| flight.is_current(foreground));
+        if identity_changed {
+            // A late browser/PWA identity changes grouping, not only z-order.
+            // Reuse normal roster reconciliation instead of waiting for a new window.
+            return self.sync();
+        }
         // The app roster can stay identical while its windows change z-order.
         // Refresh their order so the next dock activation selects the actual
         // most recently used window rather than a stale group leader.
@@ -626,6 +631,13 @@ impl App {
     /// to the window in front instead, or to the desktop when none is left,
     /// so that no tooltip of the invisible taskbar shows (issue #48).
     pub(super) fn leave_hidden_taskbar(&mut self) -> Result<()> {
+        // WinEvent delivery is asynchronous; a newer app activation wins.
+        if !muelle_shell::taskbar::is_hidden(HWND(tracker::foreground_window() as *mut _))
+            || launcher::opening_hidden_icons()
+        {
+            return Ok(());
+        }
+        muelle_shell::taskbar::dismiss_hidden_tooltips();
         self.on_foreground_changed()?;
         let windows: Vec<isize> = self.windows.iter().map(|window| window.hwnd).collect();
         launcher::focus_front_or_desktop(&windows);

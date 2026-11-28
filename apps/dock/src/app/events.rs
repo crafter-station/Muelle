@@ -18,26 +18,28 @@ use windows::Win32::{
             SetTimer, WM_CAPTURECHANGED, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
             WM_DWMCOLORIZATIONCOLORCHANGED, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
             WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_RBUTTONUP,
-            WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WM_WTSSESSION_CHANGE, WTS_SESSION_UNLOCK,
+            WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK,
+            WTS_SESSION_UNLOCK,
         },
     },
 };
 
+use crate::menubar::MenuBar;
 use crate::{
     control_center::Opening, edge_watch, folder_menu, multi_window_view::MultiWindowAction,
 };
 
 use super::{
-    APPBAR_CALLBACK, ASSETS_DELAY_MS, ASSETS_READY, ASSETS_TIMER, App, BIN_CHANGED, BIN_DELAY_MS,
-    BIN_STATE, BIN_TIMER, BREAK_TIMER, CONFIG_CHANGED, DRAG_CANCELLED, DRAG_TIMER, DROP_RUN,
-    EDGE_TIMER, FULLSCREEN_TIMER, HEALTH_CHECK, HIDE_TIMER, HSHELL_FLASH, HSHELL_LANGUAGE,
-    HSHELL_REDRAW, HSHELL_RUDEAPPACTIVATED, HSHELL_WINDOWACTIVATED, HSHELL_WINDOWDESTROYED,
-    LAST_FRONT, MASCOT_TIMER, Outside, PBT_APMPOWERSTATUSCHANGE, PBT_APMRESUMEAUTOMATIC,
-    PBT_POWERSETTINGCHANGE, PINS_CHANGED, PINS_DELAY_MS, PINS_TIMER, PREVIEW_TIMER,
-    REFRESH_DELAY_MS, REFRESH_TIMER, SHELL_HOOK, SPI_SETWORKAREA, SPRING_TIMER, SWITCHER_TIMER,
-    SYNC_DELAY_MS, SYNC_TIMER, TASKBAR_CREATED, TASKBAR_DELAY_MS, TASKBAR_PREFS_CHANGED,
-    TASKBAR_TAKEN, TASKBAR_TIMER, TRIM_TIMER, UPDATE_TIMER, WELCOME_TIMER, WM_MOUSELEAVE,
-    WM_POWERBROADCAST,
+    APP_BADGES_CHANGED, APPBAR_CALLBACK, ASSETS_DELAY_MS, ASSETS_READY, ASSETS_TIMER, App,
+    BIN_CHANGED, BIN_DELAY_MS, BIN_STATE, BIN_TIMER, BREAK_TIMER, CONFIG_CHANGED, DOCK_MOVED,
+    DRAG_CANCELLED, DRAG_TIMER, DROP_RUN, EDGE_TIMER, FULLSCREEN_TIMER, HEALTH_CHECK, HIDE_TIMER,
+    HSHELL_FLASH, HSHELL_LANGUAGE, HSHELL_REDRAW, HSHELL_RUDEAPPACTIVATED, HSHELL_WINDOWACTIVATED,
+    HSHELL_WINDOWDESTROYED, LAST_FRONT, LEAVE_TIMER, MASCOT_TIMER, Outside,
+    PBT_APMPOWERSTATUSCHANGE, PBT_APMRESUMEAUTOMATIC, PBT_POWERSETTINGCHANGE, PINS_CHANGED,
+    PINS_DELAY_MS, PINS_TIMER, PREVIEW_TIMER, REFRESH_DELAY_MS, REFRESH_TIMER, SHELL_HOOK,
+    SPI_SETWORKAREA, SPRING_TIMER, SWITCHER_TIMER, SYNC_DELAY_MS, SYNC_TIMER, TASKBAR_CREATED,
+    TASKBAR_DELAY_MS, TASKBAR_PREFS_CHANGED, TASKBAR_TAKEN, TASKBAR_TIMER, TRIM_TIMER,
+    UPDATE_TIMER, WELCOME_TIMER, WM_MOUSELEAVE, WM_POWERBROADCAST,
     feedback::query_bin_in_background,
     lifecycle::{is_tracked, main_window},
     with_app, with_app_then,
@@ -45,6 +47,13 @@ use super::{
 
 const BACKDROP_REFRESH: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 11;
 static BACKDROP_PENDING: AtomicBool = AtomicBool::new(false);
+/// The displays or a dock window's scale changed since the dock was last
+/// rebuilt. Windows then moves and rescales the dock's windows itself, and
+/// until the dock is rebuilt it shows its old content at the wrong scale (a
+/// smaller dock off centre on a laptop at 125 % after a monitor at 100 %),
+/// even when its display and scale end up as before. Set without the app
+/// state: Windows also sends these while the dock is moving its windows.
+static DISPLAYS_CHANGED: AtomicBool = AtomicBool::new(false);
 
 fn queue_backdrop_refresh(hwnd: HWND) {
     if hwnd.0.is_null() || BACKDROP_PENDING.swap(true, Ordering::Relaxed) {
@@ -124,70 +133,84 @@ pub(super) fn with_app_value<T: Default>(
 
 pub fn menu_bar_clicked(x: f32, y: f32) {
     with_app_then("barra superior", |app| {
-        let circle = app
-            .menubar
-            .as_ref()
-            .and_then(|bar| bar.system_menu_button(x, y));
-        if let Some(button) = circle {
-            return app.system_menu(button);
-        }
-        // The clock opens Muelle's calendar unless Settings turns it off or
-        // names something else for the clock to open.
-        let calendar = app.config.calendar && app.config.menu_bar_clock_target.is_none();
-        let clock = app
-            .menubar
-            .as_ref()
-            .and_then(|bar| bar.clock_button(x, y))
-            .filter(|_| calendar);
-        if let Some(button) = clock {
-            app.toggle_calendar(button)?;
+        let Some(window) = app.menubar.as_ref().map(MenuBar::window) else {
             return Ok(None);
-        }
-        // Any other press on the bar closes it.
-        app.close_calendar();
-        // Turned off in Settings, a button opens Windows' own, below.
-        let (tiles, network) = (app.config.control_center, app.config.network_menu);
-        let button = app.menubar.as_ref().and_then(|bar| {
-            bar.control_center_button(x, y)
-                .filter(|_| tiles)
-                .map(|button| (button, Opening::Tiles))
-                .or_else(|| {
-                    let button = bar.network_button(x, y).filter(|_| network)?;
-                    Some((button, Opening::Network))
-                })
-        });
-        if let Some((button, opening)) = button {
-            app.close_tray_menu();
-            app.toggle_control_center(button, opening)?;
-            return Ok(None);
-        }
-        // Any other press on the bar closes it.
-        app.close_control_center();
-        // A press that dismissed Windows' own flyout goes to it, below.
-        let tray = app
-            .menubar
-            .as_ref()
-            .and_then(|bar| bar.tray_button(x, y))
-            .filter(|_| !launcher::hidden_icons_were_open());
-        if let Some(button) = tray
-            && app.toggle_tray_menu(button)?
-        {
-            return Ok(None);
-        }
-        app.close_tray_menu();
-        if let Some(bar) = &mut app.menubar {
-            if let Some(anchor) = bar.input_switcher_anchor(x, y) {
-                bar.dismiss_island(&app.gfx)?;
-                return Ok(Some(Outside::InputMenu {
-                    gfx: app.gfx.clone(),
-                    anchor,
-                    dark: !crate::appearance::menu_bar_light(),
-                }));
-            }
-            bar.click(&app.gfx, x, y)?;
-        }
-        Ok(None)
+        };
+        press_menu_bar(app, window, x, y)
     });
+}
+
+/// A click at `x`, `y` on the menu bar, or its copy on another display, whose
+/// window is `window`.
+fn press_menu_bar(app: &mut App, window: isize, x: f32, y: f32) -> Result<Option<Outside>> {
+    // What is under the pointer on that bar.
+    fn on<T>(
+        app: &mut App,
+        window: isize,
+        find: impl FnOnce(&mut MenuBar) -> Option<T>,
+    ) -> Option<T> {
+        app.menubar
+            .as_mut()
+            .and_then(|bar| bar.bar_mut(window))
+            .and_then(find)
+    }
+    if let Some(button) = on(app, window, |bar| bar.system_menu_button(x, y)) {
+        return app.system_menu(button);
+    }
+    // The clock opens Muelle's calendar unless Settings turns it off or
+    // names something else for the clock to open.
+    let calendar = app.config.calendar && app.config.menu_bar_clock_target.is_none();
+    let clock = on(app, window, |bar| bar.clock_button(x, y)).filter(|_| calendar);
+    if let Some(button) = clock {
+        app.toggle_calendar(button)?;
+        return Ok(None);
+    }
+    // Any other press on the bar closes it.
+    app.close_calendar();
+    // Turned off in Settings, a button opens Windows' own, below.
+    let (tiles, network) = (app.config.control_center, app.config.network_menu);
+    let button = on(app, window, |bar| {
+        bar.control_center_button(x, y)
+            .filter(|_| tiles)
+            .map(|button| (button, Opening::Tiles))
+            .or_else(|| {
+                let button = bar.network_button(x, y).filter(|_| network)?;
+                Some((button, Opening::Network))
+            })
+    });
+    if let Some((button, opening)) = button {
+        app.close_tray_menu();
+        app.toggle_control_center(button, opening)?;
+        return Ok(None);
+    }
+    // Any other press on the bar closes it.
+    app.close_control_center();
+    // A press that dismissed Windows' own flyout goes to it, below.
+    let tray = on(app, window, |bar| bar.tray_button(x, y))
+        .filter(|_| !launcher::hidden_icons_were_open());
+    if let Some(button) = tray
+        && app.toggle_tray_menu(button)?
+    {
+        return Ok(None);
+    }
+    app.close_tray_menu();
+    let gfx = app.gfx.clone();
+    let Some(primary) = &mut app.menubar else {
+        return Ok(None);
+    };
+    let outside = primary.with_bar(&gfx, window, |bar| {
+        if let Some(anchor) = bar.input_switcher_anchor(x, y) {
+            bar.dismiss_island(&gfx)?;
+            return Ok(Some(Outside::InputMenu {
+                gfx: gfx.clone(),
+                anchor,
+                look: crate::appearance::menu_bar(),
+            }));
+        }
+        bar.click(&gfx, x, y)?;
+        Ok(None)
+    })?;
+    Ok(outside.flatten())
 }
 
 pub fn control_center_tick() {
@@ -315,9 +338,66 @@ pub fn menu_bar_fold_done() {
     });
 }
 
-pub fn menu_bar_volume_press(x: f32, y: f32) {
+/// The pointer or a timer on a copy of the menu bar on another display: the
+/// same handling as the primary bar's. Returns whether a scroll was used.
+pub fn menu_bar_mirror_event(hwnd: HWND, event: crate::menubar::MirrorEvent) -> bool {
+    use crate::menubar::MirrorEvent;
+    let mut used = false;
+    with_app_then("barra superior en otra pantalla", |app| {
+        let menu_open = app.menu_open;
+        let gfx = app.gfx.clone();
+        let Some(primary) = app.menubar.as_mut() else {
+            return Ok(None);
+        };
+        // A click is handled as on the primary bar, once the gesture is over.
+        let mut click = None;
+        primary.with_bar(&gfx, hwnd.0 as isize, |bar| {
+            match event {
+                MirrorEvent::Press(x, y) => {
+                    if !bar.press_progress(&gfx, x, y)? {
+                        bar.press_volume(&gfx, x, y)?;
+                    }
+                }
+                MirrorEvent::Release(x, y) => {
+                    let seek = bar.release_progress(Some(x));
+                    let volume = bar.release_volume(Some(y))?;
+                    if seek {
+                        bar.progress_tick(&gfx)?;
+                    }
+                    if !seek && !volume {
+                        click = Some((x, y));
+                    }
+                }
+                MirrorEvent::CaptureLost => {
+                    bar.release_progress(None);
+                    bar.release_volume(None)?;
+                }
+                MirrorEvent::PointerMoved(x, y) => bar.pointer_moved(&gfx, x, y)?,
+                MirrorEvent::CheckPointer if !menu_open => bar.check_pointer(&gfx)?,
+                MirrorEvent::CheckPointer => {}
+                MirrorEvent::FinishHide(epoch) => bar.finish_hide(&gfx, epoch)?,
+                MirrorEvent::Scroll(point, delta) => used = bar.scroll_usage_at(point, delta)?,
+                MirrorEvent::VolumeFlush => bar.flush_volume()?,
+                MirrorEvent::ProgressTick => bar.progress_tick(&gfx)?,
+                MirrorEvent::FoldDone => bar.finish_fold()?,
+                MirrorEvent::TrayTick => bar.follow_windows_tray(&gfx)?,
+                MirrorEvent::Dismiss => bar.dismiss_island(&gfx)?,
+            }
+            Ok(())
+        })?;
+        match click {
+            Some((x, y)) => press_menu_bar(app, hwnd.0 as isize, x, y),
+            None => Ok(None),
+        }
+    });
+    used
+}
+
+pub fn menu_bar_slider_press(x: f32, y: f32) {
     with_app("volumen", |app| {
-        if let Some(bar) = &mut app.menubar {
+        if let Some(bar) = &mut app.menubar
+            && !bar.press_progress(&app.gfx, x, y)?
+        {
             bar.press_volume(&app.gfx, x, y)?;
         }
         Ok(())
@@ -331,9 +411,16 @@ pub fn menu_bar_scrolled(point: POINT, delta: i16) -> bool {
     })
 }
 
-pub fn menu_bar_volume_release(y: Option<f32>) -> bool {
-    with_app_value("volumen", |app| match &mut app.menubar {
-        Some(bar) => bar.release_volume(y),
+pub fn menu_bar_slider_release(point: Option<(f32, f32)>) -> bool {
+    with_app_value("control multimedia", |app| match &mut app.menubar {
+        Some(bar) => {
+            let seek = bar.release_progress(point.map(|point| point.0));
+            let volume = bar.release_volume(point.map(|point| point.1))?;
+            if seek {
+                bar.progress_tick(&app.gfx)?;
+            }
+            Ok(seek || volume)
+        }
         None => Ok(false),
     })
 }
@@ -341,6 +428,19 @@ pub fn menu_bar_volume_release(y: Option<f32>) -> bool {
 pub fn menu_bar_volume_flush() {
     with_app("volumen", |app| match &mut app.menubar {
         Some(bar) => bar.flush_volume(),
+        None => Ok(()),
+    });
+}
+
+pub fn menu_bar_music_key(key: u16, repeated: bool) {
+    with_app("teclado multimedia", |app| match &mut app.menubar {
+        Some(bar) => bar.music_key(&app.gfx, key, repeated),
+        None => Ok(()),
+    });
+}
+pub fn menu_bar_music_focus_lost() {
+    with_app("foco multimedia", |app| match &mut app.menubar {
+        Some(bar) => bar.music_focus_lost(&app.gfx),
         None => Ok(()),
     });
 }
@@ -646,6 +746,10 @@ pub(super) unsafe extern "system" fn wndproc(
         }
         WM_MOUSEMOVE => with_app("movimiento del ratón", App::on_mouse_move),
         WM_MOUSELEAVE => with_app("salida del ratón", App::on_tracked_mouse_leave),
+        DOCK_MOVED => with_app("cambio de pantalla", |app| {
+            app.set_moving(false);
+            Ok(())
+        }),
         WM_LBUTTONDOWN => with_app("pulsación", App::on_press),
         WM_LBUTTONUP => with_app_then("clic", App::on_release),
         WM_MBUTTONUP => with_app_then("clic central", App::on_middle_click),
@@ -692,10 +796,25 @@ pub(super) unsafe extern "system" fn wndproc(
             }
         }
         WM_SETTINGCHANGE | WM_DISPLAYCHANGE | WM_DPICHANGED => {
+            with_app("entorno del popup del clima", |app| {
+                app.weather_environment_changed(matches!(msg, WM_DISPLAYCHANGE | WM_DPICHANGED));
+                Ok(())
+            });
             if matches!(msg, WM_DISPLAYCHANGE | WM_DPICHANGED) {
+                DISPLAYS_CHANGED.store(true, Ordering::Relaxed);
                 with_app("pantalla de la mascota", |app| {
                     app.stop_mascot();
                     Ok(())
+                });
+            }
+            if msg == WM_DPICHANGED {
+                // Windows rescaled a dock window: rebuild now rather than
+                // show it at the wrong scale while the displays settle. When
+                // the dock itself is moving its windows, the app is busy and
+                // this is skipped: its new stage already has the right scale.
+                with_app("escala de pantalla", |app| {
+                    DISPLAYS_CHANGED.store(false, Ordering::Relaxed);
+                    app.rebuild()
                 });
             }
             // SAFETY: `hwnd` is our window; scheduling the same timer resets it.
@@ -759,11 +878,35 @@ pub(super) unsafe extern "system" fn wndproc(
             with_app_then("arrastre sobre una app", App::spring_open);
         }
         WM_TIMER if w.0 == MASCOT_TIMER => with_app("mascota", App::mascot_tick),
+        super::weather::READY => with_app("datos del clima", App::weather_ready),
+        super::weather::NETWORK => with_app("red del clima", App::weather_network),
+        super::weather::POPUP_EVENT => with_app_then("popup del clima", |app| {
+            app.weather_popup_event(HWND(w.0 as *mut _), l.0)
+        }),
+        super::weather::EVENT => with_app_then("tarjeta del clima", |app| {
+            app.weather_event(HWND(l.0 as *mut _), w.0)
+        }),
+        WM_TIMER if w.0 == super::weather::TIMER => {
+            with_app("actualización del clima", App::weather_tick)
+        }
+        WM_TIMER if w.0 == super::COMPANION_TIMER => {
+            with_app("mascota en reposo", App::companion_tick)
+        }
         WM_TIMER if w.0 == WELCOME_TIMER => with_app("bienvenida", App::welcome),
         WM_TIMER if w.0 == BREAK_TIMER => with_app("descanso", App::break_tick),
         // Unlocked: maybe the first time today (see `App::welcome`).
+        WM_WTSSESSION_CHANGE if w.0 == WTS_SESSION_LOCK as usize => {
+            with_app("pausar mascota", |app| {
+                app.companion_locked(true);
+                app.weather_locked(true);
+                Ok(())
+            });
+        }
         WM_WTSSESSION_CHANGE if w.0 == WTS_SESSION_UNLOCK as usize => {
             with_app("desbloqueo", |app| {
+                app.companion_locked(false);
+                app.weather_locked(false);
+                app.weather_resumed()?;
                 app.arm_welcome();
                 Ok(())
             });
@@ -771,6 +914,13 @@ pub(super) unsafe extern "system" fn wndproc(
         edge_watch::CHANGED => with_app("borde de pantalla", App::edge_changed),
         WM_TIMER if w.0 == EDGE_TIMER => with_app("mostrar al llegar al borde", App::edge_rested),
         WM_TIMER if w.0 == PREVIEW_TIMER => with_app("selector de ventanas", App::preview_tick),
+        WM_TIMER if w.0 == LEAVE_TIMER => {
+            // SAFETY: `hwnd` is this live window on its owning UI thread.
+            unsafe {
+                let _ = KillTimer(Some(hwnd), w.0);
+            }
+            with_app("salida del ratón", App::recheck_leave);
+        }
         WM_TIMER if w.0 == HIDE_TIMER => {
             // SAFETY: Same as above.
             unsafe {
@@ -796,7 +946,12 @@ pub(super) unsafe extern "system" fn wndproc(
             match w.0 {
                 REFRESH_TIMER => with_app("recomposición del dock", |app| {
                     app.apply_edge_settings();
-                    app.refresh()?;
+                    app.sync_menu_bar_displays();
+                    if DISPLAYS_CHANGED.swap(false, Ordering::Relaxed) {
+                        app.rebuild()?;
+                    } else {
+                        app.refresh()?;
+                    }
                     app.update_fullscreen()?;
                     app.power_moment();
                     Ok(())
@@ -813,10 +968,22 @@ pub(super) unsafe extern "system" fn wndproc(
         TASKBAR_TAKEN => with_app("reserva de espacio", |app| {
             app.taskbar_taken(w.0 != 0, l.0 != 0)
         }),
+        0x001E => with_app("horario del clima", App::weather_resumed), // WM_TIMECHANGE
+        WM_POWERBROADCAST if w.0 == 4 => {
+            // PBT_APMSUSPEND
+            with_app("suspender clima", |app| {
+                app.weather_suspended(true);
+                Ok(())
+            });
+        }
         WM_POWERBROADCAST if w.0 == PBT_APMRESUMEAUTOMATIC => {
             with_app("reanudar reserva de espacio", |app| {
                 app.taskbar_attempts = 0;
+                app.weather_suspended(false);
+                app.weather_resumed()?;
                 // Asleep was a pause; awake may be the first time today.
+                app.suspend_companion();
+                app.sync_companion();
                 app.moments.rested();
                 app.arm_welcome();
                 Ok(())
@@ -836,6 +1003,7 @@ pub(super) unsafe extern "system" fn wndproc(
             }
             Ok(())
         }),
+        APP_BADGES_CHANGED => with_app("insignias de Windows", App::app_badges_changed),
         crate::overlays::OVERLAYS_CHANGED => {
             with_app("insignias de apps", |app| {
                 app.sync_badge_visuals()?;

@@ -71,17 +71,23 @@ pub struct WindowTracker {
 }
 
 impl WindowTracker {
-    /// Recheck only browser profile properties on a focus transition. Avatar
-    /// changes use the existing icon workers, never disk access on this thread.
-    pub fn refresh_browser(&mut self, hwnd: isize) {
-        if let Some(program) = self
-            .app_ids
-            .get(&hwnd)
-            .and_then(|id| crate::browser_profiles::program(id))
-            && let Some(id) = crate::browser_profiles::window_id(HWND(hwnd as *mut _), &program)
+    /// Recheck browser identity on focus, including apps that publish it late.
+    /// Existing icon workers resolve appearance; no new process scan or polling.
+    pub fn refresh_browser(&mut self, hwnd: isize) -> bool {
+        if let Some(program) = self.app_ids.get(&hwnd).and_then(|id| {
+            crate::browser_profiles::program(id).or_else(|| {
+                // Firefox names a private window as such once it is shown
+                // (#72): first seen as Firefox, it moves to its own icon.
+                crate::browser_profiles::is_gecko(id)
+                    .then_some(std::borrow::Cow::Borrowed(id.as_str()))
+            })
+        }) && let Some(id) = focused_browser_identity(HWND(hwnd as *mut _), &program)
+            && self.app_ids.get(&hwnd) != Some(&id)
         {
             self.app_ids.insert(hwnd, id);
+            return true;
         }
+        false
     }
 
     pub fn list(&mut self) -> Vec<TrackedWindow> {
@@ -787,34 +793,39 @@ fn app_id(hwnd: HWND) -> Option<String> {
             .ok()
             .map(|()| {
                 let image = String::from_utf16_lossy(&buffer[..len as usize]);
-                if let Some(id) = crate::browser_profiles::window_id(hwnd, &image) {
-                    return id;
-                }
-                // A program whose windows belong to a host that is no .exe
-                // (LibreOffice's soffice.bin) has no icon or name of its own
-                // there; its windows say which app they are (Calc, Writer),
-                // and the taskbar shows that app.
-                if is_program(&image) {
-                    // A program's window may also belong to another app it
-                    // runs: a web app in a browser, which the taskbar shows
-                    // on its own.
-                    window_aumid(hwnd)
-                        .filter(|aumid| crate::pins::is_separate_app(aumid, &image))
-                        .map_or_else(
-                            || normalize_id(&image),
-                            |aumid| format!("{APPS_FOLDER}{aumid}"),
-                        )
-                } else {
-                    window_aumid(hwnd).map_or_else(
-                        || normalize_id(&image),
-                        |aumid| format!("{APPS_FOLDER}{aumid}"),
-                    )
-                }
+                desktop_window_identity(hwnd, &image).unwrap_or_else(|| normalize_id(&image))
             })
         };
         let _ = CloseHandle(process);
         id
     }
+}
+
+fn desktop_window_identity(hwnd: HWND, program: &str) -> Option<String> {
+    if let Some(id) = crate::browser_profiles::window_id(hwnd, program) {
+        return Some(id);
+    }
+    declared_window_identity(hwnd, program)
+}
+
+fn focused_browser_identity(hwnd: HWND, program: &str) -> Option<String> {
+    // Firefox private windows use their AUMID, not Chromium's app switches.
+    if crate::browser_profiles::is_gecko(program) {
+        return desktop_window_identity(hwnd, program);
+    }
+    crate::browser_profiles::window_id(hwnd, program).or_else(|| {
+        crate::browser_profiles::window_web_app(hwnd)
+            .then(|| declared_window_identity(hwnd, program))
+            .flatten()
+    })
+}
+
+fn declared_window_identity(hwnd: HWND, program: &str) -> Option<String> {
+    // Hosts such as soffice.bin always use the window's app identity. EXE
+    // hosts do so only for an app Windows registers separately from the host.
+    window_aumid(hwnd)
+        .filter(|aumid| !is_program(program) || crate::pins::is_separate_app(aumid, program))
+        .map(|aumid| format!("{APPS_FOLDER}{aumid}"))
 }
 
 /// `true` for the path of a Windows shortcut (`.lnk`).
@@ -869,6 +880,10 @@ pub fn request_close_window(hwnd: isize) -> bool {
         PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)).is_ok()
     }
 }
+
+#[cfg(test)]
+#[path = "tracker/browser_identity_tests.rs"]
+mod browser_identity_tests;
 
 #[cfg(test)]
 mod tests {

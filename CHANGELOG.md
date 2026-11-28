@@ -52,12 +52,152 @@ copia la sección de la versión que se publica a la release de GitHub.
   calculator, web and keyword searches, and offline definitions once the
   dictionary is added. It follows the dock's theme and language, and Settings →
   Search configures it. Turn it off there to get Windows Search back.
+
+- AI quota errors no longer mistake forbidden Claude requests or temporarily
+  locked credential files for logout. Gemini honors GEMINI_CLI_HOME and valid
+  near-expiry tokens; Antigravity keeps its own source and clears incompatible
+  cached quotas. Client-specific guidance is translated into all eight languages.
+
+- Hidden Dock recovery also watches the screen edge on single-monitor setups,
+  so a covered input strip can recover without changing desktop focus. Reuses
+  the shared observer; Always visible stops it when no menu bar needs it.
+
+- Weather can be turned off from its Dock context menu; saves only that
+  preference and stops its watchers/updates. Window previews are more compact,
+  with titles above the thumbnail and a close button at the right on hover.
+  Closing a window preserves the popup's monitor and paging width.
+
+- Registered Chrome web apps keep their own Dock identity when their shortcut
+  uses chrome.exe. Existing name/icon, pinning and launch handling are reused.
+  Late browser identities reconcile the Dock on activation without new polling.
+
+- The weather end of the Dock now reveals it in automatic and intelligent
+  hiding modes, including during a slide. Moving between icons and the weather
+  card keeps it open without magnifying the card or starting extra queries.
+
+- Restoring a maximized app from its Dock icon places the genie overlay behind
+  the Dock before showing it, removing its temporary placement above the Dock.
+  No extra delays or timers.
+
+- Dismiss residual native Start/taskbar tooltips when entering the Dock after
+  minimizing the last app. Hidden-taskbar focus recovery also recognizes its
+  internal controls and ignores stale events after another app takes focus.
+  Other apps' tooltips and notification-area flyouts remain untouched; no polling.
+
+- Weather popup headers now follow the selected hourly forecast, with a
+  matching icon, temperature, wind and feels-like value. Click an hour to
+  inspect it; Today starts with current conditions. Daily weather codes are
+  used only for daily summary rows. No extra requests when changing hours.
+
+- Weather no longer disappears and leaves an empty Dock slot when a window
+  preview or app group opens, or while dragging Dock icons or files. Reuses the
+  existing card while forecast requests remain paused during these interactions.
+
+- Automatic weather location now shows its detected city in Settings, the Dock
+  and the forecast popup. Resolves once after a fresh Windows fix, caches the
+  name and keeps manual cities separate. Removed the saved-location helper
+  text and the data-credit row from weather preferences; source credits remain
+  in the project documentation and existing weather context menu.
+
+- Fixed the weather card shifting and opening an empty gap on hover: its
+  reserved space now stays rigid during icon magnification. Select a forecast
+  day to view its hours, daily temperature range and sunrise/sunset. Hour paging reuses the same bounded five-day cache, with no
+  extra requests or timers; Today keeps the current observation.
+
+- Weather uses automatic Windows location by default, with an optional saved
+  city in Settings → Dock → Weather. City search runs only on submission, with
+  bounded requests and stale-result protection. The forecast popup removes its
+  close button and footer actions; outside click and Escape still close it.
+  Provider attribution stays in Settings.
+
+- Weather explicitly releases its private Composition targets, brushes and
+  drawing surfaces when closing/updating, and keeps pixel size stable during
+  fractional motion to avoid redundant rasterization. Coalesced idle maintenance
+  submits deferred drawing releases, preventing memory growth on repeated opens
+  without a GPU wait or per-frame flush.
+- Weather recovers after sleep, clock changes and temporary visual/network
+  subscription failures, retaining backoff and one request at a time. Stable
+  deadlines avoid rearming timers during animation. High contrast/screen-reader
+  users get a native textual forecast. Failure diagnostics omit location, URLs and response content.
+
+- Optional blue weather card inside the Dock, with current conditions,
+  temperature and static sun/cloud illustrations. Reserves its own space,
+  follows magnification and hiding, and adapts to a side Dock. Settings requests
+  an approximate Windows location with consent; no continuous tracking.
+  Refreshes every 30 min (60 in energy saver)
+  while visible, with caching and bounded workers. Clicking opens a themed
+  forecast popup with up to six hourly columns, five days, rain chance, wind
+  and sunrise/sunset. Supports outside-click, Escape and keyboard controls;
+  opening reuses cached data without forcing a request or starting UI polling.
+
+- Optional persistent mascot for all six characters: rests on the visible Dock,
+  blinks and takes short walks between events. Yields to Dock interactions and
+  full-screen apps, pauses on lock, and stays static in energy saver/reduced
+  motion. Cached poses and sparse timers replace continuous idle polling.
+
+- Dock context menus now inherit the full Dock material, and the language menu
+  inherits the menu bar's appearance. Window previews already follow the Dock;
+  open groups now dismiss when their material or display context changes.
+  Native folder submenus and accessibility fallbacks keep Windows' rendering.
+
+- Music, AI-usage and volume popups now follow the menu bar's complete material,
+  including Frosted, Clear and Liquid Glass, while keeping readable text surfaces
+  and the opaque fallback when Windows disables transparency.
+
+- Space pauses or resumes playback while the explicitly opened music popup has
+  keyboard focus. Closing it restores the previous app; switching apps dismisses
+  the popup. Held keys do not repeat, and no global shortcut is registered.
+- Dock groups use larger mini-icons, a subtle glass highlight and a finer rim,
+  following the Dock's selected material and transparency policy. Cached tiles
+  also refresh when the material changes within the same light/dark palette.
+
+- Click or drag the music panel's progress bar to seek in compatible audio and
+  video players. Dragging previews the time locally and submits on release;
+  track changes, lost capture and Escape cancel an unfinished gesture. Slow
+  players keep only the latest pending destination, without extra polling.
 - The volume icon in the menu bar opens a volume slider under it, with the
   percentage and a mute button, as the music panel shows them; another click
   closes it, as do a click elsewhere, Escape or switching apps; moving the
   pointer away does not. It springs out of the speaker and folds back into it. Without an output device it still opens Windows' sound
   page
   (issue #55).
+- The menu bar shows on every display, as on macOS: each display has the same
+  bar at its own scale, keeps its own strip for maximized windows and hides on
+  its own (full screen, automatic or intelligent hiding, revealed at its own
+  top edge). The app name is dimmed on the displays where that app is not. The
+  copies read nothing themselves: they draw what the primary bar reads and
+  borrow its player, volume and usage readers when used, so their music, AI
+  usage and volume popups open and work on their own display, one popup at a
+  time. Windows' own flyouts (quick settings, notifications, networks) still
+  open where Windows puts them, on the primary display. Settings → Menu bar →
+  *On every display*, on by default.
+- Moving the Dock to another display with the pointer no longer flashes the
+  old Dock, at the other display's scale, before it slides in: the Dock's
+  window stays out of view until its new content is on screen.
+- The programs and the installer carry their full publisher details
+  (company, copyright, file names), which unsigned programs left blank and
+  antivirus heuristics distrust (issue #82).
+- Badges that apps keep in Windows' notification platform now show on their
+  Dock icons, as on the taskbar: the unread count of Outlook and other web
+  apps installed from Edge, and of apps such as Telegram (Unigram) or
+  WhatsApp. A count shows in a red pill (99+ past 99), a glyph as a red dot.
+  Unlike the overlay icons of Teams or Slack, these never reach the Dock as
+  calls: Muelle reads them, read-only and without notification text, with
+  the SQLite that ships with Windows, and checks for changes once a second
+  in microseconds. They follow Windows' "Show badges on taskbar apps"
+  (issue #74).
+- Firefox web apps (Firefox 143+) get their own Dock icon, as on the taskbar,
+  instead of joining Firefox: their shortcuts open Firefox itself with
+  `-taskbar-tab`, which Muelle now recognizes. A Firefox window that gets its
+  private-browsing identity after it opens moves to the Private Browsing icon
+  when focused, instead of staying under Firefox. Clicking Firefox no longer
+  brings up a web app window. Also for LibreWolf, Waterfox, Floorp and Zen
+  (issue #72).
+- The Dock comes to another display sooner: about 0.2 s after the pointer
+  reaches that display's bottom edge instead of about 0.4 s. The edges are
+  sampled every frame only while the pointer is near one (every 80 ms
+  elsewhere), the rest before moving is 180 ms instead of 250 ms, and moving
+  the Dock no longer redraws the menu bar.
 
 ### Español
 
@@ -116,6 +256,158 @@ copia la sección de la versión que se publica a la release de GitHub.
   cambiar de aplicación; apartar el puntero no lo cierra. Se despliega desde el altavoz
   y vuelve a plegarse en él. Sin dispositivo de
   salida sigue abriendo la página de sonido de Windows (issue #55).
+
+- Los errores de cuota ya no confunden rechazos de permisos de Claude ni archivos
+  de sesión bloqueados temporalmente con un cierre de sesión. Gemini respeta
+  GEMINI_CLI_HOME y tokens aún vigentes; Antigravity conserva su propia fuente y
+  descarta cuotas guardadas de otro cliente. Avisos específicos en los ocho idiomas.
+
+- La recuperación del Dock oculto también observa el borde con una sola pantalla,
+  para recuperarse de una franja de entrada tapada sin cambiar el foco del
+  escritorio. Reutiliza el observador compartido; Siempre visible lo detiene
+  cuando tampoco lo necesita la barra superior.
+
+- El clima se puede desactivar desde su menú contextual del Dock; guarda solo
+  esa preferencia y detiene sus suscripciones/actualizaciones. Previews más
+  compactas, título encima y cierre a la derecha al hacer hover. Cerrar una
+  ventana conserva el monitor y el ancho de paginación del popup.
+
+- Las apps web registradas de Chrome conservan su identidad en el Dock aunque
+  el acceso directo use chrome.exe. Reutilizan nombre/icono, anclaje y apertura.
+  Las identidades tardías actualizan la agrupación al activarse, sin nuevo sondeo.
+
+- El extremo del clima permite revelar el Dock en ocultación automática e
+  inteligente, incluso durante el deslizamiento. Pasar entre iconos y tarjeta
+  lo mantiene abierto sin ampliar el clima ni añadir consultas.
+
+- Al restaurar una app maximizada desde su icono, la copia de la animación se
+  coloca detrás del Dock antes de mostrarse, eliminando su colocación transitoria
+  por encima del Dock. Sin retrasos ni timers extra.
+
+- Se descartan las etiquetas nativas residuales de Inicio/barra de Windows al
+  entrar al Dock tras minimizar la última app. La recuperación del foco reconoce
+  controles internos y descarta eventos antiguos si otra app ya tiene el foco.
+  No afecta tooltips de otras apps ni el panel de iconos ocultos; sin sondeo.
+
+- La cabecera del popup sigue el pronóstico de la hora seleccionada: icono,
+  temperatura, viento y sensación coherentes. Clic en una hora para consultarla;
+  Hoy empieza con las condiciones actuales. El código diario solo se usa en
+  las filas de resumen por días. Cambiar de hora no hace peticiones adicionales.
+
+- La tarjeta del clima ya no desaparece ni deja un hueco al abrir previews de
+  ventanas o grupos, ni al arrastrar iconos o archivos. Reutiliza la tarjeta y
+  mantiene pausadas las consultas meteorológicas durante esas interacciones.
+
+- La ubicación automática del clima muestra la ciudad detectada en Ajustes,
+  el Dock y el popup. Resuelve el nombre tras un fix reciente de Windows y lo
+  reutiliza sin consultas periódicas; la ciudad manual se guarda por separado.
+  Eliminados el aviso de ubicación guardada y la fila de créditos de esta
+  sección; las fuentes siguen en la documentación y el menú contextual del clima.
+
+- Corregido el desplazamiento y hueco al pasar el cursor sobre el clima: su
+  espacio permanece rígido durante la ampliación de iconos. Seleccionar un día
+  muestra sus horas, rango diario de temperatura y amanecer/atardecer. Las páginas de horas usan la misma caché acotada de cinco
+  días, sin peticiones ni timers extra; Hoy conserva la observación actual.
+
+- El clima usa por defecto la ubicación automática de Windows y permite elegir
+  una ciudad en Ajustes → Dock → Clima. La búsqueda solo consulta al enviarla,
+  con peticiones limitadas y descarte de respuestas antiguas. El popup elimina
+  la cruz y las acciones inferiores; sigue cerrándose con clic fuera y Esc.
+  Los créditos del proveedor quedan en Ajustes.
+
+- El clima libera expresamente sus targets, brushes y superficies de dibujo
+  privados al cerrar/actualizar. Su tamaño en píxeles se mantiene estable
+  durante el movimiento fraccional para evitar rasterizaciones innecesarias.
+  El mantenimiento de reposo agrupa la liberación gráfica diferida, evitando
+  crecimiento de memoria en aperturas repetidas sin esperar a la GPU ni vaciar
+  la cola en cada fotograma.
+- El clima se recupera tras suspensión, cambios de hora y fallos temporales de
+  vista/suscripción de red, respetando backoff y una única petición. Los plazos
+  estables evitan rearmar timers durante las animaciones. Alto contraste/lector
+  de pantalla usa un pronóstico nativo de texto. Diagnóstico sin ubicación, URL ni contenido.
+
+- Tarjeta azul de clima opcional dentro del Dock, con condición, temperatura
+  e ilustraciones estáticas de sol y nubes. Reserva su propio espacio, acompaña
+  la ampliación y ocultación y se adapta a los docks laterales.
+  Ajustes solicita una ubicación aproximada de Windows con permiso, sin
+  seguimiento continuo. Actualiza cada 30 min (60 en ahorro) mientras es visible,
+  con caché y trabajador acotado. Al pulsar abre un popup del tema elegido, con
+  hasta seis columnas horarias, cinco días, lluvia, viento y amanecer/atardecer.
+  Cierra con clic fuera o Escape y admite teclado; abrirlo reutiliza la caché
+  sin forzar consultas ni añadir sondeos de interfaz.
+
+- Mascota permanente opcional para los seis personajes: descansa sobre el Dock
+  visible, parpadea y da paseos cortos entre eventos. Cede ante la interacción
+  y pantalla completa, se pausa al bloquear y queda estática en ahorro de energía
+  o movimiento reducido. Poses en caché y temporizadores espaciados, sin sondeo continuo.
+
+- Los menús de clic derecho heredan el material completo del Dock y el selector
+  de idioma sigue la apariencia de la barra superior. Las previsualizaciones ya
+  siguen el Dock; los grupos abiertos se cierran si cambia su material o pantalla.
+  Los submenús nativos de carpetas y el modo accesible conservan el diseño de Windows.
+
+- Los popups de música, uso de IA y volumen siguen el material completo de la
+  barra superior: esmerilado, transparente y Liquid Glass, manteniendo la lectura
+  del texto y el fondo opaco cuando Windows desactiva la transparencia.
+
+- Espacio pausa o reanuda mientras el popup musical abierto con un clic tenga
+  el foco. Cerrarlo devuelve el foco a la app anterior; cambiar de app cierra
+  el popup. Mantener la tecla no repite la acción y no hay un atajo global.
+- Los grupos del Dock tienen miniiconos mayores, reflejo suave y borde fino,
+  siguiendo el material y la transparencia elegidos para el Dock. La caché
+  también se renueva al cambiar de material sin cambiar la paleta clara/oscura.
+
+- Pulsa o arrastra el progreso del panel multimedia para adelantar o retroceder
+  en reproductores de audio y vídeo compatibles. El arrastre previsualiza el
+  tiempo y envía el cambio al soltar; cambiar de pista, perder captura o Escape
+  cancela un gesto sin terminar. Solo se conserva el último destino pendiente,
+  sin consultas periódicas adicionales.
+- El icono de volumen de la barra superior abre un control deslizante debajo,
+  con el porcentaje y un botón de silencio, como en el panel de música; otro
+  clic lo cierra. Sin dispositivo de salida sigue abriendo la página de sonido
+  de Windows (issue #55).
+- La barra superior aparece en todas las pantallas, como en macOS: cada una
+  tiene la misma barra a su escala, reserva su propia franja para las ventanas
+  maximizadas y se oculta por su cuenta (pantalla completa, ocultación
+  automática o inteligente, y se revela en su propio borde superior). El
+  nombre de la app se atenúa en las pantallas donde no está. Las copias no
+  leen nada por sí mismas: dibujan lo que lee la barra principal y toman
+  prestados sus lectores de reproducción, volumen y uso al usarlas, así que
+  sus paneles de música, uso de IA y volumen se abren y funcionan en su propia
+  pantalla, uno a la vez. Los paneles propios de Windows (ajustes rápidos,
+  notificaciones, redes) se siguen abriendo donde los pone Windows, en la
+  pantalla principal. Ajustes → Barra superior → *En todas las pantallas*,
+  activado por defecto.
+- Al llevar el Dock a otra pantalla con el puntero ya no destella el Dock
+  anterior, a la escala de la otra pantalla, antes de entrar deslizándose: la
+  ventana del Dock queda fuera de la vista hasta que su contenido nuevo está
+  en pantalla.
+- Los programas y el instalador llevan sus datos de editor completos
+  (empresa, copyright, nombres de archivo), que iban vacíos y que las
+  heurísticas de los antivirus miran con desconfianza en programas sin firma
+  (issue #82).
+- Las insignias que las apps guardan en la plataforma de notificaciones de
+  Windows ya aparecen en sus iconos del Dock, como en la barra de tareas: los
+  no leídos de Outlook y otras apps web instaladas desde Edge, y de apps como
+  Telegram (Unigram) o WhatsApp. Un número va en una píldora roja (99+ a
+  partir de 99) y un glifo, como un punto rojo. A diferencia de los iconos
+  superpuestos de Teams o Slack, estas nunca llegan al Dock como llamadas:
+  Muelle las lee, solo lectura y sin el texto de las notificaciones, con el
+  SQLite que trae Windows, y comprueba si cambian una vez por segundo en
+  microsegundos. Siguen el ajuste de Windows «Mostrar distintivos en las
+  aplicaciones de la barra de tareas» (issue #74).
+- Las apps web de Firefox (Firefox 143+) tienen su propio icono en el Dock,
+  como en la barra de tareas, en vez de unirse a Firefox: sus accesos directos
+  abren el propio Firefox con `-taskbar-tab`, que Muelle ahora reconoce. Una
+  ventana de Firefox que recibe su identidad de navegación privada después de
+  abrirse pasa al icono de Navegación privada al enfocarla, en vez de quedarse
+  en Firefox. Pulsar Firefox ya no trae una ventana de app web. También para
+  LibreWolf, Waterfox, Floorp y Zen (issue #72).
+- El Dock llega antes a otra pantalla: unos 0,2 s después de que el puntero
+  toque su borde inferior, en vez de unos 0,4 s. Los bordes se miran en cada
+  fotograma solo mientras el puntero está cerca de uno (cada 80 ms en el
+  resto), la espera antes de mudarse baja de 250 a 180 ms, y mudar el Dock ya
+  no redibuja la barra superior.
 
 ## [0.1.26]
 
@@ -185,6 +477,21 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- Fixed the Dock jumping back to a display it had been brought to after the
+  displays changed: with Windows+P switching between "PC screen only" and
+  "Extend", or a monitor unplugged or rearranged, a hiding Dock now goes back
+  to the primary display until the pointer brings it elsewhere, instead of
+  reappearing on the other one (or on whatever display took its place). After
+  displays change, or Windows rescales the Dock between displays with different
+  scaling, the Dock is rebuilt at once.
+- Fixed the Dock staying invisible, frozen or at the other display's scale for
+  a second or more when brought to another display with the pointer: its
+  window moved under a still pointer before Windows noticed the pointer in it,
+  and the Dock and Windows then passed "the pointer left" back and forth at
+  full speed, blocking the Dock until the mouse moved. The Dock now looks again
+  once Windows has caught up. The log notes display changes, when the Dock
+  moves to another display, and why it did not when the pointer rested on
+  another display's edge.
 - Store apps show their logo without the coloured square behind it, as their
   taskbar button does (issue #73): Muelle uses the package's own logo, its light
   form on a light taskbar, and the shell's image only for apps without one.
@@ -202,6 +509,21 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### Español
 
+- Corregido el Dock que volvía solo a una pantalla a la que se había llevado
+  después de cambiar las pantallas: al alternar con Windows+P entre «Solo
+  pantalla de PC» y «Ampliar», o al desconectar o reordenar un monitor, un Dock
+  que se oculta vuelve a la pantalla principal hasta que el puntero lo lleve a
+  otra, en vez de reaparecer en la otra (o en la que ocupara su lugar). Tras un
+  cambio de pantallas, o cuando Windows reescala el Dock entre pantallas con
+  distinta escala, el Dock se reconstruye al momento.
+- Corregido el Dock que se quedaba invisible, congelado o a la escala de la
+  otra pantalla durante un segundo o más al llevarlo con el puntero a otra
+  pantalla: su ventana se movía bajo un puntero quieto antes de que Windows
+  viera el puntero dentro, y el Dock y Windows se pasaban «el puntero salió» a
+  toda velocidad, bloqueando el Dock hasta mover el ratón. Ahora el Dock vuelve
+  a mirar cuando Windows se ha puesto al día. El registro anota los cambios de
+  pantallas, cuándo el Dock pasa a otra y por qué no lo hizo al dejar el
+  puntero en el borde de otra pantalla.
 - Las apps de la Tienda muestran su logo sin el cuadrado de color detrás, como
   su botón de la barra de tareas (issue #73): Muelle usa el logo del paquete,
   su forma clara con la barra clara y la imagen del shell solo para las apps

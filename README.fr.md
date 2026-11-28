@@ -69,6 +69,7 @@ Agrandissement fluide, aperçus des fenêtres en direct et effet génie facultat
   en cours d'utilisation, les icônes masquées de la zone de notification, ainsi
   que les boutons Rechercher, Affichage des tâches et Widgets s'ils figurent
   dans votre barre des tâches Windows.
+  Avec plusieurs écrans, chaque écran affiche la barre.
 - Un îlot arrondi dans la barre de menus pour les limites d'utilisation de
   Claude Code, Codex, OpenCode Go, Z.ai GLM Coding Plan, Gemini CLI et
   Antigravity. Z.ai affiche ses quotas sur 5 heures et sur une semaine ; les

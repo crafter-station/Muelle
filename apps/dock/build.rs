@@ -49,6 +49,12 @@ fn main() {
     // Code signing checks that every signed file names the same product.
     resources.set("ProductName", "Muelle");
     resources.set("FileDescription", "Muelle dock");
+    // Complete publisher details: unsigned programs with blank ones are what
+    // antivirus heuristics distrust most (issue #82).
+    resources.set("CompanyName", "Muelle");
+    resources.set("LegalCopyright", "Copyright (c) 2026 Muelle contributors");
+    resources.set("OriginalFilename", "muelle.exe");
+    resources.set("InternalName", "muelle");
     // Ensure Microsoft.Windows.Common-Controls 6.0.0.0 is declared so shell
     // extensions (like utshellext.dll) find modern exports like LoadIconWithScaleDown
     // (ordinal 381) instead of failing on comctl32 v5 (issue #23).

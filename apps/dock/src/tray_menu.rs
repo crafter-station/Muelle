@@ -489,6 +489,11 @@ impl TrayMenu {
         Ok(())
     }
 
+    /// The menu bar's button it hangs from, on screen.
+    pub fn button(&self) -> RECT {
+        self.button
+    }
+
     pub fn is_closing(&self) -> bool {
         self.closing.is_some()
     }

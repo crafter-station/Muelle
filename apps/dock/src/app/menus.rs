@@ -72,7 +72,7 @@ pub(super) fn run_outside(outside: Outside) {
                 _ => eprintln!("muelle: no se encontró muelle-settings.exe junto al dock"),
             }
         }
-        Outside::InputMenu { gfx, anchor, dark } => {
+        Outside::InputMenu { gfx, anchor, look } => {
             use muelle_shell::keyboard;
             let context = keyboard::Context::current();
             let layouts = keyboard::layouts(strings::text().keyboard);
@@ -98,9 +98,10 @@ pub(super) fn run_outside(outside: Outside) {
             let owner = main_window();
             with_app("abrir selector de teclado", |app| {
                 app.menu_open = true;
+                app.suspend_companion();
                 Ok(())
             });
-            let chosen = menu::show_below(&gfx, owner, &items, anchor, dark);
+            let chosen = menu::show_below(&gfx, owner, &items, anchor, look);
             with_app("cerrar selector de teclado", App::after_menu);
             if chosen == Some(SETTINGS) {
                 submit(ShellAction::Open {
@@ -136,9 +137,9 @@ pub(super) fn run_outside(outside: Outside) {
         Outside::CalendarMenu {
             gfx,
             anchor,
-            dark,
+            look,
             spring,
-        } => calendar_menu(&gfx, anchor, dark, spring),
+        } => calendar_menu(&gfx, anchor, look, spring),
         Outside::SystemMenu(request) => {
             let next = system_menu::show(request, main_window());
             with_app("menú del sistema cerrado", App::system_menu_closed);
@@ -157,7 +158,7 @@ pub(super) fn run_outside(outside: Outside) {
                 owner,
                 &request.items,
                 request.anchor,
-                request.dark,
+                request.look,
                 request.placement,
             );
             with_app("menú cerrado", App::after_menu);
@@ -188,7 +189,7 @@ pub(super) fn run_outside(outside: Outside) {
 
 /// The menu of the calendar's round button: today, and what the clock and the
 /// Windows calendar flyout lead to. The calendar stays behind it.
-fn calendar_menu(gfx: &Gfx, anchor: POINT, dark: bool, spring: Option<POINT>) {
+fn calendar_menu(gfx: &Gfx, anchor: POINT, look: crate::appearance::Look, spring: Option<POINT>) {
     const TODAY: u32 = 1;
     const NOTIFICATIONS: u32 = 2;
     const CALENDAR_APP: u32 = 3;
@@ -215,8 +216,8 @@ fn calendar_menu(gfx: &Gfx, anchor: POINT, dark: bool, spring: Option<POINT>) {
         app.render()
     });
     let chosen = match spring {
-        Some(origin) => menu::show_springing(gfx, main_window(), &items, anchor, dark, origin),
-        None => menu::show_below(gfx, main_window(), &items, anchor, dark),
+        Some(origin) => menu::show_springing(gfx, main_window(), &items, anchor, look, origin),
+        None => menu::show_below(gfx, main_window(), &items, anchor, look),
     };
     with_app("menú del calendario cerrado", |app| {
         hold(app, false);
@@ -392,7 +393,7 @@ impl App {
             items,
             anchor,
             placement: stage_placement,
-            dark: !crate::appearance::light(),
+            look: crate::appearance::current(),
         })))
     }
 
@@ -552,6 +553,9 @@ impl App {
         target: MenuTarget,
         command: u32,
     ) -> Result<Option<Outside>> {
+        if matches!(&target, MenuTarget::Weather) {
+            return self.weather_command(command);
+        }
         let MenuTarget::Entry {
             id,
             role,

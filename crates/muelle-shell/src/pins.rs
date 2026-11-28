@@ -8,7 +8,9 @@ use std::{
 use windows::{
     Win32::{
         Storage::{
-            EnhancedStorage::{PKEY_AppUserModel_ID, PKEY_Link_TargetParsingPath},
+            EnhancedStorage::{
+                PKEY_AppUserModel_ID, PKEY_Link_Arguments, PKEY_Link_TargetParsingPath,
+            },
             FileSystem::GetDriveTypeW,
         },
         System::{
@@ -358,16 +360,19 @@ pub fn link_target(link: &Path) -> Option<String> {
 pub fn shortcut_id(link: &Path) -> Option<String> {
     let (target, arguments) = read_link(link)?;
     let target = target.filter(|target| Path::new(target).exists())?;
-    if let Some(aumid) = link_app_id(link)
-        && let Some(id) = crate::browser_profiles::shortcut_id(link, &target, &arguments, &aumid)
+    let aumid = link_app_id(link);
+    if let Some(aumid) = aumid.as_deref()
+        && let Some(id) = crate::browser_profiles::shortcut_id(link, &target, &arguments, aumid)
     {
         return Some(id);
     }
     // A web app's shortcut opens a launcher (`msedge_proxy.exe`), but the
     // app's windows carry its own identity: pinned by it, they gather under
     // the pin, as on the taskbar.
-    if let Some(app) = link_app_id(link)
-        .filter(|app| arguments.contains("--app-id=") || is_separate_app(app, &target))
+    if let Some(app) = aumid
+        .filter(|app| {
+            crate::browser_profiles::web_app_arguments(&arguments) || is_separate_app(app, &target)
+        })
         .filter(|app| app_exists(&format!("{APPS_FOLDER}{app}")))
     {
         return Some(format!("{APPS_FOLDER}{app}"));
@@ -387,19 +392,48 @@ pub fn shortcut_id(link: &Path) -> Option<String> {
 /// Requires COM to be initialized on the calling thread.
 #[must_use]
 pub fn is_separate_app(app_id: &str, program: &str) -> bool {
-    // SAFETY: Only resolves the app's shell item and reads one property.
-    let target = unsafe {
-        let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem2>(
+    // SAFETY: Resolves only the registered app's existing shell item.
+    let item = unsafe {
+        SHCreateItemFromParsingName::<_, _, IShellItem2>(
             &HSTRING::from(format!("{APPS_FOLDER}{app_id}")),
             None,
-        ) else {
-            return false;
-        };
+        )
+    };
+    item.is_ok_and(|item| separate_item(&item, program))
+}
+
+fn separate_item(item: &IShellItem2, program: &str) -> bool {
+    // SAFETY: Reads an existing shell item without resolving or launching it.
+    let target = unsafe {
         item.GetString(&PKEY_Link_TargetParsingPath)
             .ok()
             .and_then(|target| take_string(target))
     };
-    target.is_none_or(|target| normalize_id(&target) != normalize_id(program))
+    if target.is_none_or(|target| normalize_id(&target) != normalize_id(program)) {
+        return true;
+    }
+    // Firefox web apps open firefox.exe itself too, with `-taskbar-tab`
+    // (issue #72). Its own shortcut, private browsing's (a separate
+    // `private_browsing.exe`) and its tabs keep their usual grouping.
+    if crate::browser_profiles::is_gecko(program) {
+        // SAFETY: Reads one property of an existing shell item.
+        return unsafe {
+            item.GetString(&PKEY_Link_Arguments)
+                .ok()
+                .and_then(|args| take_string(args))
+        }
+        .is_some_and(|args| crate::browser_profiles::taskbar_tab_arguments(&args));
+    }
+    // Chrome web apps can use chrome.exe itself, unlike proxy-based launchers.
+    // Compare the registered shortcut's app argument as well as its executable.
+    // Browser profiles and ordinary tabs must still group with the browser.
+    crate::browser_profiles::browser_name(program).is_some()
+        && unsafe {
+            item.GetString(&PKEY_Link_Arguments)
+                .ok()
+                .and_then(|args| take_string(args))
+        }
+        .is_some_and(|args| crate::browser_profiles::web_app_arguments(&args))
 }
 
 /// The identity a shortcut gives the app it opens (`AppUserModelID`), when
@@ -667,6 +701,14 @@ fn read_link(link: &Path) -> Option<(Option<String>, String)> {
         Some((target, arguments.trim().to_owned()))
     }
 }
+
+#[cfg(test)]
+#[path = "pins/web_app_tests.rs"]
+mod web_app_tests;
+
+#[cfg(test)]
+#[path = "pins/firefox_web_app_tests.rs"]
+mod firefox_web_app_tests;
 
 #[cfg(test)]
 mod tests {

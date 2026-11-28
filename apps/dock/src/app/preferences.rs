@@ -4,13 +4,10 @@ use std::{env, path::Path};
 
 use anyhow::{Context, Result};
 use muelle_config::{Config, DockGroup, MenuBarIcon};
-use muelle_core::{
-    frame::DockEdge,
-    roster::{Group, Roster},
-};
+use muelle_core::roster::{Group, Roster};
 use muelle_shell::{
     pins::{app_exists, taskbar_pins, taskbar_pins_if_readable},
-    system::primary_monitor,
+    system::{monitor_at, monitor_rects, primary_monitor},
     tracker::{self, normalize_id},
 };
 
@@ -181,7 +178,7 @@ impl App {
         if config.language != self.config.language {
             strings::set_language(config.language);
             // Labels are drawn text: redraw them in the new language.
-            self.assets_for = (0.0, false, 0, DockEdge::Bottom);
+            self.assets_for = None;
         }
         // The dock and the menu bar key their looks on it: `refresh` redraws both.
         crate::appearance::set(config.appearance);
@@ -378,12 +375,35 @@ impl App {
                 eprintln!("muelle: barra superior: {error:#}");
             }
         }
+        self.sync_menu_bar_displays();
         self.apply_edge_settings();
+    }
+
+    /// Copies of the menu bar on the other displays, when chosen; run again
+    /// when the displays change.
+    pub(super) fn sync_menu_bar_displays(&mut self) {
+        let Some(bar) = &mut self.menubar else {
+            return;
+        };
+        let primary = primary_monitor().map(|monitor| monitor.screen);
+        let displays: Vec<_> = if self.config.menu_bar_all_displays {
+            monitor_rects()
+                .into_iter()
+                .filter(|screen| Some(*screen) != primary)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if let Err(error) = bar.set_displays(&self.gfx, &displays) {
+            muelle_shell::log::line(&format!("barra superior en otras pantallas: {error:#}"));
+        }
     }
 
     /// Shows the name of the app in front, as the macOS menu bar does.
     pub(super) fn update_menu_bar_app(&mut self) -> Result<()> {
-        if self.menubar.is_none() {
+        // One of Muelle's own menus holds the focus: the app in front, whose
+        // name stays up as on macOS, has not changed.
+        if self.menubar.is_none() || self.menu_open {
             return Ok(());
         }
         let front = tracker::foreground_window();
@@ -400,8 +420,25 @@ impl App {
             self.names.insert(id.clone(), name);
         }
         let name = self.names.get(&id).map_or("", String::as_str);
+        // The display of the app in front: its name dims on the others.
+        let display = self
+            .windows
+            .iter()
+            .any(|window| window.hwnd == front)
+            .then(|| tracker::visible_rect(front))
+            .flatten()
+            .and_then(|rect| {
+                monitor_at(windows::Win32::Foundation::POINT {
+                    x: rect.left + (rect.right - rect.left) / 2,
+                    y: rect.top + (rect.bottom - rect.top) / 2,
+                })
+            })
+            .map(|monitor| monitor.screen);
         match &mut self.menubar {
-            Some(bar) => bar.set_app_name(&self.gfx, name),
+            Some(bar) => {
+                bar.set_app_name(&self.gfx, name)?;
+                bar.set_active_display(&self.gfx, display)
+            }
             None => Ok(()),
         }
     }

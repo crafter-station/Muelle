@@ -3,6 +3,21 @@
 
 #[path = "gfx/backdrop.rs"]
 mod backdrop;
+#[path = "gfx/weather.rs"]
+mod weather;
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WeatherGlyph {
+    Sun,
+    Moon,
+    PartlyCloudy,
+    NightCloud,
+    Cloud,
+    Fog,
+    Rain,
+    Snow,
+    Storm,
+    Unknown,
+}
 
 use anyhow::{Context, Result};
 use muelle_core::frame::DockEdge;
@@ -56,6 +71,27 @@ use windows::{
     core::{Interface, w},
 };
 use windows_numerics::{Matrix3x2, Vector2};
+
+/// Static coating for a cached group tile. The scene supplies its own palette;
+/// drawing also stays usable by diagnostics without app/theme globals.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GroupStyle {
+    pub fill: Color,
+    pub sheen: Color,
+    pub rim_top: Color,
+    pub rim_bottom: Color,
+    pub slot: Color,
+    pub ink: Color,
+}
+
+fn color_float(color: Color) -> D2D1_COLOR_F {
+    rgb(
+        f32::from(color.R) / 255.0,
+        f32::from(color.G) / 255.0,
+        f32::from(color.B) / 255.0,
+        f32::from(color.A) / 255.0,
+    )
+}
 
 /// Use the first letter, not the app language: media and window titles may
 /// use another script. Skip punctuation, numbers and bidi isolation marks.
@@ -116,6 +152,16 @@ pub struct Gfx {
 }
 
 impl Gfx {
+    /// Submit deferred drawing/destruction work on the owning UI thread.
+    /// Use only for coalesced idle maintenance, never per frame or per surface.
+    pub(crate) fn flush_released_drawings(&self) -> Result<()> {
+        // Keep pipeline state and live resources intact. Flush is asynchronous;
+        // no GPU wait, device reset or operation on another app's device.
+        unsafe {
+            self.d3d.GetImmediateContext()?.Flush();
+        }
+        Ok(())
+    }
     pub fn new() -> Result<Self> {
         let compositor = Compositor::new()?;
         // SAFETY: D3D writes only to the initialized output slot; the returned
@@ -545,42 +591,27 @@ impl Gfx {
         side: u32,
         icons: &[Option<&IconImage>],
         count: usize,
-        light: bool,
+        style: GroupStyle,
     ) -> Result<CompositionSurfaceBrush> {
         let size = side as f32;
-        let inset = size * 0.08;
+        let inset = size * 0.02;
         let tile = size - 2.0 * inset;
         let radius = tile * 0.225;
-        let pad = tile * 0.13;
-        let gap = tile * 0.08;
+        let pad = tile * 0.075;
+        let gap = tile * 0.05;
         let cell = (tile - 2.0 * pad - gap) / 2.0;
-        let stroke = (size * 0.022).max(1.0);
+        let stroke = (size * 0.012).max(0.8);
         let more = if count > 4 {
             Some(self.centered_text(&format!("+{}", count - 3), cell * 0.5, cell)?)
         } else {
             None
-        };
-        let (fill_color, rim_color, slot_color, ink_color) = if light {
-            (
-                rgb(1.0, 1.0, 1.0, 0.55),
-                rgb(0.0, 0.0, 0.0, 0.22),
-                rgb(0.0, 0.0, 0.0, 0.10),
-                rgb(0.0, 0.0, 0.0, 0.75),
-            )
-        } else {
-            (
-                rgb(0.30, 0.30, 0.33, 0.62),
-                rgb(1.0, 1.0, 1.0, 0.34),
-                rgb(1.0, 1.0, 1.0, 0.12),
-                rgb(1.0, 1.0, 1.0, 0.92),
-            )
         };
         self.draw(side, side, |dc| {
             let half = stroke / 2.0;
             // SAFETY: Brushes, the text layout and the images stay alive
             // through the drawing calls.
             unsafe {
-                let fill = dc.CreateSolidColorBrush(&fill_color, None)?;
+                let fill = dc.CreateSolidColorBrush(&color_float(style.fill), None)?;
                 dc.FillRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
                         rect: D2D_RECT_F {
@@ -594,7 +625,60 @@ impl Gfx {
                     },
                     &fill,
                 );
-                let rim = dc.CreateSolidColorBrush(&rim_color, None)?;
+                let gradient = |colors: &[(f32, Color)]| -> Result<_> {
+                    let stops: Vec<_> = colors
+                        .iter()
+                        .map(|(position, color)| D2D1_GRADIENT_STOP {
+                            position: *position,
+                            color: color_float(*color),
+                        })
+                        .collect();
+                    let collection = dc.CreateGradientStopCollection(
+                        &stops,
+                        D2D1_COLOR_SPACE_SRGB,
+                        D2D1_COLOR_SPACE_SRGB,
+                        D2D1_BUFFER_PRECISION_8BPC_UNORM,
+                        D2D1_EXTEND_MODE_CLAMP,
+                        D2D1_COLOR_INTERPOLATION_MODE_PREMULTIPLIED,
+                    )?;
+                    Ok(dc.CreateLinearGradientBrush(
+                        &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                            startPoint: Vector2::new(inset, inset),
+                            endPoint: Vector2::new(size - inset, size - inset),
+                        },
+                        None,
+                        &collection,
+                    )?)
+                };
+                let sheen = gradient(&[
+                    (0.0, style.sheen),
+                    (
+                        0.6,
+                        Color {
+                            A: 0,
+                            ..style.sheen
+                        },
+                    ),
+                    (1.0, style.sheen),
+                ])?;
+                dc.FillRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: D2D_RECT_F {
+                            left: inset,
+                            top: inset,
+                            right: size - inset,
+                            bottom: size - inset,
+                        },
+                        radiusX: radius,
+                        radiusY: radius,
+                    },
+                    &sheen,
+                );
+                let rim = gradient(&[
+                    (0.0, style.rim_top),
+                    (0.5, style.rim_bottom),
+                    (1.0, style.rim_top),
+                ])?;
                 dc.DrawRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
                         rect: D2D_RECT_F {
@@ -603,15 +687,15 @@ impl Gfx {
                             right: size - inset - half,
                             bottom: size - inset - half,
                         },
-                        radiusX: radius - half,
-                        radiusY: radius - half,
+                        radiusX: (radius - half).max(0.0),
+                        radiusY: (radius - half).max(0.0),
                     },
                     &rim,
                     stroke,
                     None,
                 );
-                let slot = dc.CreateSolidColorBrush(&slot_color, None)?;
-                let ink = dc.CreateSolidColorBrush(&ink_color, None)?;
+                let slot = dc.CreateSolidColorBrush(&color_float(style.slot), None)?;
+                let ink = dc.CreateSolidColorBrush(&color_float(style.ink), None)?;
                 for index in 0..count.min(4) {
                     let left = inset + pad + (index % 2) as f32 * (cell + gap);
                     let top = inset + pad + (index / 2) as f32 * (cell + gap);
@@ -749,6 +833,76 @@ impl Gfx {
     }
 
     /// Shared temporary app tile while a shell icon is loading or unavailable.
+    /// An app's notification badge (issue #74): a red pill with its count
+    /// in white, or a red dot when it has no number. Drawn tall enough for
+    /// the largest magnified icon and scaled down by the visual.
+    pub fn badge_brush(&self, text: &str, light: bool) -> Result<LabelBrush> {
+        const HEIGHT: f32 = 48.0;
+        let utf16: Vec<u16> = text.encode_utf16().collect();
+        // SAFETY: Strings and structures passed to each call remain alive for its duration.
+        let layout = unsafe {
+            let format = self.dwrite.CreateTextFormat(
+                text_font(),
+                None,
+                DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                HEIGHT * 0.62,
+                w!(""),
+            )?;
+            format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)?;
+            format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+            self.dwrite
+                .CreateTextLayout(&utf16, &format, 4096.0, HEIGHT)?
+        };
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        // SAFETY: `metrics` lives for the call.
+        unsafe { layout.GetMetrics(&mut metrics)? };
+        // One digit stays a circle; more grow into a pill, as on macOS.
+        let width = if text.is_empty() {
+            HEIGHT
+        } else {
+            (metrics.width + HEIGHT * 0.55).max(HEIGHT).ceil()
+        };
+        // SAFETY: The layout lives for the drawing below.
+        unsafe { layout.SetMaxWidth(width)? };
+        let brush = self.draw(width as u32, HEIGHT as u32, |dc| {
+            let pill = D2D1_ROUNDED_RECT {
+                rect: D2D_RECT_F {
+                    left: 0.0,
+                    top: 0.0,
+                    right: width,
+                    bottom: HEIGHT,
+                },
+                radiusX: HEIGHT / 2.0,
+                radiusY: HEIGHT / 2.0,
+            };
+            // The system red, a shade lighter in dark mode, as the
+            // attention dot uses.
+            let red = if light {
+                rgb(1.0, 59.0 / 255.0, 48.0 / 255.0, 1.0)
+            } else {
+                rgb(1.0, 69.0 / 255.0, 58.0 / 255.0, 1.0)
+            };
+            // SAFETY: Brushes and geometry live for these drawing calls.
+            unsafe {
+                dc.FillRoundedRectangle(&pill, &dc.CreateSolidColorBrush(&red, None)?);
+                dc.DrawTextLayout(
+                    Vector2 { X: 0.0, Y: 0.0 },
+                    &layout,
+                    &dc.CreateSolidColorBrush(&rgb(1.0, 1.0, 1.0, 1.0), None)?,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                );
+            }
+            Ok(())
+        })?;
+        Ok(LabelBrush {
+            brush,
+            width,
+            height: HEIGHT,
+        })
+    }
+
     pub fn placeholder_brush(&self, side: u32, light: bool) -> Result<CompositionSurfaceBrush> {
         let size = side as f32;
         self.draw(side, side, |dc| {

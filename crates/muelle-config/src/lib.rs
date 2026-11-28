@@ -151,8 +151,21 @@ pub struct Config {
     /// center.
     pub calendar: bool,
     pub calendar_week_start: WeekStart,
+    /// The menu bar on every display, as macOS draws it, not only on the
+    /// primary one. On by default; the other displays show the same bar,
+    /// with the app name dimmed where that app is not.
+    pub menu_bar_all_displays: bool,
     /// Opt-in peripheral monitoring. Off means no accessory reader or queries.
     pub accessory_battery: bool,
+    /// Opt-in weather card; off means no weather requests or resources.
+    pub weather: bool,
+    /// A coarse Windows fix obtained by Settings with foreground consent.
+    pub weather_location: Option<WeatherLocation>,
+    /// City resolved from the automatic fix, never the manual city preference.
+    pub weather_auto_city: Option<WeatherCity>,
+    pub weather_location_mode: WeatherLocationMode,
+    /// An explicit city never replaces the cached Windows location.
+    pub weather_city: Option<WeatherCity>,
     /// The dot under apps that have windows open.
     pub show_indicators: bool,
     /// The section of recently used apps that are not pinned.
@@ -165,6 +178,9 @@ pub struct Config {
     /// Which one: Claude's crab by default, the cat, the fox, the capybara,
     /// the mochi or the girl.
     pub mascot_character: MascotCharacter,
+    /// Keep a quiet companion on the visible Dock between events. Opt-in;
+    /// does not prevent automatic hiding or animate in energy saver.
+    pub mascot_always_visible: bool,
     /// The mascot also suggests a break after 90 minutes of work without a
     /// pause. Off by default: a reminder is only welcome when asked for.
     pub mascot_break_reminder: bool,
@@ -356,7 +372,126 @@ pub enum Appearance {
 pub const ICON_SIZE_RANGE: (u32, u32) = (32, 96);
 pub const MAX_MAGNIFIED_SIZE: u32 = 160;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WeatherLocationMode {
+    #[default]
+    Auto,
+    City,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeatherCity {
+    pub label: String,
+    pub latitude_e2: i32,
+    pub longitude_e2: i32,
+}
+
+impl std::fmt::Debug for WeatherCity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WeatherCity(redacted)")
+    }
+}
+
+impl WeatherCity {
+    pub fn from_degrees(label: String, latitude: f64, longitude: f64) -> Option<Self> {
+        let (latitude_e2, longitude_e2) = coarse_weather_coordinates(latitude, longitude)?;
+        let city = Self {
+            label,
+            latitude_e2,
+            longitude_e2,
+        };
+        city.valid().then_some(city)
+    }
+
+    pub fn valid(&self) -> bool {
+        !self.label.trim().is_empty()
+            && self.label.chars().count() <= 160
+            && !self.label.chars().any(char::is_control)
+            && (-9000..=9000).contains(&self.latitude_e2)
+            && (-18000..=18000).contains(&self.longitude_e2)
+    }
+}
+
+/// Approximate location only. No precise coordinate, location history or
+/// device identifier is kept. The timestamp is the Windows fix's UTC time.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeatherLocation {
+    pub latitude_e2: i32,
+    pub longitude_e2: i32,
+    pub updated_at: u64,
+}
+
+impl std::fmt::Debug for WeatherLocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WeatherLocation(approximate, redacted)")
+    }
+}
+
+impl WeatherLocation {
+    pub fn from_degrees(latitude: f64, longitude: f64, updated_at: u64) -> Option<Self> {
+        let (latitude_e2, longitude_e2) = coarse_weather_coordinates(latitude, longitude)?;
+        let location = Self {
+            latitude_e2,
+            longitude_e2,
+            updated_at,
+        };
+        location.valid().then_some(location)
+    }
+
+    pub fn valid(self) -> bool {
+        (-9000..=9000).contains(&self.latitude_e2)
+            && (-18000..=18000).contains(&self.longitude_e2)
+            && self.updated_at > 0
+            && self.updated_at < 253_402_300_800
+    }
+}
+
+fn coarse_weather_coordinates(latitude: f64, longitude: f64) -> Option<(i32, i32)> {
+    (latitude.is_finite()
+        && longitude.is_finite()
+        && (-90.0..=90.0).contains(&latitude)
+        && (-180.0..=180.0).contains(&longitude))
+    .then(|| {
+        (
+            (latitude * 100.0).round() as i32,
+            (longitude * 100.0).round() as i32,
+        )
+    })
+}
+
 impl Config {
+    pub fn display_weather_city(&self) -> Option<&WeatherCity> {
+        match self.weather_location_mode {
+            WeatherLocationMode::City => self.weather_city.as_ref(),
+            WeatherLocationMode::Auto => self.weather_auto_city.as_ref().filter(|city| {
+                self.weather_location.is_some_and(|loc| {
+                    loc.latitude_e2 == city.latitude_e2 && loc.longitude_e2 == city.longitude_e2
+                })
+            }),
+        }
+    }
+
+    pub fn selected_weather_city(&self) -> Option<&WeatherCity> {
+        (self.weather_location_mode == WeatherLocationMode::City)
+            .then_some(self.weather_city.as_ref())
+            .flatten()
+    }
+
+    pub fn weather_coordinates(&self) -> Option<(i32, i32)> {
+        match self.weather_location_mode {
+            WeatherLocationMode::Auto => self
+                .weather_location
+                .map(|loc| (loc.latitude_e2, loc.longitude_e2)),
+            WeatherLocationMode::City => self
+                .weather_city
+                .as_ref()
+                .map(|city| (city.latitude_e2, city.longitude_e2)),
+        }
+    }
+
     /// Either policy needs a reveal strip and leaves maximized windows the full work area.
     pub fn hides_automatically(&self) -> bool {
         self.auto_hide || self.smart_hide
@@ -382,6 +517,14 @@ impl Config {
             .map(|file| file.trim().to_owned())
             .filter(|file| !file.is_empty());
         self.search = self.search.sanitized();
+        self.weather_location = self.weather_location.filter(|location| location.valid());
+        self.weather_city = self.weather_city.filter(WeatherCity::valid);
+        self.weather_auto_city = self.weather_auto_city.filter(|city| {
+            city.valid()
+                && self.weather_location.is_some_and(|loc| {
+                    loc.latitude_e2 == city.latitude_e2 && loc.longitude_e2 == city.longitude_e2
+                })
+        });
         self
     }
 
@@ -429,6 +572,7 @@ impl Default for Config {
             menu_bar_island_style: IslandStyle::Notch,
             menu_bar_notifications: false,
             menu_bar_system_monitor: false,
+            menu_bar_all_displays: true,
             menu_bar_clock_target: None,
             menu_bar_circle: true,
             menu_bar_circle_menu: true,
@@ -443,11 +587,17 @@ impl Default for Config {
             calendar: true,
             calendar_week_start: WeekStart::Auto,
             accessory_battery: false,
+            weather: false,
+            weather_location: None,
+            weather_auto_city: None,
+            weather_location_mode: WeatherLocationMode::Auto,
+            weather_city: None,
             show_indicators: true,
             show_recents: true,
             bounce_on_open: true,
             mascot: true,
             mascot_character: MascotCharacter::Crab,
+            mascot_always_visible: false,
             mascot_break_reminder: false,
             check_updates: true,
             auto_update: true,
@@ -588,6 +738,98 @@ fn write_config(path: &Path, config: &Config) -> Result<(), ConfigError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn automatic_city_tracks_its_fix_without_overriding_the_manual_city()
+    -> Result<(), serde_json::Error> {
+        let mut config: super::Config = serde_json::from_str(
+            r#"{
+            "weatherLocation":{"latitudeE2":-1205,"longitudeE2":-7704,"updatedAt":1},
+            "weatherAutoCity":{"label":"Lima","latitudeE2":-1205,"longitudeE2":-7704},
+            "weatherCity":{"label":"Lisboa","latitudeE2":3872,"longitudeE2":-914}
+        }"#,
+        )?;
+        assert_eq!(
+            config
+                .display_weather_city()
+                .map(|city| city.label.as_str()),
+            Some("Lima")
+        );
+        config.weather_location_mode = super::WeatherLocationMode::City;
+        assert_eq!(
+            config
+                .display_weather_city()
+                .map(|city| city.label.as_str()),
+            Some("Lisboa")
+        );
+        config.weather_location_mode = super::WeatherLocationMode::Auto;
+        config.weather_location = super::WeatherLocation::from_degrees(1.0, 1.0, 2);
+        assert!(
+            config.display_weather_city().is_none(),
+            "moving must never retain the wrong city name"
+        );
+        let config = config.sanitized();
+        assert!(config.weather_auto_city.is_none());
+        assert_eq!(
+            config.weather_city.as_ref().map(|city| city.label.as_str()),
+            Some("Lisboa")
+        );
+        assert!(!format!("{config:?}").contains("Lisboa"));
+        Ok(())
+    }
+    #[test]
+    fn weather_city_is_explicit_preserves_auto_fix_and_validates_saved_data()
+    -> Result<(), serde_json::Error> {
+        let mut config: super::Config = serde_json::from_str("{}")?;
+        assert_eq!(
+            config.weather_location_mode,
+            super::WeatherLocationMode::Auto
+        );
+        config.weather_location = super::WeatherLocation::from_degrees(38.72, -9.14, 1);
+        let automatic = config.weather_coordinates();
+        config.weather_city = Some(super::WeatherCity {
+            label: "Lima, Perú".into(),
+            latitude_e2: -1205,
+            longitude_e2: -7704,
+        });
+        assert_eq!(config.weather_coordinates(), automatic);
+        assert!(config.selected_weather_city().is_none());
+        config.weather_location_mode = super::WeatherLocationMode::City;
+        assert_eq!(config.weather_coordinates(), Some((-1205, -7704)));
+        let round_trip: super::Config = serde_json::from_str(&serde_json::to_string(&config)?)?;
+        assert_eq!(config, round_trip);
+        config.weather_location_mode = super::WeatherLocationMode::Auto;
+        assert_eq!(config.weather_coordinates(), automatic);
+        if let Some(city) = config.weather_city.as_mut() {
+            city.label.push('\n');
+        }
+        config = config.sanitized();
+        assert!(config.weather_city.is_none());
+        config.weather_location_mode = super::WeatherLocationMode::City;
+        assert!(
+            config.weather_coordinates().is_none(),
+            "manual mode never falls back to Windows"
+        );
+        assert!(!format!("{config:?}").contains("1205"));
+        Ok(())
+    }
+    #[test]
+    fn weather_is_opt_in_and_saves_only_a_valid_coarse_fix() -> Result<(), serde_json::Error> {
+        let older: super::Config = serde_json::from_str("{}")?;
+        assert!(!older.weather && older.weather_location.is_none());
+        let location = super::WeatherLocation::from_degrees(38.72237, -9.13931, 1_795_680_000);
+        let Some(location) = location else {
+            panic!("valid weather coordinate");
+        };
+        assert_eq!(location.latitude_e2, 3872);
+        assert_eq!(location.longitude_e2, -914);
+        assert!(!format!("{location:?}").contains("3872"));
+        assert!(super::WeatherLocation::from_degrees(f64::NAN, 0.0, 1).is_none());
+        let invalid: super::Config = serde_json::from_str(
+            r#"{"weather":true,"weatherLocation":{"latitudeE2":9001,"longitudeE2":0,"updatedAt":1}}"#,
+        )?;
+        assert!(invalid.sanitized().weather_location.is_none());
+        Ok(())
+    }
     use super::*;
 
     #[test]
@@ -1043,6 +1285,9 @@ mod tests {
         assert!(!Config::default().mascot_break_reminder);
         let older: Config = serde_json::from_str("{}")?;
         assert_eq!(older.mascot_character, MascotCharacter::Crab);
+        assert!(!older.mascot_always_visible);
+        let persistent: Config = serde_json::from_str(r#"{"mascotAlwaysVisible":true}"#)?;
+        assert!(persistent.mascot_always_visible);
         let cat: Config = serde_json::from_str(r#"{"mascotCharacter":"cat"}"#)?;
         assert_eq!(cat.mascot_character, MascotCharacter::Cat);
         let fox: Config = serde_json::from_str(r#"{"mascotCharacter":"fox"}"#)?;
@@ -1057,6 +1302,16 @@ mod tests {
         let newer: Config = serde_json::from_str(r#"{"mascotCharacter":"owl"}"#)?;
         assert_eq!(newer.mascot_character, MascotCharacter::Crab);
         assert_eq!(serde_json::to_value(MascotCharacter::Cat)?, "cat");
+        Ok(())
+    }
+
+    #[test]
+    fn the_menu_bar_is_on_every_display_unless_turned_off() -> Result<(), serde_json::Error> {
+        assert!(Config::default().menu_bar_all_displays);
+        let older: Config = serde_json::from_str("{}")?;
+        assert!(older.menu_bar_all_displays);
+        let chosen: Config = serde_json::from_str(r#"{"menuBarAllDisplays":false}"#)?;
+        assert!(!chosen.menu_bar_all_displays);
         Ok(())
     }
 

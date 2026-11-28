@@ -18,10 +18,10 @@ use windows::Win32::{
 use crate::{mascot, menubar::MenuBar, moments};
 
 use super::{
-    ATTENTION_HOPS, App, BIN_QUERY, BIN_STATE, BREAK_CHECK_MS, BREAK_TIMER, Bounce, CHARGING_AGAIN,
-    Entry, HIDE_DELAY_MS, HIDE_TIMER, MAIN_WINDOW, MASCOT_POLL_MS, MASCOT_TIMER,
-    RUNNING_LAUNCH_HOPS, Role, WELCOME_DELAY_MS, WELCOME_RETRY_MS, WELCOME_TIMER, WELCOME_TRIES,
-    window_of,
+    APP_BADGES_CHANGED, ATTENTION_HOPS, App, BIN_QUERY, BIN_STATE, BREAK_CHECK_MS, BREAK_TIMER,
+    Bounce, CHARGING_AGAIN, Entry, HIDE_DELAY_MS, HIDE_TIMER, MAIN_WINDOW, MASCOT_POLL_MS,
+    MASCOT_TIMER, RUNNING_LAUNCH_HOPS, Role, WELCOME_DELAY_MS, WELCOME_RETRY_MS, WELCOME_TIMER,
+    WELCOME_TRIES, window_of,
 };
 
 pub(super) fn app_has_attention(
@@ -64,6 +64,24 @@ pub(super) fn entry_overlay(
             }
             crate::overlays::image_for([hwnd].into_iter())
         }
+        _ => None,
+    }
+}
+
+/// The badge an entry's app keeps in Windows' notification platform, if
+/// any (issue #74): for a group, its first app that has one.
+fn entry_badge(
+    badges: &std::collections::HashMap<String, muelle_shell::app_badges::Badge>,
+    entry: &Entry,
+) -> Option<muelle_shell::app_badges::Badge> {
+    let of_app = |id: &str| {
+        // Dock ids of apps Windows lists by their AppUserModelID.
+        id.strip_prefix("shell:AppsFolder\\")
+            .and_then(|app| badges.get(app).copied())
+    };
+    match entry.role {
+        Role::App => of_app(entry.id.as_deref()?),
+        Role::Group => entry.members.iter().find_map(|id| of_app(id)),
         _ => None,
     }
 }
@@ -179,9 +197,11 @@ impl App {
         if !self.can_perform() {
             return;
         }
+        self.suspend_companion();
         let scale = self.stage.as_ref().map_or(1.0, |stage| stage.scale);
         let character = self.config.mascot_character;
         let Some(mascot) = mascot::Mascot::play(&self.gfx, character, act, place, scale) else {
+            self.sync_companion();
             return;
         };
         self.mascot = Some(mascot);
@@ -214,6 +234,7 @@ impl App {
     }
 
     pub(super) fn stop_mascot(&mut self) {
+        self.suspend_companion();
         let active = self.mascot.take().is_some();
         // SAFETY: These timers belong to this UI window. Always clear a stale
         // mascot timer, and resume the usual dock hiding delay after an act.
@@ -285,6 +306,7 @@ impl App {
             || self.mascot.as_ref().is_none_or(mascot::Mascot::finished)
         {
             self.stop_mascot();
+            self.sync_companion();
             return Ok(());
         }
         let mut point = POINT::default();
@@ -322,11 +344,13 @@ impl App {
     /// The charger plugged in or out, or energy saver turned on: the crab walks
     /// along the dock. Only on the change itself, never at startup.
     pub(super) fn power_moment(&mut self) {
+        self.refresh_companion_motion();
         let now = (
             muelle_shell::system::battery().map(|battery| battery.charging),
             muelle_shell::system::energy_saver_on(),
         );
         let before = self.power_seen.replace(now);
+        self.sync_weather();
         let charging_allowed = self
             .charging_shown
             .is_none_or(|shown| shown.elapsed() >= CHARGING_AGAIN);
@@ -450,11 +474,30 @@ impl App {
     /// so each app's unread count shows on its dock icon (see `overlays`);
     /// gives them back to Explorer when they are turned off.
     pub(super) fn sync_taskband(&mut self) {
+        let window = HWND(MAIN_WINDOW.load(Ordering::Relaxed) as *mut _);
         if self.attention_enabled {
-            crate::overlays::start(HWND(MAIN_WINDOW.load(Ordering::Relaxed) as *mut _));
+            crate::overlays::start(window);
+            // The badges Windows keeps for apps, which never reach a window
+            // of ours (Outlook and other web apps, Telegram...).
+            if self.app_badges.is_none() {
+                self.app_badges =
+                    muelle_shell::app_badges::Watch::start(window, APP_BADGES_CHANGED);
+            }
         } else {
             crate::overlays::stop();
+            self.app_badges = None;
+            self.badge_counts.clear();
         }
+    }
+
+    /// The badges in Windows' notification platform changed.
+    pub(super) fn app_badges_changed(&mut self) -> Result<()> {
+        let Some(watch) = &self.app_badges else {
+            return Ok(());
+        };
+        self.badge_counts = watch.badges();
+        self.sync_badge_visuals()?;
+        self.render()
     }
 
     /// Starts or stops the break reminder's minute (see `break_tick`).
@@ -586,20 +629,33 @@ impl App {
                 })
             })
             .collect();
+        // Then the badge Windows keeps for the app (issue #74), a count or a
+        // dot; then the bare attention dot.
+        let counts: Vec<_> = self
+            .entries
+            .iter()
+            .zip(&native_overlays)
+            .map(|(entry, overlay)| {
+                (shown && overlay.is_none())
+                    .then(|| entry_badge(&self.badge_counts, entry))
+                    .flatten()
+            })
+            .collect();
         if let Some(stage) = &mut self.stage {
             stage
                 .scene
                 .set_overlays(&self.gfx, overlays.iter().cloned())?;
+            stage.scene.set_counts(&self.gfx, counts.iter().copied())?;
             stage.scene.set_attention(
                 &self.gfx,
-                self.entries
-                    .iter()
-                    .zip(&native_overlays)
-                    .map(|(entry, overlay)| {
+                self.entries.iter().zip(&native_overlays).zip(&counts).map(
+                    |((entry, overlay), count)| {
                         shown
                             && overlay.is_none()
+                            && count.is_none()
                             && entry_has_attention(&self.attention, &self.windows, entry)
-                    }),
+                    },
+                ),
             )?;
         }
         if let Some(view) = &mut self.group_view {

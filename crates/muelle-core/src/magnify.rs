@@ -66,11 +66,15 @@ impl Magnified {
 /// keeping the dock centered.
 #[must_use]
 pub fn magnify(layout: &Layout, cursor: f32, amount: f32, magnifier: &Magnifier) -> Magnified {
-    let strength = (magnifier.max_scale - 1.0) * amount;
+    let strength = if layout.slots.is_empty() {
+        0.0
+    } else {
+        (magnifier.max_scale - 1.0) * amount
+    };
     let range = magnifier.range.max(f32::EPSILON);
     let shift_of = |x: f32| strength * range * falloff_integral((x - cursor) / range);
 
-    let (shift_left, shift_right) = (shift_of(0.0), shift_of(layout.width));
+    let (shift_left, shift_right) = (shift_of(0.0), shift_of(layout.elastic_width));
     let centering = -(shift_left + shift_right) / 2.0;
 
     let rects = layout

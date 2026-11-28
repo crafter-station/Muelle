@@ -130,12 +130,26 @@ impl App {
         if let Some(menu) = &self.tray_menu {
             menu.refresh_backdrops(&self.gfx)?;
         }
+        if let Some(card) = &self.weather.card {
+            card.refresh_backdrops(&self.gfx)?;
+        }
+        if let Some(popup) = &self.weather.popup {
+            popup.refresh_backdrops(&self.gfx)?;
+        }
         Ok(())
     }
 
     /// Recalculates sizes, positions, and scene for the current state. Does
     /// nothing if the scene inputs are unchanged, since many Windows notifications
     /// do not affect the dock.
+    /// Rebuilds the dock even if nothing it shows changed, and puts its
+    /// windows back in place: after the displays change (see `events`).
+    pub(super) fn rebuild(&mut self) -> Result<()> {
+        self.close_group_view();
+        self.stage = None;
+        self.refresh()
+    }
+
     pub(super) fn refresh(&mut self) -> Result<()> {
         if let Some(bar) = &mut self.menubar
             && let Err(error) = bar.refresh(&self.gfx)
@@ -143,6 +157,13 @@ impl App {
             crate::recovery::graphics_error(&error);
             muelle_shell::log::line(&format!("actualización de la barra superior: {error:#}"));
         }
+        self.refresh_dock()
+    }
+
+    /// The dock alone, without redrawing the menu bar: moving the dock to
+    /// another display changes nothing on the bar, and redrawing it took
+    /// 25-50 ms of that move.
+    pub(super) fn refresh_dock(&mut self) -> Result<()> {
         let monitor = self
             .dock_monitor()
             .context("no se pudo consultar el monitor del dock")?;
@@ -160,18 +181,27 @@ impl App {
             density: self.config.dock_density,
             max_scale: self.config.max_scale(),
             indicators: self.config.show_indicators,
+            weather: self.config.weather,
             entries: self.current_entries(),
         };
         if self.stage.as_ref().is_some_and(|stage| stage.key == key) {
             return Ok(());
         }
         self.close_preview();
-        // An unfolded group shows its apps as they were: it closes if they changed.
+        // Retained popups belong to the material/DPI/display they opened with.
+        // Close a stale group on these events, as we already do for previews;
+        // ordinary roster/attention changes still keep its current visual tree.
+        let popup_context_changed = self
+            .stage
+            .as_ref()
+            .is_some_and(|stage| stage.key.screen != key.screen);
         if let Some(view) = &self.group_view
-            && self
-                .roster
-                .group(&view.group_id)
-                .is_none_or(|group| group.apps.as_slice() != view.apps())
+            && (popup_context_changed
+                || !view.matches_context(Theme::new(key.look), key.scale, key.edge)
+                || self
+                    .roster
+                    .group(&view.group_id)
+                    .is_none_or(|group| group.apps.as_slice() != view.apps()))
         {
             self.close_group_view();
         }
@@ -198,7 +228,14 @@ impl App {
             screen_width
         };
         let kinds: Vec<ItemKind> = key.entries.iter().map(|entry| entry.kind).collect();
-        let mut dock = layout(&kinds, &metrics);
+        let make_layout = |metrics: &Metrics| {
+            let mut dock = layout(&kinds, metrics);
+            if key.weather {
+                crate::weather::reserve(&mut dock, metrics, edge);
+            }
+            dock
+        };
+        let mut dock = make_layout(&metrics);
         let available = (length_room - 2.0 * px(FLOAT_MARGIN)).max(1.0);
         // A side dock often fills the height. Magnified, it spreads by up to
         // half its growth past each end, which would put the first icon
@@ -217,16 +254,19 @@ impl App {
             // Keep the roster reachable on a smaller display without
             // changing the user's saved icon size.
             metrics = metrics.scaled(available / (dock.width + spread));
-            dock = layout(&kinds, &metrics);
+            dock = make_layout(&metrics);
         }
         dock.width = dock.width.round();
+        if !key.weather {
+            dock.elastic_width = dock.width;
+        }
         dock.height = dock.height.round();
 
         self.entries = key.entries.clone();
         self.prepare_assets(
             (metrics.icon * max_scale).round().max(1.0) as u32,
             scale,
-            theme.light,
+            key.look,
             edge,
         );
 
@@ -446,6 +486,7 @@ impl App {
                 },
             },
             slide_distance: dock.height + px(FLOAT_MARGIN) + room,
+            weather_place: None,
             layout: dock,
         };
         self.stage = Some(stage);
@@ -490,7 +531,11 @@ impl App {
         } else {
             &stage.rest_zone
         };
-        place(self.input, input_zone, visible)
+        place(self.input, input_zone, visible)?;
+        if let Some(card) = &self.weather.card {
+            card.raise();
+        }
+        Ok(())
     }
 
     pub(super) fn schedule_trim(&self) {
@@ -500,12 +545,18 @@ impl App {
 
     pub(super) fn trim_if_idle(&self) {
         if !self.hovering && !self.is_animating() {
+            if let Err(error) = self.flush_weather_drawings() {
+                crate::recovery::graphics_error(&error);
+                muelle_shell::log::line(&format!("liberación gráfica del clima: {error:#}"));
+            }
             power::trim_memory();
         }
     }
 
     pub(super) fn render(&mut self) -> Result<()> {
+        self.sync_companion();
         let Some(stage) = &mut self.stage else {
+            self.sync_weather();
             return Ok(());
         };
         let mut state = magnify(
@@ -586,6 +637,13 @@ impl App {
             && stage.reorder.is_none()
             && drag.is_none();
         let slide = self.slide.value * stage.slide_distance;
+        stage.weather_place = stage
+            .key
+            .weather
+            .then(|| {
+                crate::weather::place(stage.frame, &stage.layout, stage.icon, state.right, slide)
+            })
+            .flatten();
         stage.scene.apply(&Frame {
             state: &state,
             hovered: self.hovered.filter(|&index| {
@@ -619,6 +677,7 @@ impl App {
                 self.thumbnails.place(hwnd, slot, corner, opacity);
             }
         }
+        self.sync_weather();
         Ok(())
     }
 }

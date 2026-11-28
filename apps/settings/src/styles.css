@@ -713,7 +713,6 @@ input:focus-visible {
 .preview-density .preview-dock i { flex: 0 0 var(--mini-icon); border-radius: 4px; }
 
 
-.wallpaper-hint { margin: 14px 14px 12px; color: var(--text-dim); font-size: 12px; line-height: 1.5; }
 /* Masonry: balanced columns of tiles in a repeating mix of shapes. */
 .wallpaper-grid { columns: 4; column-gap: 10px; padding: 0 14px; }
 .wallpaper-choice { display: block; width: 100%; margin: 0 0 10px; padding: 0; border: 0; break-inside: avoid; color: var(--text); background: none; font: inherit; text-align: start; cursor: default; }
@@ -744,4 +743,11 @@ input:focus-visible {
 /* Physical controls and screen diagrams keep their screen coordinates in RTL. */
 .traffic, .toggle, .slider, .preview-screen, .preview-density { direction: ltr; }
 .window[dir="rtl"] .visual-legend { float: right; }
-.window[dir="rtl"] .row-hint { line-height: 1.6; }
+ .window[dir="rtl"] .row-hint { line-height: 1.6; }
+
+.weather-settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.weather-city-search { display: flex; gap: 8px; width: 100%; }
+.weather-city-search input { min-width: 0; flex: 1; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--hover); color: inherit; font: inherit; }
+.weather-city-results { list-style: none; margin: 8px 0 0; padding: 0; width: 100%; }
+.weather-city-results button { width: 100%; text-align: start; font: inherit; color: inherit; background: transparent; border: 0; border-radius: 8px; padding: 9px 10px; }
+.weather-city-results button:hover, .weather-city-results button[aria-pressed="true"] { background: var(--hover); }

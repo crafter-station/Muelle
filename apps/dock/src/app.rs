@@ -16,6 +16,7 @@
 
 mod activation;
 mod assets;
+mod companion;
 mod controls;
 mod drag;
 mod events;
@@ -29,6 +30,9 @@ mod previews;
 mod rendering;
 mod system_menu;
 mod visibility;
+mod weather;
+pub(crate) use weather::popup_signal as weather_popup_signal;
+pub(crate) use weather::signal as weather_signal;
 
 use std::{
     cell::RefCell,
@@ -99,12 +103,13 @@ pub use events::{
     group_view_moved, group_view_press, group_view_press_lost, group_view_release, group_view_tick,
     menu_bar_accessories_changed, menu_bar_accessories_reset, menu_bar_audio_changed,
     menu_bar_bluetooth_changed, menu_bar_check_pointer, menu_bar_clicked, menu_bar_dismiss_island,
-    menu_bar_finish_hide, menu_bar_fold_done, menu_bar_media_changed, menu_bar_monitor_tick,
-    menu_bar_pointer_moved, menu_bar_progress_tick, menu_bar_registry_changed, menu_bar_scrolled,
-    menu_bar_tick, menu_bar_tray_tick, menu_bar_volume_flush, menu_bar_volume_press,
-    menu_bar_volume_release, multi_window_view_dismiss, multi_window_view_middle_click,
-    multi_window_view_press, multi_window_view_release, multi_window_view_scroll,
-    multi_window_view_tick, tray_menu_input, tray_menu_tick,
+    menu_bar_finish_hide, menu_bar_fold_done, menu_bar_media_changed, menu_bar_mirror_event,
+    menu_bar_monitor_tick, menu_bar_music_focus_lost, menu_bar_music_key, menu_bar_pointer_moved,
+    menu_bar_progress_tick, menu_bar_registry_changed, menu_bar_scrolled, menu_bar_slider_press,
+    menu_bar_slider_release, menu_bar_tick, menu_bar_tray_tick, menu_bar_volume_flush,
+    multi_window_view_dismiss, multi_window_view_middle_click, multi_window_view_press,
+    multi_window_view_release, multi_window_view_scroll, multi_window_view_tick, tray_menu_input,
+    tray_menu_tick,
 };
 pub(crate) use input::primary_button_down;
 pub use lifecycle::{request_quit, run};
@@ -146,6 +151,14 @@ const PINS_CHANGED: u32 = WM_APP + 7;
 const ASSETS_READY: u32 = WM_APP + 8;
 /// The guard also checks graphics health while the scene is otherwise idle.
 pub(crate) const HEALTH_CHECK: u32 = WM_APP + 9;
+/// The dock's content for its new display has reached the compositor, so its
+/// window can show again (see `App::reveal_dock`).
+const DOCK_MOVED: u32 = WM_APP + 13;
+/// The badges apps keep in Windows' notification platform changed (see
+/// `muelle_shell::app_badges`).
+const APP_BADGES_CHANGED: u32 = WM_APP + 14;
+/// Shows the dock's window anyway if that word never comes.
+const DOCK_MOVED_LIMIT: std::time::Duration = std::time::Duration::from_millis(400);
 const TASKBAR_PREFS_CHANGED: u32 = WM_APP + 10;
 
 /// Magnification range, in icons on either side of the cursor.
@@ -194,6 +207,10 @@ const BIN_TIMER: usize = 5;
 const BIN_DELAY_MS: u32 = 300;
 const HIDE_TIMER: usize = 6;
 const HIDE_DELAY_MS: u32 = 300;
+/// Looks again at a leave reported while the pointer is over the dock (see
+/// `App::on_tracked_mouse_leave`). The shortest timer Windows allows.
+const LEAVE_TIMER: usize = 19;
+const LEAVE_RECHECK_MS: u32 = 10;
 /// Explorer writes a pin change in a few steps; read it once they settle.
 const PINS_TIMER: usize = 7;
 const PINS_DELAY_MS: u32 = 400;
@@ -216,6 +233,7 @@ const PREVIEW_TIMER: usize = 13;
 /// While the crab is out (a few seconds): is its act over, is the pointer on it.
 const MASCOT_TIMER: usize = 14;
 const MASCOT_POLL_MS: u32 = 50;
+const COMPANION_TIMER: usize = 20;
 const EDGE_TIMER: usize = 15;
 /// The charger act at most this often, however many times it is plugged.
 const CHARGING_AGAIN: std::time::Duration = std::time::Duration::from_secs(10 * 60);
@@ -413,7 +431,7 @@ pub(crate) enum Outside {
     InputMenu {
         gfx: Gfx,
         anchor: POINT,
-        dark: bool,
+        look: crate::appearance::Look,
     },
     QuitDock,
     OpenSettings,
@@ -432,7 +450,7 @@ pub(crate) enum Outside {
     CalendarMenu {
         gfx: Gfx,
         anchor: POINT,
-        dark: bool,
+        look: crate::appearance::Look,
         /// Where it springs from; `None` shows it at once.
         spring: Option<POINT>,
     },
@@ -444,7 +462,7 @@ pub(crate) struct MenuRequest {
     items: Vec<MenuItem>,
     anchor: POINT,
     placement: menu::Placement,
-    dark: bool,
+    look: crate::appearance::Look,
 }
 
 /// Preview positions follow discovery order, independently of activation's
@@ -479,6 +497,7 @@ impl PreviewOrder {
 }
 
 enum MenuTarget {
+    Weather,
     Entry {
         id: String,
         role: Role,
@@ -567,6 +586,7 @@ struct StageKey {
     density: DockDensity,
     max_scale: f32,
     indicators: bool,
+    weather: bool,
     entries: Vec<Entry>,
 }
 
@@ -584,6 +604,7 @@ struct Stage {
     scene: Scene,
     reorder: Option<ReorderMotion>,
     layout: Layout,
+    weather_place: Option<crate::weather::Placement>,
     magnifier: Magnifier,
     icon: f32,
     gap: f32,
@@ -690,6 +711,9 @@ pub(crate) struct App {
     taskbar_attempts: u8,
     fullscreen: bool,
     smart_hidden: bool,
+    /// Since when the dock's window is kept out of view while it moves to
+    /// another display (see `App::reveal_dock`).
+    moving_since: Option<Instant>,
     roster: Roster,
     tracker: WindowTracker,
     windows: Vec<TrackedWindow>,
@@ -707,13 +731,18 @@ pub(crate) struct App {
     /// Hears pins and unpins on the Windows taskbar.
     pin_watch: Option<muelle_shell::watch::RegistryWatch>,
     badge_watch: Option<muelle_shell::watch::RegistryWatch>,
+    /// Reads the badges apps keep in Windows' notification platform (issue
+    /// #74), while Windows shows taskbar badges.
+    app_badges: Option<muelle_shell::app_badges::Watch>,
+    /// Each app's badge from there, by its AppUserModelID.
+    badge_counts: HashMap<String, muelle_shell::app_badges::Badge>,
     attention: Attention,
     attention_enabled: bool,
     assets: HashMap<String, Asset>,
     /// Scale, theme and icon pixel size the cached assets were drawn for.
     /// Scale, theme, icon size and dock edge the assets were drawn for
     /// (labels point at their icon, so they depend on the edge).
-    assets_for: (f32, bool, u32, DockEdge),
+    assets_for: Option<(f32, crate::appearance::Look, u32, DockEdge)>,
     placeholder: Option<CompositionSurfaceBrush>,
     remove_label: Option<LabelBrush>,
     config: Config,
@@ -754,8 +783,10 @@ pub(crate) struct App {
     snapshots: Vec<(isize, Snapshot)>,
     menubar: Option<MenuBar>,
     edge_watch: Option<EdgeWatch>,
-    /// Screen point identifying the last display chosen by a bottom-edge dwell.
-    dock_display: Option<POINT>,
+    /// The display a hiding dock was last brought to by resting the pointer
+    /// on its edge, as its screen rectangle. Forgotten when the displays
+    /// change and it is no longer one of them (see `remembered_display`).
+    dock_display: Option<RECT>,
     /// Display names already looked up, by app id.
     names: HashMap<String, String>,
     /// Windows whose system transitions are turned off (see `calm_windows`).
@@ -782,6 +813,8 @@ pub(crate) struct App {
     menu_open: bool,
     /// The crab, while it is out (see `perform`).
     mascot: Option<mascot::Mascot>,
+    companion: companion::State,
+    weather: weather::State,
     /// Charging and energy saver at the last power change.
     power_seen: Option<(Option<bool>, bool)>,
     /// When the charger act last played.

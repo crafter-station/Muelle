@@ -18,21 +18,29 @@ use windows::Win32::{
 };
 
 pub const CHANGED: u32 = WM_APP + 26;
-const DWELL: Duration = Duration::from_millis(250);
+/// How long the pointer rests on another display's edge before the dock
+/// moves there: long enough that passing by does not move it.
+const DWELL: Duration = Duration::from_millis(180);
 const MENU_DWELL: Duration = Duration::from_millis(150);
 const EDGE_DEPTH: i32 = 2;
+/// Sampling away from the edges, where nothing can be revealed yet.
 const SAMPLE_MS: u32 = 80;
+/// Sampling once the pointer is this close to a watched edge: every display
+/// frame, so arriving there is seen at once instead of up to 80 ms late.
+const NEAR_SAMPLE_MS: u32 = 16;
+const NEAR: i32 = 96;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Target {
-    MenuBar,
+    /// A menu bar's top strip, by its window (one bar per display).
+    MenuBar(isize),
     Dock(RECT),
 }
 
 impl Target {
     fn delay(self) -> Duration {
         match self {
-            Self::MenuBar => MENU_DWELL,
+            Self::MenuBar(_) => MENU_DWELL,
             Self::Dock(_) => DWELL,
         }
     }
@@ -47,7 +55,8 @@ pub enum Reveal {
 #[derive(Default)]
 struct Edges {
     window: isize,
-    top: Option<RECT>,
+    /// The top strip of each hidden menu bar, by its window.
+    tops: Vec<(isize, RECT)>,
     /// The displays a hidden dock can be revealed on, and the edge it sits on.
     screens: Vec<RECT>,
     dock_edge: DockEdge,
@@ -58,7 +67,7 @@ struct Edges {
 
 static EDGES: Mutex<Edges> = Mutex::new(Edges {
     window: 0,
-    top: None,
+    tops: Vec::new(),
     screens: Vec::new(),
     dock_edge: DockEdge::Bottom,
     pointer_screen: None,
@@ -68,11 +77,11 @@ static EDGES: Mutex<Edges> = Mutex::new(Edges {
 
 impl Edges {
     fn at(&self, point: POINT, screen: Option<RECT>) -> Option<Target> {
-        if self.top.is_some_and(|top| {
+        if let Some(&(bar, _)) = self.tops.iter().find(|(_, top)| {
             (top.left..top.right).contains(&point.x)
                 && (top.top..top.top + EDGE_DEPTH).contains(&point.y)
         }) {
-            return Some(Target::MenuBar);
+            return Some(Target::MenuBar(bar));
         }
         // The menu bar, checked first, keeps the top corners.
         screen
@@ -82,6 +91,23 @@ impl Edges {
                 DockEdge::Right => point.x >= screen.right - EDGE_DEPTH,
             })
             .map(Target::Dock)
+    }
+
+    /// Whether `point` is close to an edge that reveals something.
+    fn near(&self, point: POINT) -> bool {
+        let close = |from: i32, to: i32| (from - to).abs() < NEAR;
+        self.tops
+            .iter()
+            .any(|(_, top)| (top.left..top.right).contains(&point.x) && close(point.y, top.top))
+            || self.screens.iter().any(|screen| {
+                (screen.left..screen.right).contains(&point.x)
+                    && (screen.top..screen.bottom).contains(&point.y)
+                    && match self.dock_edge {
+                        DockEdge::Bottom => close(point.y, screen.bottom - 1),
+                        DockEdge::Left => close(point.x, screen.left),
+                        DockEdge::Right => close(point.x, screen.right - 1),
+                    }
+            })
     }
 
     fn observe(&mut self, point: POINT, now: Instant) -> bool {
@@ -100,13 +126,18 @@ impl Edges {
         true
     }
 
-    fn set_top(&mut self, top: Option<RECT>) {
-        if top != self.top {
-            self.top = top;
-            if self.target == Some(Target::MenuBar) {
-                self.target = None;
-                self.entered = None;
-            }
+    fn set_top(&mut self, bar: isize, top: Option<RECT>) {
+        let old = self
+            .tops
+            .iter()
+            .position(|(id, _)| *id == bar)
+            .map(|index| self.tops.remove(index).1);
+        if let Some(top) = top {
+            self.tops.push((bar, top));
+        }
+        if old != top && self.target == Some(Target::MenuBar(bar)) {
+            self.target = None;
+            self.entered = None;
         }
     }
 
@@ -140,8 +171,10 @@ fn lock() -> MutexGuard<'static, Edges> {
     EDGES.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-pub fn set_menu_bar(top: Option<RECT>) {
-    lock().set_top(top);
+/// The top strip that reveals the hidden menu bar `bar`, or none while it
+/// shows or is gone.
+pub fn set_menu_bar(bar: HWND, top: Option<RECT>) {
+    lock().set_top(bar.0 as isize, top);
 }
 
 /// The displays a hidden dock can come out on, from `edge` of each.
@@ -194,9 +227,19 @@ impl EdgeWatch {
                         return;
                     }
                     let _ = sender.send(Ok(GetCurrentThreadId()));
+                    let mut every = SAMPLE_MS;
                     while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
                         if msg.message == WM_TIMER {
-                            sample_cursor();
+                            let wanted = if sample_cursor() {
+                                NEAR_SAMPLE_MS
+                            } else {
+                                SAMPLE_MS
+                            };
+                            if wanted != every {
+                                every = wanted;
+                                // The same id replaces this thread's timer.
+                                SetTimer(None, timer, every, None);
+                            }
                         }
                     }
                     let _ = KillTimer(None, timer);
@@ -237,13 +280,16 @@ impl Drop for EdgeWatch {
     }
 }
 
-fn sample_cursor() {
+/// Reads the pointer; returns whether it is near a watched edge.
+fn sample_cursor() -> bool {
     let mut point = POINT::default();
     // SAFETY: The output is live and this thread only reads cursor position.
     if unsafe { GetCursorPos(&mut point) }.is_err() {
-        return;
+        return false;
     }
+    let mut near = false;
     let window = EDGES.try_lock().ok().and_then(|mut edges| {
+        near = edges.near(point);
         (edges.window != 0 && edges.observe(point, Instant::now())).then_some(edges.window)
     });
     if let Some(window) = window {
@@ -252,6 +298,7 @@ fn sample_cursor() {
             let _ = PostMessageW(Some(HWND(window as *mut _)), CHANGED, WPARAM(0), LPARAM(0));
         }
     }
+    near
 }
 #[cfg(test)]
 mod tests {
@@ -284,12 +331,15 @@ mod tests {
             let result = (|| -> Result<()> {
                 let mut point = POINT::default();
                 GetCursorPos(&mut point)?;
-                set_menu_bar(Some(RECT {
-                    left: point.x - 200,
-                    right: point.x + 200,
-                    top: point.y,
-                    bottom: point.y + 30,
-                }));
+                set_menu_bar(
+                    window,
+                    Some(RECT {
+                        left: point.x - 200,
+                        right: point.x + 200,
+                        top: point.y,
+                        bottom: point.y + 30,
+                    }),
+                );
                 let watch = EdgeWatch::start(window)?;
                 let deadline = Instant::now() + Duration::from_secs(2);
                 let mut msg = MSG::default();
@@ -306,7 +356,7 @@ mod tests {
                     "edge notification must arrive without a new mouse event"
                 );
                 drop(watch);
-                set_menu_bar(None);
+                set_menu_bar(window, None);
                 Ok(())
             })();
             let _ = DestroyWindow(window);
@@ -323,10 +373,13 @@ mod tests {
             bottom: 1080,
         };
         let mut edges = Edges::default();
-        edges.set_top(Some(RECT {
-            bottom: 35,
-            ..screen
-        }));
+        edges.set_top(
+            1,
+            Some(RECT {
+                bottom: 35,
+                ..screen
+            }),
+        );
         edges.set_screens(vec![screen], DockEdge::Left);
         assert_eq!(
             edges.at(POINT { x: 0, y: 500 }, Some(screen)),
@@ -335,7 +388,7 @@ mod tests {
         assert_eq!(edges.at(POINT { x: 900, y: 1079 }, Some(screen)), None);
         assert_eq!(
             edges.at(POINT { x: 0, y: 0 }, Some(screen)),
-            Some(Target::MenuBar)
+            Some(Target::MenuBar(1))
         );
         edges.set_screens(vec![screen], DockEdge::Right);
         assert_eq!(
@@ -343,6 +396,61 @@ mod tests {
             Some(Target::Dock(screen))
         );
         assert_eq!(edges.at(POINT { x: 0, y: 500 }, Some(screen)), None);
+    }
+
+    #[test]
+    fn sampling_quickens_only_near_a_watched_edge() {
+        let laptop = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let monitor = RECT {
+            left: 1920,
+            top: 0,
+            right: 3840,
+            bottom: 1080,
+        };
+        let mut edges = Edges::default();
+        edges.set_screens(vec![laptop, monitor], DockEdge::Bottom);
+        edges.set_top(
+            1,
+            Some(RECT {
+                bottom: 35,
+                ..laptop
+            }),
+        );
+        let at = |x, y| POINT { x, y };
+        assert!(!edges.near(at(960, 540)));
+        assert!(edges.near(at(2880, 1079)));
+        assert!(edges.near(at(2880, 1000)));
+        assert!(edges.near(at(960, 10)));
+        // No bar on the monitor: its top edge reveals nothing.
+        assert!(!edges.near(at(2880, 10)));
+        edges.set_screens(vec![laptop, monitor], DockEdge::Left);
+        assert!(!edges.near(at(2880, 1079)));
+        assert!(edges.near(at(1930, 540)));
+    }
+
+    #[test]
+    fn each_display_reveals_its_own_menu_bar() {
+        let strip = |left, right| RECT {
+            left,
+            top: 0,
+            right,
+            bottom: 30,
+        };
+        let mut edges = Edges::default();
+        edges.set_top(1, Some(strip(0, 1920)));
+        edges.set_top(2, Some(strip(1920, 3840)));
+        let top = |x| POINT { x, y: 0 };
+        assert_eq!(edges.at(top(500), None), Some(Target::MenuBar(1)));
+        assert_eq!(edges.at(top(2500), None), Some(Target::MenuBar(2)));
+        // One bar showing again stops watching its strip, not the other's.
+        edges.set_top(1, None);
+        assert_eq!(edges.at(top(500), None), None);
+        assert_eq!(edges.at(top(2500), None), Some(Target::MenuBar(2)));
     }
 
     #[test]
@@ -357,12 +465,12 @@ mod tests {
         let top = POINT { x: 700, y: 0 };
         let bottom = POINT { x: 700, y: 1079 };
         let mut edges = Edges::default();
-        edges.set_top(Some(screen));
+        edges.set_top(1, Some(screen));
         edges.set_screens(vec![screen], DockEdge::Bottom);
         edges.observe(top, start);
         assert!(matches!(
             edges.dwell(top, start + MENU_DWELL),
-            Reveal::Ready(Target::MenuBar)
+            Reveal::Ready(Target::MenuBar(1))
         ));
         edges.observe(bottom, start);
         assert!(matches!(
@@ -386,12 +494,12 @@ mod tests {
         };
         let point = POINT { x: 700, y: 1 };
         let start = Instant::now();
-        edges.set_top(Some(screen));
+        edges.set_top(1, Some(screen));
         assert!(edges.observe(point, start));
-        edges.set_top(Some(screen));
+        edges.set_top(1, Some(screen));
         assert!(matches!(
             edges.dwell(point, start + DWELL),
-            Reveal::Ready(Target::MenuBar)
+            Reveal::Ready(Target::MenuBar(1))
         ));
         assert!(matches!(edges.dwell(point, start + DWELL), Reveal::Idle));
     }

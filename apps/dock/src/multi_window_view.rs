@@ -42,12 +42,13 @@ use crate::{
 };
 
 const TIMER: usize = 1;
-const PADDING: f32 = 18.0;
-const GAP: f32 = 12.0;
+const PADDING: f32 = 6.0;
+const GAP: f32 = 6.0;
 const CARD_WIDTH: f32 = 216.0;
-const CARD_HEIGHT: f32 = 164.0;
+const CARD_HEIGHT: f32 = 152.0;
 const HEADER: f32 = 24.0;
-const ARC: f32 = 16.0;
+const CAPTION_HEIGHT: f32 = 30.0;
+const CAPTION_INSET: f32 = 8.0;
 const PREVIEW_INSET: f32 = 4.0;
 const CLOSE_BUTTON_GAP: f32 = 4.0;
 const OPEN_SECONDS: f32 = 0.2;
@@ -56,6 +57,7 @@ const LEAVE_DELAY: Duration = Duration::from_millis(220);
 /// Pure layout shared by rendering and hit testing, including negative-origin
 /// monitors. Overflow is paged instead of shrinking previews to unreadable sizes.
 struct MultiWindowLayout {
+    screen: RECT,
     bounds: RECT,
     cards: Vec<RECT>,
     per_page: usize,
@@ -74,8 +76,8 @@ impl MultiWindowLayout {
             DockEdge::Right => anchor.left - gap - screen.left,
         };
         let available = (room as f32 - 32.0 * scale).max(1.0);
-        let per_page = (((available - 2.0 * PADDING * scale) / ((CARD_WIDTH + GAP) * scale))
-            as usize)
+        let per_page = (((available - 2.0 * PADDING * scale + GAP * scale)
+            / ((CARD_WIDTH + GAP) * scale)) as usize)
             .clamp(1, 5);
         let shown = count.min(per_page);
         let header = if count > per_page { HEADER } else { 0.0 };
@@ -84,7 +86,7 @@ impl MultiWindowLayout {
             + shown as f32 * card_width
             + shown.saturating_sub(1) as f32 * GAP * scale)
             .ceil() as i32;
-        let height = ((2.0 * PADDING + header + CARD_HEIGHT + ARC) * scale).ceil() as i32;
+        let height = ((2.0 * PADDING + header + CARD_HEIGHT) * scale).ceil() as i32;
         let middle_y = (anchor.top + (anchor.bottom - anchor.top) / 2) - height / 2;
         let beside_top = middle_y.clamp(screen.top, (screen.bottom - height).max(screen.top));
         let (left, top) = match edge {
@@ -98,13 +100,8 @@ impl MultiWindowLayout {
         };
         let cards = (0..shown)
             .map(|index| {
-                let across = if shown > 1 {
-                    index as f32 / (shown - 1) as f32 * 2.0 - 1.0
-                } else {
-                    0.0
-                };
                 let x = PADDING * scale + index as f32 * (card_width + GAP * scale);
-                let y = (PADDING + header + ARC * across * across) * scale;
+                let y = (PADDING + header) * scale;
                 RECT {
                     left: x.round() as i32,
                     top: y.round() as i32,
@@ -114,6 +111,7 @@ impl MultiWindowLayout {
             })
             .collect();
         Self {
+            screen,
             bounds: RECT {
                 left,
                 top,
@@ -202,7 +200,7 @@ fn contains(rect: RECT, point: POINT) -> bool {
     point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom
 }
 
-/// The thumbnail starts under the close button.
+/// The thumbnail starts below the shared title/close-button row.
 fn thumbnail_top_inset(scale: f32) -> f32 {
     let close = muelle_core::preview::close_button_bounds(
         muelle_core::layout::Rect {
@@ -213,7 +211,8 @@ fn thumbnail_top_inset(scale: f32) -> f32 {
         },
         scale,
     );
-    close.visual.y + close.visual.height + CLOSE_BUTTON_GAP * scale.max(0.5)
+    (CAPTION_HEIGHT * scale)
+        .max(close.visual.y + close.visual.height + CLOSE_BUTTON_GAP * scale.max(0.5))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -419,7 +418,7 @@ impl MultiWindowView {
             })?;
             header.SetOffset(Vector3 {
                 X: PADDING * self.scale,
-                Y: 12.0 * self.scale,
+                Y: PADDING * self.scale,
                 Z: 0.0,
             })?;
             layers.InsertAtTop(&header)?;
@@ -471,15 +470,28 @@ impl MultiWindowView {
             highlight.SetOpacity(0.0)?;
             card.Children()?.InsertAtTop(&highlight)?;
             let title = tracker::title(hwnd);
-            let mut title = if title.is_empty() {
+            let title = if title.is_empty() {
                 text().new_window.replace('&', "")
             } else {
                 title
             };
-            if title.chars().count() > 27 {
-                title = title.chars().take(26).chain(['…']).collect();
-            }
-            let label = gfx.text_brush(&title, self.scale, false, ink)?;
+            let close_bounds = muelle_core::preview::close_button_bounds(
+                muelle_core::layout::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: size.X,
+                    height: size.Y,
+                },
+                self.scale,
+            );
+            let label = gfx.text_brush_fitted(
+                &title,
+                self.scale,
+                13.0,
+                false,
+                ink,
+                (close_bounds.hit.x - (CAPTION_INSET + CLOSE_BUTTON_GAP) * self.scale).max(1.0),
+            )?;
             let caption = c.CreateSpriteVisual()?;
             caption.SetBrush(&label.brush)?;
             caption.SetSize(Vector2 {
@@ -487,8 +499,8 @@ impl MultiWindowView {
                 Y: label.height,
             })?;
             caption.SetOffset(Vector3 {
-                X: 10.0 * self.scale,
-                Y: size.Y - 29.0 * self.scale,
+                X: CAPTION_INSET * self.scale,
+                Y: ((CAPTION_HEIGHT * self.scale - label.height) / 2.0).round(),
                 Z: 0.0,
             })?;
             card.Children()?.InsertAtTop(&caption)?;
@@ -540,6 +552,10 @@ impl MultiWindowView {
     }
 
     fn update(&mut self) -> Result<()> {
+        self.update_at(self.local_cursor()?)
+    }
+
+    fn update_at(&mut self, cursor: POINT) -> Result<()> {
         let elapsed = self.opened.elapsed().as_secs_f32();
         let progress = if self.animated {
             (elapsed / OPEN_SECONDS).min(1.0)
@@ -547,7 +563,6 @@ impl MultiWindowView {
             1.0
         };
         let eased = 1.0 - (1.0 - progress).powi(3);
-        let cursor = self.local_cursor()?;
         let hovered = self.layout.hit(cursor);
         let close_hovered = self.layout.hit_close(cursor, self.scale);
         if progress >= 1.0 && self.drawn == Some(hovered) && self.close_hovered == close_hovered {
@@ -590,7 +605,7 @@ impl MultiWindowView {
                         left: (x + PREVIEW_INSET * self.scale).round() as i32,
                         top: (y + thumbnail_top_inset(self.scale)).round() as i32,
                         right: (x + width - PREVIEW_INSET * self.scale).round() as i32,
-                        bottom: (y + (CARD_HEIGHT - 31.0) * self.scale).round() as i32,
+                        bottom: (y + (CARD_HEIGHT - PREVIEW_INSET) * self.scale).round() as i32,
                     },
                     (255.0 * eased) as u8,
                 );
@@ -707,14 +722,8 @@ impl MultiWindowView {
         if self.page >= self.windows.len() {
             self.page = self.page.saturating_sub(self.layout.per_page);
         }
-        let screen = RECT {
-            left: self.layout.bounds.left,
-            top: self.layout.bounds.top,
-            right: self.layout.bounds.right,
-            bottom: self.layout.bounds.bottom,
-        };
         self.layout = MultiWindowLayout::new(
-            screen,
+            self.layout.screen,
             self.anchor,
             self.layout.edge,
             self.scale,
@@ -816,6 +825,55 @@ mod tests {
     }
 
     #[test]
+    fn compact_picker_uses_one_header_row_and_keeps_cards_aligned() {
+        let screen = RECT {
+            left: 0,
+            top: 0,
+            right: 482,
+            bottom: 800,
+        };
+        let anchor = RECT {
+            left: 200,
+            top: 700,
+            right: 248,
+            bottom: 748,
+        };
+        // Exactly enough width for two cards plus one gap and screen margins.
+        let row = MultiWindowLayout::new(screen, anchor, DockEdge::Bottom, 1.0, 2);
+        assert_eq!(row.per_page, 2);
+        assert_eq!(row.cards[0].top, row.cards[1].top);
+        assert_eq!(row.bounds.bottom - row.bounds.top, 164);
+        assert_eq!(row.bounds.right - row.bounds.left, 450);
+        assert!(thumbnail_top_inset(1.0) >= CAPTION_HEIGHT);
+        for scale in [0.75, 1.0, 1.25, 1.5, 2.0] {
+            let single = MultiWindowLayout::new(
+                RECT {
+                    right: 1920,
+                    ..screen
+                },
+                anchor,
+                DockEdge::Bottom,
+                scale,
+                1,
+            );
+            assert_eq!(
+                single.bounds.bottom - single.bounds.top,
+                ((CARD_HEIGHT + 2.0 * PADDING) * scale).ceil() as i32
+            );
+            let close = muelle_core::preview::close_button_bounds(
+                muelle_core::layout::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: CARD_WIDTH * scale,
+                    height: CARD_HEIGHT * scale,
+                },
+                scale,
+            );
+            assert!(close.hit.y + close.hit.height < thumbnail_top_inset(scale));
+        }
+    }
+
+    #[test]
     #[ignore = "requires an interactive Windows desktop and DWM"]
     fn native_multi_window_view_should_page_select_without_focus_and_release_its_window()
     -> Result<()> {
@@ -855,8 +913,8 @@ mod tests {
                     w!("STATIC"),
                     w!("Muelle preview test"),
                     WS_OVERLAPPEDWINDOW,
-                    10,
-                    10,
+                    -32000,
+                    -32000,
                     300,
                     180,
                     None,
@@ -893,16 +951,16 @@ mod tests {
                 windows.clone(),
                 &Anchor {
                     icon: RECT {
-                        left: 280,
-                        top: 600,
-                        right: 340,
-                        bottom: 670,
+                        left: -31720,
+                        top: -31400,
+                        right: -31660,
+                        bottom: -31330,
                     },
                     screen: RECT {
-                        left: 0,
-                        top: 0,
-                        right: 640,
-                        bottom: 720,
+                        left: -32000,
+                        top: -32000,
+                        right: -31360,
+                        bottom: -31280,
                     },
                     edge: DockEdge::Bottom,
                 },
@@ -910,7 +968,21 @@ mod tests {
                 theme,
             )?;
             view.animated = false;
-            view.update()?;
+            view.update_at(POINT { x: -1, y: -1 })?;
+            for card in &view.cards {
+                assert_eq!(card.close_btn.Opacity()?, 0.0);
+            }
+            let first = view.layout.cards[0];
+            view.update_at(POINT {
+                x: (first.left + first.right) / 2,
+                y: (first.top + first.bottom) / 2,
+            })?;
+            for (index, card) in view.cards.iter().enumerate() {
+                assert_eq!(
+                    card.close_btn.Opacity()?,
+                    if index == 0 { 1.0 } else { 0.0 }
+                );
+            }
             let bounds = view.layout.bounds;
             let source = view.anchor;
             let diagonal = POINT {
@@ -950,8 +1022,8 @@ mod tests {
                     .ok_or_else(|| anyhow::anyhow!("DWM did not place the preview"))?;
                 assert_eq!(
                     image.bottom,
-                    (rect.top as f32 + (CARD_HEIGHT - 31.0) * view.scale).round() as i32,
-                    "each preview must align with its card's caption baseline"
+                    (rect.top as f32 + (CARD_HEIGHT - PREVIEW_INSET) * view.scale).round() as i32,
+                    "each preview uses the body below the title row"
                 );
                 assert!(
                     image.top >= (rect.top as f32 + thumbnail_top_inset(view.scale)).round() as i32,
@@ -987,6 +1059,33 @@ mod tests {
             assert_eq!(
                 view.release_at(point),
                 Some(MultiWindowAction::Activate(windows[0]))
+            );
+            let original_screen = view.layout.screen;
+            let per_page = view.layout.per_page;
+            let first = view.layout.cards[0];
+            let close = muelle_core::preview::close_button_bounds(
+                muelle_core::layout::Rect {
+                    x: first.left as f32,
+                    y: first.top as f32,
+                    width: (first.right - first.left) as f32,
+                    height: (first.bottom - first.top) as f32,
+                },
+                view.scale,
+            );
+            let close_point = POINT {
+                x: (close.hit.x + close.hit.width / 2.0) as i32,
+                y: (close.hit.y + close.hit.height / 2.0) as i32,
+            };
+            view.press_at(close_point);
+            assert_eq!(
+                view.release_at(close_point),
+                Some(MultiWindowAction::Close(windows[0]))
+            );
+            assert!(view.remove_window(&gfx, windows[0])?);
+            assert_eq!(view.layout.screen, original_screen);
+            assert_eq!(
+                view.layout.per_page, per_page,
+                "closing does not use the old popup as its monitor"
             );
             drop(view);
             assert!(

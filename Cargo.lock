@@ -2261,6 +2261,7 @@ dependencies = [
  "muelle-core",
  "muelle-search",
  "muelle-shell",
+ "muelle-weather",
  "png",
  "reqwest",
  "serde",
@@ -2313,6 +2314,8 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "windows",
+ "windows-core",
+ "windows-future",
 ]
 
 [[package]]
@@ -2325,6 +2328,17 @@ dependencies = [
  "thiserror 2.0.21",
  "windows",
  "windows-core",
+]
+
+[[package]]
+name = "muelle-weather"
+version = "0.1.26"
+dependencies = [
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

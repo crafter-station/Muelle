@@ -2,6 +2,35 @@ use super::*;
 
 const CHROME: &str = r"C:\Program Files\Google\Chrome\Application\chrome.exe";
 
+#[test]
+fn installed_web_app_arguments_are_distinct_from_profiles_and_url_text() {
+    let app = "abcdefghijklmnopabcdefghijklmnop";
+    for arguments in [
+        format!("--profile-directory=Default --app-id={app}"),
+        format!("--profile-directory=\"Profile 1\" \"--app-id={app}\""),
+        format!("--app-id={}", app.to_ascii_uppercase()),
+        format!(
+            "--app-id={app} --profile-directory=Default --app-launch-source=4 --source-shortcut-location=desktop"
+        ),
+    ] {
+        assert!(web_app_arguments(&arguments), "rejected {arguments}");
+    }
+    for arguments in [
+        "--profile-directory=Default".to_owned(),
+        format!("https://example.com/?--app-id={app}"),
+        format!("--title=--app-id={app}"),
+        "--app-id=".into(),
+        "--app-id=invalid".into(),
+        "--app-id=zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".into(),
+        format!("--app-id={app} --app-id={app}"),
+        format!("--app-id={app}\0"),
+        "x".repeat(MAX_TEXT + 1),
+        format!("{} --app-id={app}", "--extra ".repeat(16)),
+    ] {
+        assert!(!web_app_arguments(&arguments));
+    }
+}
+
 fn profile(directory: &str) -> Profile {
     Profile {
         executable: CHROME.to_lowercase(),
@@ -427,6 +456,7 @@ fn native_window_properties_deliver_separate_names_and_icons_without_explorer()
             }
         }
         let id = window_id(window.0, CHROME).ok_or("missing public profile properties")?;
+        assert!(!window_web_app(window.0));
         let visual = cache.get(&id, 64)?;
         assert_eq!(visual.name, name);
         assert_eq!(
@@ -435,6 +465,21 @@ fn native_window_properties_deliver_separate_names_and_icons_without_explorer()
         );
         assert_eq!(Profile::parse(&id), Some(selected));
         ids.push(id);
+        let app_command = format!(
+            "{} --profile-directory=Default --app-id=abcdefghijklmnopabcdefghijklmnop",
+            quote(CHROME)
+        );
+        unsafe {
+            store.SetValue(
+                &PKEY_AppUserModel_RelaunchCommand,
+                &PROPVARIANT::from(app_command.as_str()),
+            )?;
+        }
+        assert!(window_web_app(window.0));
+        assert!(
+            window_id(window.0, CHROME).is_none(),
+            "web apps are never browser profiles"
+        );
     }
     assert_ne!(ids[0], ids[1]);
     fs::remove_dir_all(folder)?;

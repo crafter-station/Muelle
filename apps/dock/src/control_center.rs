@@ -882,6 +882,11 @@ impl ControlCenter {
             .collect()
     }
 
+    /// The menu bar's button it hangs from, on screen.
+    pub fn button(&self) -> RECT {
+        self.button
+    }
+
     pub fn opening(&self) -> Opening {
         self.opening
     }

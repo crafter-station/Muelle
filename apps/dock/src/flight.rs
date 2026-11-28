@@ -82,10 +82,11 @@ use windows::{
         },
         System::{LibraryLoader::GetModuleHandleW, WinRT::Composition::ICompositorDesktopInterop},
         UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, SW_SHOWNOACTIVATE,
-            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetWindowPos, ShowWindow,
-            WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+            CreateWindowExW, DefWindowProcW, DestroyWindow, HWND_TOPMOST, RegisterClassW,
+            SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+            SetWindowPos, ShowWindow, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+            WS_POPUP,
         },
     },
     core::{HSTRING, Interface, h, w},
@@ -117,6 +118,30 @@ const SETTLE: Duration = Duration::from_millis(120);
 const CAPTURE_TIMEOUT: Duration = Duration::from_millis(750);
 const FLIGHT_TIMEOUT: Duration = Duration::from_secs(2);
 static CAPTURE_BUSY: AtomicBool = AtomicBool::new(false);
+
+/// The display, direction and stacking chosen before an animation is visible.
+pub struct Placement {
+    pub screen: RECT,
+    pub edge: DockEdge,
+    /// App-icon animations pass behind the Dock; separate thumbnails can fly over it.
+    pub behind: Option<HWND>,
+}
+
+fn show_overlay(overlay: HWND, behind: Option<HWND>) -> windows::core::Result<()> {
+    // SAFETY: Our own overlay. Showing and stacking are one operation: showing
+    // at the top first can expose a full-window copy over the Dock for a frame.
+    unsafe {
+        SetWindowPos(
+            overlay,
+            Some(behind.unwrap_or(HWND_TOPMOST)),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        )
+    }
+}
 
 struct CapturePermit;
 
@@ -749,10 +774,14 @@ impl Flight {
         hwnd: isize,
         snapshot: &Snapshot,
         slot: RECT,
-        screen: RECT,
+        placement: Placement,
         seconds: f32,
-        edge: DockEdge,
     ) -> Option<Self> {
+        let Placement {
+            screen,
+            edge,
+            behind,
+        } = placement;
         // A copy turned for another edge (the dock moved meanwhile) would
         // fly sideways: the window just comes back.
         let source = intersect(snapshot.window, screen);
@@ -804,10 +833,7 @@ impl Flight {
             restore_pending: true,
             captured: None,
         };
-        // SAFETY: Our own live window.
-        unsafe {
-            let _ = ShowWindow(flight.overlay, SW_SHOWNOACTIVATE);
-        }
+        show_overlay(flight.overlay, behind).ok()?;
         Some(flight)
     }
 
@@ -1134,20 +1160,77 @@ mod native_tests {
             CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
             DispatcherQueueOptions,
         },
-        UI::WindowsAndMessaging::{IsWindow, WS_OVERLAPPEDWINDOW},
+        UI::WindowsAndMessaging::{
+            GW_HWNDPREV, GetForegroundWindow, GetWindow, IsWindow, IsWindowVisible,
+            SW_SHOWNOACTIVATE, ShowWindow, WS_OVERLAPPEDWINDOW,
+        },
     };
+
+    struct Source(HWND);
+    impl Drop for Source {
+        fn drop(&mut self) {
+            // SAFETY: This test owns the HWND.
+            unsafe {
+                let _ = DestroyWindow(self.0);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "Offscreen test-owned stacking only; no live app, capture or focus changes"]
+    fn native_first_presentation_stacks_the_flight_below_the_dock() -> Result<()> {
+        let create = || -> windows::core::Result<Source> {
+            // SAFETY: Small offscreen windows; nothing is activated.
+            unsafe {
+                CreateWindowExW(
+                    WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+                    w!("STATIC"),
+                    w!("Muelle flight stacking regression"),
+                    WS_POPUP,
+                    -32000,
+                    -32000,
+                    1,
+                    1,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .map(Source)
+            }
+        };
+        let dock = create()?;
+        let overlay = create()?;
+        let foreground = unsafe { GetForegroundWindow() };
+        show_overlay(dock.0, None)?;
+        assert!(!unsafe { IsWindowVisible(overlay.0) }.as_bool());
+        show_overlay(overlay.0, Some(dock.0))?;
+        assert!(unsafe { IsWindowVisible(overlay.0) }.as_bool());
+        assert_eq!(unsafe { GetWindow(overlay.0, GW_HWNDPREV) }?, dock.0);
+        // The separate-minimized-thumbnail policy can still fly above the Dock.
+        // Other topmost system windows can sit between them: compare order,
+        // not adjacency, when moving the overlay to the top of that band.
+        show_overlay(overlay.0, None)?;
+        let mut previous = dock.0;
+        let mut overlay_above = false;
+        for _ in 0..512 {
+            let Ok(next) = (unsafe { GetWindow(previous, GW_HWNDPREV) }) else {
+                break;
+            };
+            if next == overlay.0 {
+                overlay_above = true;
+                break;
+            }
+            previous = next;
+        }
+        assert!(overlay_above);
+        assert_eq!(unsafe { GetForegroundWindow() }, foreground);
+        Ok(())
+    }
 
     #[test]
     #[ignore = "requires an interactive Windows desktop and DWM"]
     fn native_stalled_capture_should_release_overlays_without_late_restore() -> Result<()> {
-        struct Source(HWND);
-        impl Drop for Source {
-            fn drop(&mut self) {
-                unsafe {
-                    let _ = DestroyWindow(self.0);
-                }
-            }
-        }
         let _queue = unsafe {
             CreateDispatcherQueueController(DispatcherQueueOptions {
                 dwSize: size_of::<DispatcherQueueOptions>() as u32,

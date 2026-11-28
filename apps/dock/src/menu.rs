@@ -1,5 +1,5 @@
 //! The dock's context menu, drawn like a macOS menu: frosted glass that
-//! follows the light or dark theme, compact rows, and the selection in the
+//! follows the owner's complete theme, compact rows, and the selection in the
 //! system accent color. Mouse and full keyboard control (arrows, Home/End,
 //! Enter, Esc and the underlined letters of the native menu).
 //!
@@ -57,9 +57,9 @@ use windows::{
                 TPM_TOPALIGN, TPM_VCENTERALIGN, TRACK_POPUP_MENU_FLAGS, TrackPopupMenuEx,
                 TranslateMessage, WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_CAPTURECHANGED,
                 WM_CHAR, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE,
-                WM_NULL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSKEYDOWN, WM_TIMER,
-                WM_XBUTTONDOWN, WNDCLASSW, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
-                WS_EX_TOPMOST, WS_POPUP,
+                WM_NULL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETTINGCHANGE,
+                WM_SYSKEYDOWN, WM_THEMECHANGED, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW,
+                WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
             },
         },
     },
@@ -68,7 +68,11 @@ use windows::{
 
 use windows_numerics::{Vector2, Vector3};
 
-use crate::gfx::{Gfx, Ink, LabelBrush};
+use crate::{
+    appearance::Look,
+    gfx::{Gfx, Ink, LabelBrush},
+    scene::Theme,
+};
 
 pub enum MenuItem {
     Action {
@@ -106,10 +110,10 @@ pub fn show(
     owner: HWND,
     items: &[MenuItem],
     anchor: POINT,
-    dark: bool,
+    look: Look,
     placement: Placement,
 ) -> Option<u32> {
-    show_at(gfx, owner, items, anchor, dark, placement, None)
+    show_at(gfx, owner, items, anchor, look, placement, None)
 }
 
 pub fn show_below(
@@ -117,9 +121,9 @@ pub fn show_below(
     owner: HWND,
     items: &[MenuItem],
     anchor: POINT,
-    dark: bool,
+    look: Look,
 ) -> Option<u32> {
-    show_at(gfx, owner, items, anchor, dark, Placement::Below, None)
+    show_at(gfx, owner, items, anchor, look, Placement::Below, None)
 }
 
 /// Like `show_below`, springing out of `origin` on screen and folding back
@@ -129,7 +133,7 @@ pub fn show_springing(
     owner: HWND,
     items: &[MenuItem],
     anchor: POINT,
-    dark: bool,
+    look: Look,
     origin: POINT,
 ) -> Option<u32> {
     show_at(
@@ -137,7 +141,7 @@ pub fn show_springing(
         owner,
         items,
         anchor,
-        dark,
+        look,
         Placement::Below,
         Some(origin),
     )
@@ -183,24 +187,24 @@ fn show_at(
     owner: HWND,
     items: &[MenuItem],
     anchor: POINT,
-    dark: bool,
+    look: Look,
     placement: Placement,
     origin: Option<POINT>,
 ) -> Option<u32> {
     if needs_native_menu() {
-        return show_native(owner, items, anchor, dark, placement);
+        return show_native(owner, items, anchor, !look.light, placement);
     }
-    match Popup::open(gfx, owner, items, anchor, dark, placement, origin) {
+    match Popup::open(gfx, owner, items, anchor, look, placement, origin) {
         Ok(popup) => popup.run(),
         Err(error) => {
             eprintln!("muelle: menú: {error:#}");
-            show_native(owner, items, anchor, dark, placement)
+            show_native(owner, items, anchor, !look.light, placement)
         }
     }
 }
 
 /// A screen reader or high contrast is on.
-fn needs_native_menu() -> bool {
+pub(crate) fn needs_native_menu() -> bool {
     let mut reader = BOOL::default();
     let mut contrast = HIGHCONTRASTW {
         cbSize: size_of::<HIGHCONTRASTW>() as u32,
@@ -307,11 +311,12 @@ impl Popup {
         owner: HWND,
         items: &[MenuItem],
         anchor: POINT,
-        dark: bool,
+        look: Look,
         placement: Placement,
         origin: Option<POINT>,
     ) -> Result<Self> {
         let c = &gfx.compositor;
+        let dark = !look.light;
         // SAFETY: Read-only query on our own window.
         let scale = unsafe { GetDpiForWindow(owner) }.max(96) as f32 / 96.0;
         let px = |logical: f32| (logical * scale).round();
@@ -360,7 +365,6 @@ impl Popup {
             });
         }
 
-        let glass = muelle_shell::system::transparency_enabled();
         let size = Vector2::new(width, height);
         let pad = if origin.is_some() {
             px(SPRING_PAD)
@@ -371,11 +375,13 @@ impl Popup {
         let menu = c.CreateContainerVisual()?;
         menu.SetSize(size)?;
         let layers = menu.Children()?;
+        draw_popup_background(gfx, &layers, look, width, height, scale)?;
         if origin.is_some() {
-            let radius = Vector2::new(px(SPRING_RADIUS), px(SPRING_RADIUS));
+            // Without Windows' frame, the shadow is drawn under the panel.
+            let radius = px(SPRING_RADIUS);
             let mask = c.CreateNineGridBrush()?;
-            mask.SetSource(&gfx.rounded_mask(radius.X)?)?;
-            mask.SetInsets(radius.X.ceil() + 1.0)?;
+            mask.SetSource(&gfx.rounded_mask(radius)?)?;
+            mask.SetInsets(radius.ceil() + 1.0)?;
             let shadow = c.CreateDropShadow()?;
             shadow.SetMask(&mask)?;
             shadow.SetBlurRadius(px(12.0))?;
@@ -384,33 +390,7 @@ impl Popup {
             let under = c.CreateSpriteVisual()?;
             under.SetSize(size)?;
             under.SetShadow(&shadow)?;
-            layers.InsertAtTop(&under)?;
-            // The glass, cut to round corners, and its border.
-            let panel = c.CreateContainerVisual()?;
-            panel.SetSize(size)?;
-            let outline = c.CreateRoundedRectangleGeometry()?;
-            outline.SetSize(size)?;
-            outline.SetCornerRadius(radius)?;
-            panel.SetClip(&c.CreateGeometricClipWithGeometry(&outline)?)?;
-            draw_popup_background(&panel.Children()?, dark, glass, width, height)?;
-            layers.InsertAtTop(&panel)?;
-            let edge = c.CreateRoundedRectangleGeometry()?;
-            edge.SetOffset(Vector2::new(0.5, 0.5))?;
-            edge.SetSize(Vector2::new(width - 1.0, height - 1.0))?;
-            edge.SetCornerRadius(radius)?;
-            let stroke = c.CreateSpriteShapeWithGeometry(&edge)?;
-            stroke.SetStrokeBrush(&c.CreateColorBrushWithColor(if dark {
-                rgba(255, 255, 255, 40)
-            } else {
-                rgba(0, 0, 0, 30)
-            })?)?;
-            stroke.SetStrokeThickness(1.0)?;
-            let border = c.CreateShapeVisual()?;
-            border.SetSize(size)?;
-            border.Shapes()?.Append(&stroke)?;
-            layers.InsertAtTop(&border)?;
-        } else {
-            draw_popup_background(&layers, dark, glass, width, height)?;
+            layers.InsertAtBottom(&under)?;
         }
 
         let selection = c.CreateShapeVisual()?;
@@ -615,9 +595,9 @@ impl Popup {
         let (w, h) = (w + pad as i32 * 2, h + pad as i32 * 2);
 
         let hwnd = if spring.is_some() {
-            create_window(w!("MuelleSpringMenu"), None)?
+            create_window(w!("MuelleSpringMenu"), false)?
         } else {
-            create_window(w!("MuelleMenu"), Some(dark))?
+            create_window(w!("MuelleMenu"), true)?
         };
         // SAFETY: `hwnd` is the live window created above.
         let target = unsafe {
@@ -949,9 +929,9 @@ pub(crate) fn animate_spring(menu: &ContainerVisual, open: bool) -> Result<()> {
     Ok(())
 }
 
-/// A menu's window. With `framed`, light or dark, Windows draws its corners,
-/// border and shadow; without, the menu draws its own, so that it can move.
-fn create_window(class: PCWSTR, framed: Option<bool>) -> Result<HWND> {
+/// A menu's window. With `framed`, Windows rounds its corners and casts its
+/// shadow; without, the menu draws its own, so that it can move.
+fn create_window(class: PCWSTR, framed: bool) -> Result<HWND> {
     // SAFETY: The class has a procedure that lives for the whole process, and
     // registering it again is refused harmlessly; the window is configured
     // before it is shown.
@@ -960,7 +940,7 @@ fn create_window(class: PCWSTR, framed: Option<bool>) -> Result<HWND> {
         {
             RegisterClassW(&WNDCLASSW {
                 // The system shadow under the menu, as native menus have.
-                style: if framed.is_some() {
+                style: if framed {
                     CS_DROPSHADOW
                 } else {
                     Default::default()
@@ -986,20 +966,17 @@ fn create_window(class: PCWSTR, framed: Option<bool>) -> Result<HWND> {
             Some(instance.into()),
             None,
         )?;
-        match framed {
-            Some(dark) => {
-                apply_popup_frame(hwnd, dark);
-            }
-            None => {
-                // Older Windows versions reject it; their menus are opaque.
-                let enable = BOOL::from(true);
-                let _ = DwmSetWindowAttribute(
-                    hwnd,
-                    DWMWA_USE_HOSTBACKDROPBRUSH,
-                    (&raw const enable).cast(),
-                    size_of_val(&enable) as u32,
-                );
-            }
+        if framed {
+            apply_popup_frame(hwnd);
+        } else {
+            // Older Windows versions reject it; their menus are opaque.
+            let enable = BOOL::from(true);
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_USE_HOSTBACKDROPBRUSH,
+                (&raw const enable).cast(),
+                size_of_val(&enable) as u32,
+            );
         }
         Ok(hwnd)
     }
@@ -1007,14 +984,11 @@ fn create_window(class: PCWSTR, framed: Option<bool>) -> Result<HWND> {
 
 /// Applies the native frame used by dock popups. Returns whether DWM
 /// accepted the corner preference so callers can provide a fallback.
-pub(crate) fn apply_popup_frame(hwnd: HWND, dark: bool) -> bool {
+pub(crate) fn apply_popup_frame(hwnd: HWND) -> bool {
     let enable = BOOL::from(true);
     let round = DWMWCP_ROUND;
-    let border = if dark {
-        COLORREF(0x0058_5654)
-    } else {
-        COLORREF(0x00C8_C6C4)
-    };
+    // The shared material draws its own rim. Avoid a second fixed DWM border.
+    let border = COLORREF(0xffff_fffe); // DWMWA_COLOR_NONE
     // SAFETY: Attribute values have the expected type and size; hwnd is a
     // live window owned by the caller. Older systems can reject attributes.
     unsafe {
@@ -1042,32 +1016,17 @@ pub(crate) fn apply_popup_frame(hwnd: HWND, dark: bool) -> bool {
 }
 
 pub(crate) fn draw_popup_background(
+    gfx: &Gfx,
     layers: &VisualCollection,
-    dark: bool,
-    glass: bool,
+    look: Look,
     width: f32,
     height: f32,
+    scale: f32,
 ) -> Result<()> {
-    let tint = popup_tint(dark, glass);
-    let compositor = layers.Compositor()?;
-    if glass {
-        add_sprite(
-            layers,
-            compositor.CreateHostBackdropBrush()?.cast()?,
-            0.0,
-            0.0,
-            width,
-            height,
-        )?;
-    }
-    add_sprite(
-        layers,
-        compositor.CreateColorBrushWithColor(tint)?.cast()?,
-        0.0,
-        0.0,
-        width,
-        height,
-    )
+    let panel =
+        Theme::for_popup_look(look).panel(gfx, Vector2::new(width, height), 8.0 * scale, scale)?;
+    layers.InsertAtBottom(&panel)?;
+    Ok(())
 }
 
 pub(crate) fn popup_tint(dark: bool, glass: bool) -> Color {
@@ -1087,7 +1046,9 @@ unsafe extern "system" fn menu_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) 
         WM_CAPTURECHANGED if l.0 != hwnd.0 as isize => {
             DISMISSED.store(true, Ordering::Relaxed);
         }
-        WM_CANCELMODE => DISMISSED.store(true, Ordering::Relaxed),
+        WM_CANCELMODE | WM_SETTINGCHANGE | WM_THEMECHANGED => {
+            DISMISSED.store(true, Ordering::Relaxed)
+        }
         WM_SETCURSOR => {
             // SAFETY: The stock arrow cursor is owned by Windows.
             if let Ok(arrow) = unsafe { LoadCursorW(None, IDC_ARROW) } {
@@ -1295,6 +1256,86 @@ pub fn apply_theme(dark: bool) {
 mod tests {
     use super::*;
 
+    #[test]
+    #[ignore = "Private compositor surfaces only; no visible menu, focus or settings changes"]
+    fn native_context_menu_materials_keep_one_backdrop_and_honor_solid_fallbacks() -> Result<()> {
+        use crate::appearance::Material;
+        use windows::{
+            UI::Composition::{
+                CompositionBackdropBrush, CompositionColorBrush, CompositionLinearGradientBrush,
+                SpriteVisual,
+            },
+            Win32::System::WinRT::{
+                CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+                DispatcherQueueOptions,
+            },
+        };
+        fn inspect(root: &ContainerVisual) -> Result<(usize, usize, Vec<Color>)> {
+            let (mut backdrop, mut gradients, mut colors) = (0, 0, Vec::new());
+            if let Ok(sprite) = root.cast::<SpriteVisual>()
+                && let Ok(brush) = sprite.Brush()
+            {
+                backdrop += usize::from(brush.cast::<CompositionBackdropBrush>().is_ok());
+                gradients += usize::from(brush.cast::<CompositionLinearGradientBrush>().is_ok());
+                if let Ok(color) = brush.cast::<CompositionColorBrush>() {
+                    colors.push(color.Color()?);
+                }
+            }
+            for child in root.Children()? {
+                if let Ok(container) = child.cast::<ContainerVisual>() {
+                    let (b, g, c) = inspect(&container)?;
+                    backdrop += b;
+                    gradients += g;
+                    colors.extend(c);
+                }
+            }
+            Ok((backdrop, gradients, colors))
+        }
+        let _queue = unsafe {
+            CreateDispatcherQueueController(DispatcherQueueOptions {
+                dwSize: size_of::<DispatcherQueueOptions>() as u32,
+                threadType: DQTYPE_THREAD_CURRENT,
+                apartmentType: DQTAT_COM_STA,
+            })?
+        };
+        let gfx = Gfx::new()?;
+        for material in Material::ALL {
+            for light in [false, true] {
+                for glass in [false, true] {
+                    for scale in [1.0, 1.5, 2.0] {
+                        let root = gfx.compositor.CreateContainerVisual()?;
+                        let look = Look {
+                            material,
+                            light,
+                            glass,
+                        };
+                        draw_popup_background(
+                            &gfx,
+                            &root.Children()?,
+                            look,
+                            280.0 * scale,
+                            300.0 * scale,
+                            scale,
+                        )?;
+                        assert_eq!(root.Children()?.Count()?, 1);
+                        let (backdrops, gradients, colors) = inspect(&root)?;
+                        assert_eq!(backdrops, usize::from(glass));
+                        assert_eq!(
+                            gradients,
+                            1 + usize::from(material == Material::LiquidGlass && glass)
+                        );
+                        assert_eq!(colors.len(), 1);
+                        assert_eq!(colors[0].A == 255, !glass);
+                        if material == Material::Standard {
+                            assert_eq!(colors[0], popup_tint(!light, glass));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn icon(pixels: &[[u8; 4]]) -> IconImage {
         IconImage {
             width: pixels.len() as u32,
@@ -1364,7 +1405,11 @@ mod tests {
                     MenuItem::action(2, "English"),
                 ],
                 anchor,
-                true,
+                Look {
+                    material: crate::appearance::Material::Standard,
+                    light: false,
+                    glass: true,
+                },
                 Placement::Below,
                 None,
             )?;

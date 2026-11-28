@@ -32,6 +32,7 @@ use windows::{
 };
 
 use crate::{
+    appearance,
     assets::fallback_name,
     gfx::Gfx,
     menu::{self, MenuItem},
@@ -78,7 +79,7 @@ struct Running {
 pub(crate) struct Request {
     gfx: Gfx,
     anchor: POINT,
-    dark: bool,
+    look: appearance::Look,
     /// Where the menu springs from; `None` shows it at once.
     spring: Option<POINT>,
     /// Every window, those of other desktops and hidden ones included.
@@ -286,7 +287,7 @@ pub(crate) fn show(request: Request, owner: HWND) -> Option<Outside> {
     let Request {
         gfx,
         anchor,
-        dark,
+        look,
         spring,
         windows,
         shown,
@@ -294,8 +295,8 @@ pub(crate) fn show(request: Request, owner: HWND) -> Option<Outside> {
         recent,
     } = request;
     let below = |items: &[MenuItem]| match spring {
-        Some(origin) => menu::show_springing(&gfx, owner, items, anchor, dark, origin),
-        None => menu::show_below(&gfx, owner, items, anchor, dark),
+        Some(origin) => menu::show_springing(&gfx, owner, items, anchor, look, origin),
+        None => menu::show_below(&gfx, owner, items, anchor, look),
     };
     let (apps, peers) = running(&windows, &shown, &explorer_id());
     // Held before the menu opens: the app in front is the one meant.
@@ -396,8 +397,8 @@ impl App {
         self.close_preview();
         self.close_group_view();
         if let Some(bar) = &mut self.menubar {
-            bar.dismiss_island(&self.gfx)?;
-            bar.set_system_menu(&self.gfx, true)?;
+            bar.dismiss_panels(&self.gfx)?;
+            bar.bar_at(button).set_system_menu(&self.gfx, true)?;
         }
         let front = tracker::foreground_window();
         // Other desktops too: an app is ended with all of its windows.
@@ -411,8 +412,8 @@ impl App {
             .collect();
         let spring = self
             .menubar
-            .as_ref()
-            .and_then(|bar| bar.system_menu_origin())
+            .as_mut()
+            .and_then(|bar| bar.bar_at(button).system_menu_origin())
             .filter(|_| self.config.menu_bar_icon_animation && system::animations_enabled());
         self.menu_open = true;
         self.render()?;
@@ -422,7 +423,7 @@ impl App {
                 x: button.left,
                 y: button.bottom + GAP,
             },
-            dark: !crate::appearance::menu_bar_light(),
+            look: appearance::menu_bar(),
             spring,
             windows,
             shown: self.windows.clone(),
@@ -433,7 +434,7 @@ impl App {
 
     pub(super) fn system_menu_closed(&mut self) -> Result<()> {
         if let Some(bar) = &mut self.menubar {
-            bar.set_system_menu(&self.gfx, false)?;
+            bar.each_bar(|bar| bar.set_system_menu(&self.gfx, false))?;
         }
         self.after_menu()
     }

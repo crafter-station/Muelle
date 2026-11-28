@@ -17,6 +17,8 @@
 //! and volume changes arrive through separate notifications; nothing polls.
 
 use anyhow::Result;
+#[path = "menubar/keyboard.rs"]
+mod keyboard;
 use muelle_config::{IslandStyle, Language, MenuBarIcon};
 use muelle_shell::{
     accessories::{Kind as AccessoryKind, Snapshot as AccessorySnapshot},
@@ -29,7 +31,7 @@ use muelle_shell::{
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering},
+        atomic::{AtomicBool, AtomicIsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -59,11 +61,11 @@ use windows::{
             HWND_TOPMOST, IDC_ARROW, KillTimer, LoadCursorW, MSLLHOOKSTRUCT,
             PBT_POWERSETTINGCHANGE, PostMessageW, RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE,
             SWP_SHOWWINDOW, SetCursor, SetTimer, SetWindowPos, SetWindowsHookExW,
-            UnhookWindowsHookEx, WH_MOUSE_LL, WM_APP, WM_CAPTURECHANGED, WM_LBUTTONDOWN,
-            WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST,
-            WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETTINGCHANGE, WM_TIMECHANGE, WM_TIMER,
-            WM_XBUTTONDOWN, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+            UnhookWindowsHookEx, WH_MOUSE_LL, WM_ACTIVATE, WM_APP, WM_CAPTURECHANGED, WM_CHAR,
+            WM_CLOSE, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE,
+            WM_MOUSEWHEEL, WM_NCHITTEST, WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETTINGCHANGE,
+            WM_TIMECHANGE, WM_TIMER, WM_XBUTTONDOWN, WNDCLASSW, WS_EX_NOACTIVATE,
+            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
     core::{BOOL, Interface, h, w},
@@ -117,6 +119,7 @@ const VOLUME_CAPTURE_LOST: u32 = WM_APP + 31;
 const AUDIO_CHANGED: u32 = WM_APP + 32;
 const AUDIO_TICK: u32 = WM_APP + 33;
 const BLUETOOTH_CHANGED: u32 = WM_APP + 34;
+const MUSIC_FOCUS_LOST: u32 = WM_APP + 35;
 const VOLUME_TIMER: usize = 4;
 const PROGRESS_TIMER: usize = 5;
 /// The system monitor's samples (issue #64): every 2 s while it shows, and
@@ -174,16 +177,67 @@ const SPI_SETWORKAREA: usize = 0x002F;
 /// A `TICK` is already posted.
 static TICK_PENDING: AtomicBool = AtomicBool::new(false);
 static AUDIO_TICK_PENDING: AtomicBool = AtomicBool::new(false);
-static TRIGGERS_LEFT: AtomicI32 = AtomicI32::new(0);
-static TRIGGERS_RIGHT: AtomicI32 = AtomicI32::new(0);
-static PANEL_LEFT: AtomicI32 = AtomicI32::new(0);
-/// The speaker icon while its volume slider is open, else empty.
-static SPEAKER_LEFT: AtomicI32 = AtomicI32::new(0);
-static SPEAKER_RIGHT: AtomicI32 = AtomicI32::new(0);
-static PANEL_RIGHT: AtomicI32 = AtomicI32::new(0);
-static BAR_TOP: AtomicI32 = AtomicI32::new(0);
-static BAR_BOTTOM: AtomicI32 = AtomicI32::new(0);
-static PANEL_BOTTOM: AtomicI32 = AtomicI32::new(0);
+/// Where a bar's window takes the pointer and where its popup's hook sees a
+/// click as inside, in screen pixels. Each bar (one per display) has its own.
+#[derive(Clone, Copy, Default)]
+struct HitZones {
+    bar_top: i32,
+    bar_bottom: i32,
+    /// The island, from left to right.
+    triggers: (i32, i32),
+    /// The popup under it, with its bottom edge.
+    panel: (i32, i32),
+    panel_bottom: i32,
+    /// The speaker icon while its volume slider is open, else empty.
+    speaker: (i32, i32),
+}
+
+impl HitZones {
+    /// Whether a click at `point` stays with the open popup.
+    fn keeps(&self, point: POINT) -> bool {
+        let within = |(left, right): (i32, i32)| point.x >= left && point.x < right;
+        let in_bar = point.y >= self.bar_top && point.y < self.bar_bottom;
+        let in_panel = point.y >= self.bar_bottom && point.y < self.panel_bottom;
+        (in_bar && (within(self.triggers) || within(self.speaker)))
+            || (in_panel && within(self.panel))
+    }
+
+    /// Whether the window lets the pointer through at `(x, y)`: below the
+    /// bar, beside or under its popup.
+    fn passes(&self, x: i32, y: i32) -> bool {
+        y >= self.bar_bottom && (y >= self.panel_bottom || x < self.panel.0 || x >= self.panel.1)
+    }
+}
+
+static HIT_ZONES: std::sync::Mutex<Vec<(isize, HitZones)>> = std::sync::Mutex::new(Vec::new());
+
+fn hit_zones(window: isize) -> HitZones {
+    HIT_ZONES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|(id, _)| *id == window)
+        .map_or_else(HitZones::default, |(_, zones)| *zones)
+}
+
+fn set_hit_zones(window: isize, zones: Option<HitZones>) {
+    let mut all = HIT_ZONES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    all.retain(|(id, _)| *id != window);
+    all.extend(zones.map(|zones| (window, zones)));
+}
+
+/// The bar window's hit test: through its transparent area, else as usual.
+fn hit_test(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    let x = (l.0 & 0xFFFF) as i16 as i32;
+    let y = (l.0 >> 16) as i16 as i32;
+    if hit_zones(hwnd.0 as isize).passes(x, y) {
+        return LRESULT(-1);
+    }
+    // SAFETY: Default hit testing for the bar and the island.
+    unsafe { DefWindowProcW(hwnd, msg, w, l) }
+}
 /// The hook exists only while the island is expanded.
 static ISLAND_HOOK_WINDOW: AtomicIsize = AtomicIsize::new(0);
 /// Segoe Fluent Icons code points.
@@ -296,6 +350,9 @@ struct Look {
     /// See `system::transparency_enabled`.
     glass: bool,
     app_name: String,
+    /// The app in front is on another display: its name shows dimmed here,
+    /// as macOS does on the menu bars of the other displays.
+    dim_app: bool,
     clock: String,
     /// The input language indicator, when more than one is installed.
     input: Option<String>,
@@ -387,6 +444,13 @@ fn accessory_readings(snapshot: &AccessorySnapshot) -> [Option<AccessoryReading>
 }
 
 impl Look {
+    fn popup_theme(&self) -> Theme {
+        Theme::for_popup_look(appearance::Look {
+            material: self.material,
+            light: self.light,
+            glass: self.glass,
+        })
+    }
     fn panel_content_height(&self) -> f32 {
         match self.panel {
             Some(Island::Music | Island::Volume) => 180.0,
@@ -434,6 +498,37 @@ impl Span {
     fn width(self) -> f32 {
         self.right - self.left
     }
+    fn fraction(self, x: f32) -> Option<f64> {
+        (x.is_finite() && self.width() > 0.0)
+            .then(|| f64::from(((x - self.left) / self.width()).clamp(0.0, 1.0)))
+    }
+}
+
+struct SeekGesture {
+    span: Span,
+    track: Track,
+    fraction: f64,
+    pending: Option<(u64, Instant)>,
+}
+
+impl SeekGesture {
+    fn settled(&self, current: Option<&Track>, result: Option<bool>, now: Instant) -> bool {
+        match result {
+            None => false,
+            Some(false) => true,
+            Some(true) => self
+                .track
+                .timeline
+                .zip(current.and_then(|track| track.timeline))
+                .is_some_and(|(target, actual)| {
+                    target
+                        .preview(self.fraction)
+                        .position_at(now)
+                        .abs_diff(actual.position_at(now))
+                        <= Duration::from_secs(3)
+                }),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -448,6 +543,7 @@ enum IslandAction {
     Toggle(Island),
     Media(MediaControl),
     Volume(VolumeTrack),
+    Seek(Span),
     Mute,
     Refresh,
     ScrollUsage(i8),
@@ -678,6 +774,8 @@ pub struct MenuBar {
         CompositionSurfaceBrush,
     )>,
     volume_drag: Option<VolumeTrack>,
+    seek_gesture: Option<SeekGesture>,
+    suppress_seek_release: bool,
     pending_volume: Option<u8>,
     volume_target: Option<u8>,
     volume_controls: Option<VolumeControls>,
@@ -692,6 +790,7 @@ pub struct MenuBar {
     panel_span: Span,
     island_hits: Vec<IslandHit>,
     outside_click_hook: Option<HHOOK>,
+    keyboard: Option<keyboard::MusicKeyboard>,
     /// Held for their callbacks; dropping them unsubscribes.
     _network: Option<NetworkWatch>,
     /// Hears when apps start or stop using the microphone or camera.
@@ -701,20 +800,143 @@ pub struct MenuBar {
     /// Search uses its own Windows preference key.
     search_watch: Option<RegistryWatch>,
     /// Energy saver on or off arrives as `WM_POWERBROADCAST`; glass follows.
-    _saver_watch: muelle_shell::power::SaverWatch,
+    _saver_watch: Option<muelle_shell::power::SaverWatch>,
     audio: Option<AudioWatch>,
+    /// Set on a copy of the bar for another display (see `create_mirror`):
+    /// it draws what the primary bar reads and reads nothing itself.
+    mirror: Option<Mirror>,
+    /// The copies on the other displays, kept in step by `apply_look`.
+    mirrors: Vec<MenuBar>,
+    /// The display of the window in front, when known: the app name is
+    /// dimmed on the bars of the other displays.
+    active_display: Option<RECT>,
+}
+
+/// What a copy of the bar on another display needs of its own.
+struct Mirror {
+    /// The display it is on, as its screen rectangle.
+    display: RECT,
+    /// What it last drew, from the primary bar's look: redrawn as is when
+    /// it shows again, without reading anything.
+    source: Option<Look>,
+}
+
+/// What reaches a copy of the bar on another display (see `mirror_proc`).
+pub enum MirrorEvent {
+    /// Button down: a seek or volume drag may start.
+    Press(f32, f32),
+    /// Button up: ends a drag, or else is a click.
+    Release(f32, f32),
+    /// The mouse capture was lost during a drag.
+    CaptureLost,
+    PointerMoved(f32, f32),
+    CheckPointer,
+    FinishHide(Option<usize>),
+    Scroll(POINT, i16),
+    VolumeFlush,
+    ProgressTick,
+    /// The volume slider has folded back into the speaker.
+    FoldDone,
+    /// Time to look whether Windows' tray flyout is still open.
+    TrayTick,
+    Dismiss,
+}
+
+/// The window of a copy of the bar on another display: the bar's gestures,
+/// popups and hiding, as on the primary bar. No keyboard: the music popup's
+/// Space shortcut is the primary bar's.
+unsafe extern "system" fn mirror_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    let at = || ((l.0 & 0xFFFF) as i16 as f32, (l.0 >> 16) as i16 as f32);
+    let event = match msg {
+        WM_CLOSE => MirrorEvent::Dismiss,
+        WM_LBUTTONDOWN => {
+            launcher::note_menu_bar_press();
+            let (x, y) = at();
+            MirrorEvent::Press(x, y)
+        }
+        WM_LBUTTONUP => {
+            let (x, y) = at();
+            MirrorEvent::Release(x, y)
+        }
+        WM_MOUSEMOVE => {
+            let (x, y) = at();
+            MirrorEvent::PointerMoved(x, y)
+        }
+        WM_MOUSELEAVE => MirrorEvent::CheckPointer,
+        WM_MOUSEWHEEL => {
+            let point = POINT {
+                x: (l.0 & 0xFFFF) as i16 as i32,
+                y: (l.0 >> 16) as i16 as i32,
+            };
+            if app::menu_bar_mirror_event(
+                hwnd,
+                MirrorEvent::Scroll(point, (w.0 >> 16) as u16 as i16),
+            ) {
+                return LRESULT(0);
+            }
+            return unsafe { DefWindowProcW(hwnd, msg, w, l) };
+        }
+        WM_TIMER if w.0 == POINTER_TIMER => MirrorEvent::CheckPointer,
+        WM_TIMER if w.0 == HIDE_ANIMATION_TIMER => MirrorEvent::FinishHide(None),
+        WM_TIMER if w.0 == VOLUME_TIMER => MirrorEvent::VolumeFlush,
+        WM_TIMER if w.0 == PROGRESS_TIMER => MirrorEvent::ProgressTick,
+        WM_TIMER if w.0 == FOLD_TIMER => MirrorEvent::FoldDone,
+        WM_TIMER if w.0 == TRAY_TIMER => MirrorEvent::TrayTick,
+        HIDE_ANIMATION_DONE => MirrorEvent::FinishHide(Some(w.0)),
+        DISMISS_ISLAND => MirrorEvent::Dismiss,
+        WM_CAPTURECHANGED => {
+            // Avoid reentering the app borrow inside Set/ReleaseCapture.
+            unsafe {
+                let _ = PostMessageW(Some(hwnd), VOLUME_CAPTURE_LOST, WPARAM(0), LPARAM(0));
+            }
+            return LRESULT(0);
+        }
+        // A delayed notification must not cancel a newer drag.
+        VOLUME_CAPTURE_LOST if unsafe { GetCapture() } != hwnd => MirrorEvent::CaptureLost,
+        WM_NCHITTEST => return hit_test(hwnd, msg, w, l),
+        WM_SETCURSOR => {
+            // SAFETY: Keep the standard arrow throughout the bar.
+            if let Ok(arrow) = unsafe { LoadCursorW(None, IDC_ARROW) } {
+                unsafe { SetCursor(Some(arrow)) };
+                return LRESULT(1);
+            }
+            return unsafe { DefWindowProcW(hwnd, msg, w, l) };
+        }
+        // SAFETY: Standard forwarding of unhandled messages.
+        _ => return unsafe { DefWindowProcW(hwnd, msg, w, l) },
+    };
+    app::menu_bar_mirror_event(hwnd, event);
+    LRESULT(0)
 }
 
 unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match msg {
+        WM_CLOSE => {
+            // Alt+F4 closes the focused popup, never the persistent bar window.
+            app::menu_bar_dismiss_island();
+            return LRESULT(0);
+        }
+        WM_KEYDOWN => {
+            app::menu_bar_music_key(w.0 as u16, l.0 as usize & (1 << 30) != 0);
+            return LRESULT(0);
+        }
+        WM_CHAR if w.0 == 0x20 || w.0 == 0x1b => return LRESULT(0),
+        WM_ACTIVATE if w.0 & 0xffff == 0 => {
+            // Activation messages can arrive inside our own focus changes.
+            // Defer the app borrow until SetForegroundWindow has returned.
+            unsafe {
+                let _ = PostMessageW(Some(hwnd), MUSIC_FOCUS_LOST, WPARAM(0), LPARAM(0));
+            }
+        }
+        MUSIC_FOCUS_LOST => app::menu_bar_music_focus_lost(),
         WM_LBUTTONDOWN => {
             launcher::note_menu_bar_press();
-            app::menu_bar_volume_press((l.0 & 0xFFFF) as i16 as f32, (l.0 >> 16) as i16 as f32);
+            app::menu_bar_slider_press((l.0 & 0xFFFF) as i16 as f32, (l.0 >> 16) as i16 as f32);
         }
         WM_LBUTTONUP => {
             let x = (l.0 & 0xFFFF) as i16;
             let y = (l.0 >> 16) as i16;
-            if !app::menu_bar_volume_release(Some(f32::from(y))) {
+            if !app::menu_bar_slider_release(Some((f32::from(x), f32::from(y)))) {
                 app::menu_bar_clicked(f32::from(x), f32::from(y));
             }
         }
@@ -750,7 +972,7 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
         VOLUME_CAPTURE_LOST => {
             // A delayed notification must not cancel a newer drag.
             if unsafe { GetCapture() } != hwnd {
-                app::menu_bar_volume_release(None);
+                app::menu_bar_slider_release(None);
             }
         }
         WM_TIMER if w.0 == HIDE_ANIMATION_TIMER => app::menu_bar_finish_hide(None),
@@ -779,19 +1001,7 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -
             }
             return unsafe { DefWindowProcW(hwnd, msg, w, l) };
         }
-        WM_NCHITTEST => {
-            let x = (l.0 & 0xFFFF) as i16 as i32;
-            let y = (l.0 >> 16) as i16 as i32;
-            if y >= BAR_BOTTOM.load(Ordering::Relaxed)
-                && (y >= PANEL_BOTTOM.load(Ordering::Relaxed)
-                    || x < PANEL_LEFT.load(Ordering::Relaxed)
-                    || x >= PANEL_RIGHT.load(Ordering::Relaxed))
-            {
-                return LRESULT(-1);
-            }
-            // SAFETY: Default hit testing for the bar and the island.
-            return unsafe { DefWindowProcW(hwnd, msg, w, l) };
-        }
+        WM_NCHITTEST => return hit_test(hwnd, msg, w, l),
         // The minute changed, the charger was plugged or unplugged, the
         // network or volume changed, or a Windows setting (taskbar buttons).
         // Nothing the bar shows depends on the work area.
@@ -837,21 +1047,10 @@ unsafe extern "system" fn outside_click_proc(code: i32, w: WPARAM, l: LPARAM) ->
     {
         // SAFETY: Windows provides an MSLLHOOKSTRUCT for mouse hook actions.
         let point = unsafe { (*(l.0 as *const MSLLHOOKSTRUCT)).pt };
-        let in_triggers = point.y >= BAR_TOP.load(Ordering::Relaxed)
-            && point.y < BAR_BOTTOM.load(Ordering::Relaxed)
-            && point.x >= TRIGGERS_LEFT.load(Ordering::Relaxed)
-            && point.x < TRIGGERS_RIGHT.load(Ordering::Relaxed);
-        let in_panel = point.y >= BAR_BOTTOM.load(Ordering::Relaxed)
-            && point.y < PANEL_BOTTOM.load(Ordering::Relaxed)
-            && point.x >= PANEL_LEFT.load(Ordering::Relaxed)
-            && point.x < PANEL_RIGHT.load(Ordering::Relaxed);
-        let in_speaker = point.y >= BAR_TOP.load(Ordering::Relaxed)
-            && point.y < BAR_BOTTOM.load(Ordering::Relaxed)
-            && point.x >= SPEAKER_LEFT.load(Ordering::Relaxed)
-            && point.x < SPEAKER_RIGHT.load(Ordering::Relaxed);
-        if !in_triggers && !in_panel && !in_speaker {
-            let window = ISLAND_HOOK_WINDOW.load(Ordering::Relaxed);
-            if window != 0 {
+        // The bar whose popup is open, on whichever display.
+        let window = ISLAND_HOOK_WINDOW.load(Ordering::Relaxed);
+        if window != 0 && !hit_zones(window).keeps(point) {
+            {
                 // SAFETY: The window remains live until the hook is removed in Drop.
                 unsafe {
                     let _ = PostMessageW(
@@ -1241,6 +1440,7 @@ fn draw_usage_row(
         let message = match usage.state {
             State::Loading => text.usage_loading,
             State::SignIn if provider == Provider::Claude => text.usage_claude_sign_in,
+            State::SignIn if provider == Provider::Gemini => text.usage_gemini_sign_in,
             State::SignIn => text.usage_sign_in,
             State::Ready | State::Unavailable => text.usage_unavailable,
         };
@@ -1272,14 +1472,51 @@ impl MenuBar {
         auto_hide: bool,
         widgets: MenuBarWidgets,
     ) -> Result<Self> {
-        let class = w!("MuelleMenuBar");
+        Self::new(gfx, usage_enabled, media_enabled, auto_hide, widgets, None)
+    }
+
+    /// A copy of the bar for `display`: its own window and reserved strip,
+    /// drawn from the primary bar (see `follow`), with no watchers.
+    fn create_mirror(
+        gfx: &Gfx,
+        display: RECT,
+        auto_hide: bool,
+        widgets: MenuBarWidgets,
+    ) -> Result<Self> {
+        let mirror = Mirror {
+            display,
+            source: None,
+        };
+        Self::new(gfx, false, false, auto_hide, widgets, Some(mirror))
+    }
+
+    fn new(
+        gfx: &Gfx,
+        usage_enabled: bool,
+        media_enabled: bool,
+        auto_hide: bool,
+        widgets: MenuBarWidgets,
+        mirror: Option<Mirror>,
+    ) -> Result<Self> {
+        let primary = mirror.is_none();
+        let (class, procedure) = if primary {
+            (
+                w!("MuelleMenuBar"),
+                bar_proc as unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
+            )
+        } else {
+            (
+                w!("MuelleMenuBarMirror"),
+                mirror_proc as unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
+            )
+        };
         // SAFETY: Standard class registration and window creation on the UI
         // thread; the window is destroyed in `Drop`.
         let hwnd = unsafe {
             let instance = GetModuleHandleW(None)?;
             // Registering an existing class fails harmlessly.
             RegisterClassW(&WNDCLASSW {
-                lpfnWndProc: Some(bar_proc),
+                lpfnWndProc: Some(procedure),
                 hInstance: instance.into(),
                 hCursor: LoadCursorW(None, IDC_ARROW)?,
                 lpszClassName: class,
@@ -1366,6 +1603,8 @@ impl MenuBar {
             media_enabled,
             cover: None,
             volume_drag: None,
+            seek_gesture: None,
+            suppress_seek_release: false,
             pending_volume: None,
             volume_target: None,
             volume_controls: None,
@@ -1380,7 +1619,10 @@ impl MenuBar {
             panel_span: Span::default(),
             island_hits: Vec::new(),
             outside_click_hook: None,
-            bluetooth: bluetooth::Monitor::new(hwnd.0 as isize, BLUETOOTH_CHANGED).ok(),
+            keyboard: None,
+            bluetooth: primary
+                .then(|| bluetooth::Monitor::new(hwnd.0 as isize, BLUETOOTH_CHANGED).ok())
+                .flatten(),
             slider: None,
             folding: None,
             volume_front: 0,
@@ -1388,21 +1630,46 @@ impl MenuBar {
             windows_tray: false,
             picture: None,
             icon_center: None,
-            _network: NetworkWatch::new(hwnd.0 as isize, STATUS_CHANGED),
-            privacy_watch: status::watch_privacy(hwnd.0 as isize, REGISTRY_CHANGED),
-            settings_watch: status::watch_taskbar_settings(hwnd.0 as isize, REGISTRY_CHANGED),
-            search_watch: status::watch_search_settings(hwnd.0 as isize, REGISTRY_CHANGED),
-            _saver_watch: muelle_shell::power::SaverWatch::new(hwnd.0 as isize),
-            audio: AudioWatch::new(hwnd.0 as isize, AUDIO_CHANGED),
+            _network: primary
+                .then(|| NetworkWatch::new(hwnd.0 as isize, STATUS_CHANGED))
+                .flatten(),
+            privacy_watch: primary
+                .then(|| status::watch_privacy(hwnd.0 as isize, REGISTRY_CHANGED))
+                .flatten(),
+            settings_watch: primary
+                .then(|| status::watch_taskbar_settings(hwnd.0 as isize, REGISTRY_CHANGED))
+                .flatten(),
+            search_watch: primary
+                .then(|| status::watch_search_settings(hwnd.0 as isize, REGISTRY_CHANGED))
+                .flatten(),
+            _saver_watch: primary.then(|| muelle_shell::power::SaverWatch::new(hwnd.0 as isize)),
+            audio: primary
+                .then(|| AudioWatch::new(hwnd.0 as isize, AUDIO_CHANGED))
+                .flatten(),
+            mirror,
+            mirrors: Vec::new(),
+            active_display: None,
         };
-        AUDIO_TICK_PENDING.store(false, Ordering::Relaxed);
-        bar.update_status();
-        bar.refresh(gfx)?;
-        bar.schedule_next_minute();
+        // A copy draws once the primary bar gives it something to draw.
+        if primary {
+            AUDIO_TICK_PENDING.store(false, Ordering::Relaxed);
+            bar.update_status();
+            bar.refresh(gfx)?;
+            bar.schedule_next_minute();
+        }
         Ok(bar)
     }
 
     pub fn set_app_name(&mut self, gfx: &Gfx, name: &str) -> Result<()> {
+        // The transient music popup is keyboard-active, not a new document
+        // app. Keep the app name that was shown when the user opened it.
+        if self
+            .keyboard
+            .as_ref()
+            .is_some_and(keyboard::MusicKeyboard::owns_focus)
+        {
+            return Ok(());
+        }
         if self.app_name == name {
             return Ok(());
         }
@@ -1419,6 +1686,8 @@ impl MenuBar {
 
     pub fn set_visible(&mut self, visible: bool) -> Result<()> {
         if !visible {
+            self.keyboard = None;
+            self.cancel_progress();
             self.release_volume(None)?;
         }
         if self.visible == visible {
@@ -1432,6 +1701,9 @@ impl MenuBar {
     }
 
     pub fn set_auto_hide(&mut self, auto_hide: bool) -> Result<()> {
+        for mirror in &mut self.mirrors {
+            mirror.set_auto_hide(auto_hide)?;
+        }
         if self.hide_setting == auto_hide {
             return Ok(());
         }
@@ -1441,6 +1713,9 @@ impl MenuBar {
 
     /// Intelligent hiding on or off (see `smart`).
     pub fn set_smart_hide(&mut self, smart: bool) -> Result<()> {
+        for mirror in &mut self.mirrors {
+            mirror.set_smart_hide(smart)?;
+        }
         if self.smart == smart {
             return Ok(());
         }
@@ -1467,6 +1742,211 @@ impl MenuBar {
     /// Where the bar is on screen, shown or not.
     pub fn bounds(&self) -> RECT {
         self.bounds
+    }
+
+    /// The other displays that show a copy of the bar: copies for displays
+    /// no longer listed go, new ones are made and drawn at once.
+    pub fn set_displays(&mut self, gfx: &Gfx, displays: &[RECT]) -> Result<()> {
+        self.mirrors.retain(|bar| {
+            bar.mirror
+                .as_ref()
+                .is_some_and(|mirror| displays.contains(&mirror.display))
+        });
+        for &display in displays {
+            if self.mirrors.iter().any(|bar| {
+                bar.mirror
+                    .as_ref()
+                    .is_some_and(|mirror| mirror.display == display)
+            }) {
+                continue;
+            }
+            let mut bar = Self::create_mirror(gfx, display, self.hide_setting, self.widgets)?;
+            bar.set_smart_hide(self.smart)?;
+            bar.set_clock_target(self.clock_target.as_deref());
+            bar.visible = self.visible;
+            bar.picture.clone_from(&self.picture);
+            self.mirrors.push(bar);
+        }
+        // The name dims on the other displays only while there are some.
+        self.refresh(gfx)
+    }
+
+    /// The display of the window in front changed: the app name dims on
+    /// the bars of the others.
+    pub fn set_active_display(&mut self, gfx: &Gfx, display: Option<RECT>) -> Result<()> {
+        if self.active_display == display {
+            return Ok(());
+        }
+        self.active_display = display;
+        self.refresh(gfx)
+    }
+
+    /// The copies, with the display each is on.
+    pub fn mirrors_mut(&mut self) -> impl Iterator<Item = (RECT, &mut MenuBar)> {
+        self.mirrors.iter_mut().filter_map(|bar| {
+            let display = bar.mirror.as_ref()?.display;
+            Some((display, bar))
+        })
+    }
+
+    /// This bar or its copy whose window is `hwnd`.
+    pub fn bar_mut(&mut self, hwnd: isize) -> Option<&mut MenuBar> {
+        if self.hwnd.0 as isize == hwnd {
+            return Some(self);
+        }
+        self.mirrors
+            .iter_mut()
+            .find(|bar| bar.hwnd.0 as isize == hwnd)
+    }
+
+    /// The window this bar or copy is.
+    pub fn window(&self) -> isize {
+        self.hwnd.0 as isize
+    }
+
+    /// This bar, or the copy that `button`, on screen, belongs to.
+    pub fn bar_at(&mut self, button: RECT) -> &mut MenuBar {
+        let x = (button.left + button.right) / 2;
+        let holds = |bounds: RECT| x >= bounds.left && x < bounds.right && button.top == bounds.top;
+        match self.mirrors.iter().position(|bar| holds(bar.bounds)) {
+            Some(index) => &mut self.mirrors[index],
+            None => self,
+        }
+    }
+
+    /// Runs `action` on this bar and on every copy of it.
+    pub fn each_bar(&mut self, mut action: impl FnMut(&mut MenuBar) -> Result<()>) -> Result<()> {
+        action(self)?;
+        self.mirrors.iter_mut().try_for_each(action)
+    }
+
+    /// Closes the popup of this bar and of every copy, before a menu opens.
+    pub fn dismiss_panels(&mut self, gfx: &Gfx) -> Result<()> {
+        self.dismiss_island(gfx)?;
+        for index in 0..self.mirrors.len() {
+            if self.mirrors[index].panel.is_some() {
+                self.lend(index, |bar| bar.dismiss_island(gfx))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The strips the bar and its copies keep for themselves.
+    pub fn reserved_strips(&self) -> Vec<RECT> {
+        std::iter::once(self)
+            .chain(&self.mirrors)
+            .filter_map(MenuBar::reserved_strip)
+            .collect()
+    }
+
+    /// Draws the primary bar's `look` on this copy's display.
+    fn follow(&mut self, gfx: &Gfx, primary: &Look, active: Option<RECT>) -> Result<()> {
+        let Some(mirror) = &mut self.mirror else {
+            return Ok(());
+        };
+        let display = mirror.display;
+        let Some(monitor) = system::monitor_at(POINT {
+            x: display.left + (display.right - display.left) / 2,
+            y: display.top + (display.bottom - display.top) / 2,
+        }) else {
+            return Ok(());
+        };
+        let mut look = primary.clone();
+        look.screen = monitor.screen;
+        look.scale = monitor.scale;
+        // Its own popup, if open there, and its own pressed button.
+        look.panel = self.panel;
+        look.held = self.held;
+        look.windows_tray = self.windows_tray;
+        look.picture = self.picture.as_ref().map(|(file, _)| file.clone());
+        self.widgets = look.widgets;
+        look.dim_app = active.is_some_and(|active| active != display);
+        mirror.source = Some(look.clone());
+        // Whether there is a volume to slide, as on the primary bar.
+        self.status = look.status;
+        self.apply_look(gfx, look)
+    }
+
+    fn sync_mirrors(&mut self, gfx: &Gfx) {
+        if self.mirrors.is_empty() {
+            return;
+        }
+        let Some(look) = self.look.take() else {
+            return;
+        };
+        let active = self.active_display;
+        // One popup at a time: the primary bar's closes the copies'.
+        let open_here = self.panel.is_some();
+        for index in 0..self.mirrors.len() {
+            let result = self.lend(index, |bar| {
+                if open_here && bar.panel.is_some() {
+                    bar.dismiss_island(gfx)?;
+                }
+                bar.follow(gfx, &look, active)
+            });
+            if let Err(error) = result {
+                muelle_shell::log::line(&format!("barra superior en otra pantalla: {error:#}"));
+            }
+        }
+        self.look = Some(look);
+    }
+
+    /// Runs `action` on the copy at `index` with the primary bar's player,
+    /// volume and usage readers: its popups show and control the same ones,
+    /// and nothing is read twice. They come back afterwards.
+    fn lend<R>(&mut self, index: usize, action: impl FnOnce(&mut MenuBar) -> R) -> R {
+        let bar = &mut self.mirrors[index];
+        bar.media = self.media.take();
+        bar.audio = self.audio.take();
+        bar.usage = self.usage.take();
+        let result = action(bar);
+        self.media = bar.media.take();
+        self.audio = bar.audio.take();
+        self.usage = bar.usage.take();
+        result
+    }
+
+    /// Runs `action` on this bar or its copy whose window is `hwnd`. One
+    /// popup at a time: opening one closes any other bar's.
+    pub fn with_bar<R>(
+        &mut self,
+        gfx: &Gfx,
+        hwnd: isize,
+        action: impl FnOnce(&mut MenuBar) -> Result<R>,
+    ) -> Result<Option<R>> {
+        let result = if self.hwnd.0 as isize == hwnd {
+            action(self)?
+        } else {
+            let Some(index) = self
+                .mirrors
+                .iter()
+                .position(|bar| bar.hwnd.0 as isize == hwnd)
+            else {
+                return Ok(None);
+            };
+            self.lend(index, action)?
+        };
+        self.close_other_panels(gfx, hwnd)?;
+        Ok(Some(result))
+    }
+
+    /// Closes the popups of the bars other than `hwnd` once it has one open.
+    fn close_other_panels(&mut self, gfx: &Gfx, hwnd: isize) -> Result<()> {
+        let opened = std::iter::once(&*self)
+            .chain(&self.mirrors)
+            .any(|bar| bar.hwnd.0 as isize == hwnd && bar.panel.is_some());
+        if !opened {
+            return Ok(());
+        }
+        if self.hwnd.0 as isize != hwnd && self.panel.is_some() {
+            self.dismiss_island(gfx)?;
+        }
+        for index in 0..self.mirrors.len() {
+            if self.mirrors[index].hwnd.0 as isize != hwnd && self.mirrors[index].panel.is_some() {
+                self.lend(index, |bar| bar.dismiss_island(gfx))?;
+            }
+        }
+        Ok(())
     }
 
     /// Intelligent hiding: whether the window in front reaches under the
@@ -1627,6 +2107,9 @@ impl MenuBar {
 
     /// What clicking the clock opens; `None` for the notification center.
     pub fn set_clock_target(&mut self, target: Option<&str>) {
+        for mirror in &mut self.mirrors {
+            mirror.set_clock_target(target);
+        }
         if self.clock_target.as_deref() != target {
             self.clock_target = target.map(str::to_owned);
         }
@@ -1636,7 +2119,9 @@ impl MenuBar {
     pub fn hover(&mut self, gfx: &Gfx, inside: bool) -> Result<()> {
         // The volume slider is a menu: it stays until dismissed, and so does
         // the bar it hangs from.
-        if !inside && (self.volume_drag.is_some() || self.panel == Some(Island::Volume)) {
+        if !inside
+            && (self.volume_drag.is_some() || self.seeking() || self.panel == Some(Island::Volume))
+        {
             return Ok(());
         }
         if !inside && self.panel.take().is_some() {
@@ -1813,21 +2298,20 @@ impl MenuBar {
 
     fn pointer_left_at(&mut self, gfx: &Gfx, point: POINT) -> Result<()> {
         let x = (point.x - self.bounds.left) as f32;
+        if self.seeking() {
+            self.move_progress(x);
+            if !primary_button_pressed() {
+                self.release_progress(Some(x));
+            }
+            return self.progress_tick(gfx);
+        }
         if let Some(span) = self.volume_drag {
             let y = (point.y - self.bounds.top) as f32;
             self.queue_volume(span, y);
             // A nonactivating background window may not receive mouse-up
             // outside its visible bounds. Reuse the existing popup pointer
             // check to finish the gesture without ever stealing app focus.
-            let pressed = unsafe {
-                use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON};
-                let primary = if GetSystemMetrics(SM_SWAPBUTTON) == 0 {
-                    0x01
-                } else {
-                    0x02
-                };
-                windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(primary) < 0
-            };
+            let pressed = primary_button_pressed();
             if pressed {
                 return self.paint_volume_preview(gfx);
             }
@@ -1846,7 +2330,7 @@ impl MenuBar {
             && x >= self.panel_span.left
             && x < self.panel_span.right
             && point.y >= self.bounds.bottom
-            && point.y < PANEL_BOTTOM.load(Ordering::Relaxed);
+            && point.y < hit_zones(self.hwnd.0 as isize).panel_bottom;
         if (within_bar || within_panel) && self.hide_until.is_some() {
             self.hover(gfx, true)?;
         } else if !within_bar && !within_panel {
@@ -1857,6 +2341,10 @@ impl MenuBar {
 
     /// Leaving the island sideways still stays inside the full-width bar window.
     pub fn pointer_moved(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<()> {
+        if self.seeking() {
+            self.move_progress(x);
+            return self.progress_tick(gfx);
+        }
         if let Some(span) = self.volume_drag {
             self.queue_volume(span, y);
             return self.paint_volume_preview(gfx);
@@ -1875,6 +2363,7 @@ impl MenuBar {
     }
 
     pub fn dismiss_island(&mut self, gfx: &Gfx) -> Result<()> {
+        self.cancel_progress();
         self.release_volume(None)?;
         if self.panel.take().is_some() {
             self.refresh(gfx)?;
@@ -1963,7 +2452,8 @@ impl MenuBar {
                 );
             }
         }
-        edge_watch::set_menu_bar((self.visible && hidden).then_some(bounds));
+        edge_watch::set_menu_bar(self.hwnd, (self.visible && hidden).then_some(bounds));
+        self.release_music_if_hidden();
         self.sync_outside_click_hook()
     }
 
@@ -1971,7 +2461,7 @@ impl MenuBar {
     pub fn edge_rested(&mut self, gfx: &Gfx, point: POINT) -> Result<()> {
         if self.visible && self.auto_hide && !self.revealed {
             if muelle_shell::tracker::caption_button_at(point, self.bounds) {
-                edge_watch::retry_on_move(edge_watch::Target::MenuBar);
+                edge_watch::retry_on_move(edge_watch::Target::MenuBar(self.hwnd.0 as isize));
             } else {
                 self.hover(gfx, true)?;
             }
@@ -2000,7 +2490,12 @@ impl MenuBar {
             // SAFETY: This hook was installed by this MenuBar.
             unsafe { UnhookWindowsHookEx(hook)? };
             self.outside_click_hook = None;
-            ISLAND_HOOK_WINDOW.store(0, Ordering::Relaxed);
+            let _ = ISLAND_HOOK_WINDOW.compare_exchange(
+                self.hwnd.0 as isize,
+                0,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
         }
         Ok(())
     }
@@ -2140,8 +2635,13 @@ impl MenuBar {
     }
 
     pub fn click(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<()> {
-        if let Some(hit) = self.island_hits.iter().find(|hit| hit.at(x, y)) {
-            match hit.action {
+        if let Some(action) = self
+            .island_hits
+            .iter()
+            .find(|hit| hit.at(x, y))
+            .map(|hit| hit.action)
+        {
+            match action {
                 IslandAction::Toggle(island) => {
                     self.panel = toggle_panel(self.panel, island);
                     if self.panel.is_some() {
@@ -2161,14 +2661,17 @@ impl MenuBar {
                     }
                 }
                 IslandAction::Media(control) => {
+                    if matches!(control, MediaControl::Previous | MediaControl::Next) {
+                        self.cancel_progress();
+                    }
                     if let Some(media) = &self.media
                         && let Some(track) = self.look.as_ref().and_then(|look| look.track.as_ref())
                     {
                         media.send(track, control);
                     }
-                    return Ok(());
+                    return self.progress_tick(gfx);
                 }
-                IslandAction::Volume(_) => return Ok(()), // Handled on press/drag.
+                IslandAction::Volume(_) | IslandAction::Seek(_) => return Ok(()), // Handled on press/drag.
                 IslandAction::Mute => {
                     if let Some(audio) = &mut self.audio {
                         audio.toggle_mute()?;
@@ -2180,7 +2683,11 @@ impl MenuBar {
                     return Ok(());
                 }
             }
-            return self.refresh(gfx);
+            self.refresh(gfx)?;
+            if matches!(action, IslandAction::Toggle(Island::Music)) && self.mirror.is_none() {
+                self.focus_music();
+            }
+            return Ok(());
         }
         if y >= (self.bounds.bottom - self.bounds.top) as f32 {
             return Ok(());
@@ -2274,6 +2781,9 @@ impl MenuBar {
     /// Reads the user's picture for the icon; `None`, or a file that is no
     /// longer acceptable, leaves the ring.
     pub fn set_picture(&mut self, gfx: &Gfx, file: Option<&str>) -> Result<()> {
+        for mirror in &mut self.mirrors {
+            mirror.set_picture(gfx, file)?;
+        }
         if self.picture.as_ref().map(|(file, _)| file.as_str()) == file {
             return Ok(());
         }
@@ -2399,6 +2909,18 @@ impl MenuBar {
 
     /// Redraws the bar if anything it shows has changed.
     pub fn refresh(&mut self, gfx: &Gfx) -> Result<()> {
+        if let Some(mirror) = &self.mirror {
+            return match mirror.source.clone() {
+                Some(mut look) => {
+                    look.panel = self.panel;
+                    // And its own pressed button.
+                    look.held = self.held;
+                    look.windows_tray = self.windows_tray;
+                    self.apply_look(gfx, look)
+                }
+                None => Ok(()),
+            };
+        }
         let Some(monitor) = system::primary_monitor() else {
             return Ok(());
         };
@@ -2437,6 +2959,10 @@ impl MenuBar {
             light: appearance.light,
             glass: appearance.glass,
             app_name: self.app_name.clone(),
+            dim_app: !self.mirrors.is_empty()
+                && self
+                    .active_display
+                    .is_some_and(|display| display != monitor.screen),
             clock: system::clock_text(),
             input: system::input_language(),
             battery: system::battery(),
@@ -2461,7 +2987,8 @@ impl MenuBar {
     /// Samples only while the monitor is on and the bar shows; a hidden or
     /// auto-hidden bar costs nothing (issue #64).
     fn sync_monitor(&mut self, shown: bool) {
-        let wanted = self.widgets.system_monitor && shown;
+        // A copy shows the primary bar's readings.
+        let wanted = self.widgets.system_monitor && shown && self.mirror.is_none();
         if wanted == self.monitor.is_some() {
             return;
         }
@@ -2582,7 +3109,18 @@ impl MenuBar {
         if !matches!(look.panel, Some(Island::Music | Island::Volume)) || moved {
             self.release_volume(None)?;
         }
+        if look.panel != Some(Island::Music)
+            || moved
+            || self.seek_gesture.as_ref().is_some_and(|gesture| {
+                look.track
+                    .as_ref()
+                    .is_none_or(|track| !track.same_seek_target(&gesture.track))
+            })
+        {
+            self.cancel_progress();
+        }
         if self.look.as_ref() == Some(&look) {
+            self.sync_mirrors(gfx);
             return Ok(());
         }
         let moment = self
@@ -2598,7 +3136,8 @@ impl MenuBar {
             self.build(gfx, &look)?;
         }
         self.look = Some(look);
-        self.sync_progress_watch();
+        self.sync_mirrors(gfx);
+        self.progress_tick(gfx)?;
         if let Some((provider, act)) = moment
             && let Some(&(_, x)) = self.usage_anchors.iter().find(|(p, _)| *p == provider)
         {
@@ -2907,7 +3446,10 @@ impl MenuBar {
                 ink,
                 px(220.0).min(width * 0.22),
             )?;
-            place(&layers, &name, left_end)?;
+            let visual = place(&layers, &name, left_end)?;
+            if look.dim_app {
+                visual.SetOpacity(0.45)?;
+            }
             left_end += name.width;
         }
 
@@ -3127,7 +3669,7 @@ impl MenuBar {
         {
             let span = volume_span_under((left + right) / 2.0, width, look.scale);
             let geometry = IslandGeometry::new(span, height + px(PANEL_GAP), look);
-            let theme = Theme::for_popup(look.light, look.glass);
+            let theme = look.popup_theme();
             // What the slider hangs in, so that it moves as one.
             let slider = c.CreateContainerVisual()?;
             slider.SetSize(Vector2::new(width, visual_height))?;
@@ -3168,8 +3710,6 @@ impl MenuBar {
         // While the slider is open, a click on the speaker reaches the bar
         // (to close it) instead of dismissing it first from the hook.
         let (speaker_left, speaker_right) = speaker_zone.unwrap_or_default();
-        SPEAKER_LEFT.store(screen.left + speaker_left as i32, Ordering::Relaxed);
-        SPEAKER_RIGHT.store(screen.left + speaker_right as i32, Ordering::Relaxed);
         if let Some(drag) = self.volume_drag {
             let new_span = self.island_hits.iter().find_map(|hit| match hit.action {
                 IslandAction::Volume(span) => Some(span),
@@ -3178,6 +3718,14 @@ impl MenuBar {
             if new_span != Some(drag) {
                 self.release_volume(None)?;
             }
+        }
+        if let Some(gesture) = &self.seek_gesture
+            && !self
+                .island_hits
+                .iter()
+                .any(|hit| matches!(hit.action, IslandAction::Seek(span) if span == gesture.span))
+        {
+            self.cancel_progress();
         }
         self.surface.SetSize(Vector2 {
             X: width,
@@ -3198,27 +3746,23 @@ impl MenuBar {
             bottom: screen.top + height as i32,
             ..screen
         };
-        TRIGGERS_LEFT.store(
-            screen.left + self.triggers_span.left as i32,
-            Ordering::Relaxed,
-        );
-        TRIGGERS_RIGHT.store(
-            screen.left + self.triggers_span.right as i32,
-            Ordering::Relaxed,
-        );
-        PANEL_LEFT.store(screen.left + self.panel_span.left as i32, Ordering::Relaxed);
-        PANEL_RIGHT.store(
-            screen.left + self.panel_span.right as i32,
-            Ordering::Relaxed,
-        );
-        BAR_TOP.store(screen.top, Ordering::Relaxed);
-        BAR_BOTTOM.store(screen.top + height as i32, Ordering::Relaxed);
         let clickable_height = if self.panel_span.width() > 0.0 {
             panel_bottom
         } else {
             height
         };
-        PANEL_BOTTOM.store(screen.top + clickable_height as i32, Ordering::Relaxed);
+        let span = |left: f32, right: f32| (screen.left + left as i32, screen.left + right as i32);
+        set_hit_zones(
+            self.hwnd.0 as isize,
+            Some(HitZones {
+                bar_top: screen.top,
+                bar_bottom: screen.top + height as i32,
+                triggers: span(self.triggers_span.left, self.triggers_span.right),
+                panel: span(self.panel_span.left, self.panel_span.right),
+                panel_bottom: screen.top + clickable_height as i32,
+                speaker: span(speaker_left, speaker_right),
+            }),
+        );
         self.place()
     }
 
@@ -3412,7 +3956,7 @@ impl MenuBar {
             };
             let geometry = IslandGeometry::new(self.panel_span, bar_height + px(PANEL_GAP), look);
             let height = px(look.panel_height());
-            let theme = Theme::for_popup(look.light, look.glass);
+            let theme = look.popup_theme();
             let content = popup_surface(gfx, theme, layers, geometry, height, px(PANEL_RADIUS))?;
             match kind {
                 Island::Music => {
@@ -3877,6 +4421,18 @@ impl MenuBar {
             .SetOpacity(0.55)?;
             return Ok(());
         };
+        if track.seekable() {
+            self.island_hits.push(geometry.hit(
+                px(26.0),
+                px(130.0),
+                width,
+                px(20.0),
+                IslandAction::Seek(Span {
+                    left: geometry.left + px(26.0),
+                    right: geometry.left + px(26.0) + width,
+                }),
+            ));
+        }
         add_rounded_box(
             c,
             layers,
@@ -3939,19 +4495,22 @@ impl MenuBar {
     }
 
     fn sync_progress_watch(&mut self) {
-        let shown =
-            self.panel == Some(Island::Music) && self.visible && (!self.auto_hide || self.revealed);
+        let shown = self.music_popup_shown() || self.mirrors.iter().any(MenuBar::music_popup_shown);
         if let Some(media) = &self.media {
             media.show_progress(shown);
         }
         let ticking = shown
             && self.progress_controls.is_some()
-            && self
-                .look
+            && (self
+                .seek_gesture
                 .as_ref()
-                .and_then(|look| look.track.as_ref())
-                .and_then(|track| track.timeline)
-                .is_some_and(|timeline| timeline.advancing(Instant::now()));
+                .is_some_and(|gesture| gesture.pending.is_some())
+                || self
+                    .look
+                    .as_ref()
+                    .and_then(|look| look.track.as_ref())
+                    .and_then(|track| track.timeline)
+                    .is_some_and(|timeline| timeline.advancing(Instant::now())));
         if ticking != self.progress_timer {
             // This timer only advances cached position/time labels while the
             // player popup is visible. No API calls, artwork reads or polling.
@@ -3966,7 +4525,31 @@ impl MenuBar {
         }
     }
 
+    /// Whether this bar shows the music popup now.
+    fn music_popup_shown(&self) -> bool {
+        self.panel == Some(Island::Music) && self.visible && (!self.auto_hide || self.revealed)
+    }
+
     pub fn progress_tick(&mut self, gfx: &Gfx) -> Result<()> {
+        let stale = self.seek_gesture.as_ref().is_some_and(|gesture| {
+            self.look
+                .as_ref()
+                .and_then(|look| look.track.as_ref())
+                .is_none_or(|track| !track.same_seek_target(&gesture.track))
+                || gesture.pending.is_some_and(|(serial, until)| {
+                    Instant::now() >= until
+                        || self.media.as_ref().is_none_or(|watch| {
+                            gesture.settled(
+                                self.look.as_ref().and_then(|look| look.track.as_ref()),
+                                watch.seek_result(serial),
+                                Instant::now(),
+                            )
+                        })
+                })
+        });
+        if stale {
+            self.cancel_progress();
+        }
         if let Some(timeline) = self
             .look
             .as_ref()
@@ -3974,10 +4557,103 @@ impl MenuBar {
             .and_then(|track| track.timeline)
             && let Some(controls) = &mut self.progress_controls
         {
-            controls.paint(gfx, timeline, Instant::now())?;
+            let preview = self
+                .seek_gesture
+                .as_ref()
+                .and_then(|gesture| {
+                    gesture
+                        .track
+                        .timeline
+                        .map(|timeline| timeline.preview(gesture.fraction))
+                })
+                .unwrap_or(timeline);
+            controls.paint(gfx, preview, Instant::now())?;
         }
         self.sync_progress_watch();
         Ok(())
+    }
+
+    fn seeking(&self) -> bool {
+        self.seek_gesture
+            .as_ref()
+            .is_some_and(|gesture| gesture.pending.is_none())
+    }
+    pub fn press_progress(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<bool> {
+        self.suppress_seek_release = false;
+        let Some(span) = self.island_hits.iter().find_map(|hit| match hit.action {
+            IslandAction::Seek(span) if hit.at(x, y) => Some(span),
+            _ => None,
+        }) else {
+            return Ok(false);
+        };
+        let Some(track) = self
+            .look
+            .as_ref()
+            .and_then(|look| look.track.as_ref())
+            .filter(|track| track.seekable())
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        let Some(fraction) = span.fraction(x) else {
+            return Ok(false);
+        };
+        self.release_volume(None)?;
+        self.seek_gesture = Some(SeekGesture {
+            span,
+            track,
+            fraction,
+            pending: None,
+        });
+        unsafe {
+            SetCapture(self.hwnd);
+        }
+        self.progress_tick(gfx)?;
+        Ok(true)
+    }
+    fn move_progress(&mut self, x: f32) {
+        if let Some(gesture) = &mut self.seek_gesture
+            && gesture.pending.is_none()
+            && let Some(fraction) = gesture.span.fraction(x)
+        {
+            gesture.fraction = fraction;
+        }
+    }
+    pub fn release_progress(&mut self, x: Option<f32>) -> bool {
+        if !self.seeking() {
+            return x.is_some() && std::mem::take(&mut self.suppress_seek_release);
+        }
+        if let Some(x) = x {
+            self.move_progress(x);
+        }
+        let gesture = self.seek_gesture.take();
+        self.suppress_seek_release = true;
+        // Clear the gesture before ReleaseCapture can notify its owner.
+        unsafe {
+            if GetCapture() == self.hwnd {
+                let _ = ReleaseCapture();
+            }
+        }
+        if x.is_some_and(f32::is_finite)
+            && let Some(mut gesture) = gesture
+            && self
+                .look
+                .as_ref()
+                .and_then(|look| look.track.as_ref())
+                .is_some_and(|track| track.same_seek_target(&gesture.track))
+            && let Some(serial) = self
+                .media
+                .as_ref()
+                .and_then(|watch| watch.seek(&gesture.track, gesture.fraction))
+        {
+            gesture.pending = Some((serial, Instant::now() + Duration::from_secs(5)));
+            self.seek_gesture = Some(gesture);
+        }
+        true
+    }
+    fn cancel_progress(&mut self) {
+        self.release_progress(None);
+        self.seek_gesture = None;
     }
 
     pub fn press_volume(&mut self, gfx: &Gfx, x: f32, y: f32) -> Result<()> {
@@ -4121,6 +4797,18 @@ impl MenuBar {
         }
         self.volume_target = None;
         Ok(true)
+    }
+}
+
+fn primary_button_pressed() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON};
+    unsafe {
+        let primary = if GetSystemMetrics(SM_SWAPBUTTON) == 0 {
+            0x01
+        } else {
+            0x02
+        };
+        windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(primary) < 0
     }
 }
 
@@ -4974,6 +5662,8 @@ fn draw_bubble_player(
 
 impl Drop for MenuBar {
     fn drop(&mut self) {
+        self.keyboard = None;
+        self.cancel_progress();
         self.search_watch = None;
         self.settings_watch = None;
         self.privacy_watch = None;
@@ -4981,8 +5671,14 @@ impl Drop for MenuBar {
         self.accessories = None;
         self.exit_animation = None;
         self.media = None;
-        ISLAND_HOOK_WINDOW.store(0, Ordering::Relaxed);
-        edge_watch::set_menu_bar(None);
+        let _ = ISLAND_HOOK_WINDOW.compare_exchange(
+            self.hwnd.0 as isize,
+            0,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
+        set_hit_zones(self.hwnd.0 as isize, None);
+        edge_watch::set_menu_bar(self.hwnd, None);
         if let Some(hook) = self.outside_click_hook.take() {
             // SAFETY: Do not leave a callback pointing at a destroyed window.
             unsafe {
@@ -5003,14 +5699,85 @@ mod island_tests {
     use super::*;
 
     #[test]
-    #[ignore = "Creates the real menu bar window"]
-    fn native_the_icon_builds_in_every_look_and_opens_its_menu() -> Result<()> {
+    fn each_bar_keeps_its_own_popup_clicks() {
+        let laptop = HitZones {
+            bar_top: 0,
+            bar_bottom: 35,
+            triggers: (700, 1200),
+            panel: (650, 1250),
+            panel_bottom: 400,
+            speaker: (0, 0),
+        };
+        let monitor = HitZones {
+            bar_top: 0,
+            bar_bottom: 28,
+            triggers: (2650, 3050),
+            panel: (2600, 3100),
+            panel_bottom: 330,
+            speaker: (3600, 3620),
+        };
+        set_hit_zones(1, Some(laptop));
+        set_hit_zones(2, Some(monitor));
+        let at = |x, y| POINT { x, y };
+        // In each bar's island, popup or speaker; not in the other's.
+        assert!(hit_zones(1).keeps(at(900, 10)));
+        assert!(hit_zones(1).keeps(at(900, 200)));
+        assert!(!hit_zones(1).keeps(at(2800, 10)));
+        assert!(hit_zones(2).keeps(at(2800, 200)));
+        assert!(hit_zones(2).keeps(at(3610, 10)));
+        assert!(!hit_zones(2).keeps(at(2800, 340)));
+        // Below a bar and beside its popup, the pointer goes through.
+        assert!(hit_zones(2).passes(2000, 30));
+        assert!(!hit_zones(2).passes(2800, 30));
+        assert!(!hit_zones(1).passes(500, 30));
+        set_hit_zones(2, None);
+        assert!(!hit_zones(2).keeps(at(2800, 10)));
+        set_hit_zones(1, None);
+    }
+
+    #[test]
+    fn progress_coordinates_clamp_outside_the_track_and_ignore_invalid_input() {
+        let span = Span {
+            left: 20.0,
+            right: 220.0,
+        };
+        assert_eq!(span.fraction(20.0), Some(0.0));
+        assert_eq!(span.fraction(120.0), Some(0.5));
+        assert_eq!(span.fraction(220.0), Some(1.0));
+        assert_eq!(span.fraction(-100.0), Some(0.0));
+        assert_eq!(span.fraction(500.0), Some(1.0));
+        assert_eq!(span.fraction(f32::NAN), None);
+        assert_eq!(Span::default().fraction(0.0), None);
+    }
+
+    #[test]
+    fn accepted_seek_keeps_its_preview_until_the_player_updates_its_timeline() {
+        let track = Track::test_fixture();
+        let gesture = SeekGesture {
+            span: Span {
+                left: 0.0,
+                right: 100.0,
+            },
+            track: track.clone(),
+            fraction: 0.8,
+            pending: None,
+        };
+        assert!(!gesture.settled(Some(&track), None, Instant::now()));
+        assert!(!gesture.settled(Some(&track), Some(true), Instant::now()));
+        assert!(gesture.settled(Some(&track), Some(false), Instant::now()));
+        let mut confirmed = track;
+        confirmed.timeline = confirmed.timeline.map(|timeline| timeline.preview(0.8));
+        assert!(gesture.settled(Some(&confirmed), Some(true), Instant::now()));
+    }
+
+    #[test]
+    #[ignore = "Hidden compositor fixture; synthetic media, no player commands or capture"]
+    fn native_progress_gesture_previews_commits_and_cancels_without_player_io() -> Result<()> {
         use anyhow::Context;
         use windows::Win32::System::WinRT::{
             CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
             DispatcherQueueOptions,
         };
-        // SAFETY: The controller initializes the test thread's own queue.
         let _queue = unsafe {
             CreateDispatcherQueueController(DispatcherQueueOptions {
                 dwSize: size_of::<DispatcherQueueOptions>() as u32,
@@ -5019,44 +5786,73 @@ mod island_tests {
             })?
         };
         let gfx = Gfx::new()?;
-        let mut bar = MenuBar::create(&gfx, false, false, false, MenuBarWidgets::default())?;
-        bar.picture = Some((
-            "picture".into(),
-            muelle_shell::icons::IconImage {
-                width: 1,
-                height: 1,
-                bgra: vec![255; 4],
-            },
-        ));
-        for icon in [MenuBarIcon::Ring, MenuBarIcon::Windows, MenuBarIcon::Custom] {
-            bar.set_widgets(
-                &gfx,
-                MenuBarWidgets {
-                    icon,
-                    ..MenuBarWidgets::default()
-                },
-            )?;
-            for open in [true, false] {
-                bar.set_system_menu(&gfx, open)?;
-            }
-            let (_, right, _) = bar
-                .zones
-                .iter()
-                .find(|(_, _, action)| *action == Action::SystemMenu)
-                .context("the icon opens its menu")?;
-            assert!(*right >= icon_side(icon));
-            assert!(bar.system_menu_origin().is_some());
+        let mut bar = MenuBar::create(&gfx, false, false, true, MenuBarWidgets::default())?;
+        bar.set_visible(false)?;
+        bar.audio = None;
+        let track = Track::test_fixture();
+        bar.media = Some(media::Watch::test_snapshot(track.clone()));
+        let mut look = bar.look.clone().context("look")?;
+        look.panel = Some(Island::Music);
+        look.track = Some(track.clone());
+        bar.build(&gfx, &look)?;
+        bar.look = Some(look);
+        bar.panel = Some(Island::Music);
+        let span = bar
+            .island_hits
+            .iter()
+            .find_map(|hit| match hit.action {
+                IslandAction::Seek(span) => Some(span),
+                _ => None,
+            })
+            .context("seek hit area")?;
+        // Inject only test state; never capture the user's mouse or contact a player.
+        bar.seek_gesture = Some(SeekGesture {
+            span,
+            track: track.clone(),
+            fraction: 0.0,
+            pending: None,
+        });
+        bar.move_progress(span.left + span.width() / 2.0);
+        bar.progress_tick(&gfx)?;
+        assert_eq!(
+            bar.progress_controls
+                .as_ref()
+                .context("progress")?
+                .elapsed_seconds,
+            Some(120)
+        );
+        assert!(bar.release_progress(Some(span.right)));
+        assert!(
+            bar.seek_gesture
+                .as_ref()
+                .is_some_and(|gesture| gesture.pending.is_some())
+        );
+        bar.progress_tick(&gfx)?;
+        assert_eq!(
+            bar.progress_controls
+                .as_ref()
+                .context("progress")?
+                .elapsed_seconds,
+            Some(240)
+        );
+        // A pending result cannot leave a stuck preview, including on pause/rejection.
+        if let Some(gesture) = &mut bar.seek_gesture {
+            gesture.pending = Some((1, Instant::now()));
         }
+        bar.progress_tick(&gfx)?;
+        assert!(bar.seek_gesture.is_none());
+        bar.seek_gesture = Some(SeekGesture {
+            span,
+            track,
+            fraction: 0.7,
+            pending: None,
+        });
+        assert!(bar.release_progress(None)); // Lost capture / Escape never commits.
+        assert!(bar.seek_gesture.is_none());
+        assert!(bar.release_progress(Some(span.left))); // Consume late mouse-up.
+        assert!(!bar.release_progress(Some(span.left)));
+        bar.set_visible(false)?;
         Ok(())
-    }
-
-    #[test]
-    fn the_tray_arrow_points_down_until_its_menu_opens() {
-        assert_eq!(tray_arrow(true, false), glyph::HIDDEN_ICONS_CLOSED);
-        assert_eq!(tray_arrow(true, true), glyph::HIDDEN_ICONS);
-        // Off, it is the taskbar's.
-        assert_eq!(tray_arrow(false, false), glyph::HIDDEN_ICONS);
-        assert_eq!(tray_arrow(false, true), glyph::HIDDEN_ICONS);
     }
 
     #[test]
@@ -5846,7 +6642,12 @@ mod island_tests {
             look.widgets.island_style = style;
             for scale in [1.0, 1.25, 1.5, 2.0] {
                 look.scale = scale;
-                for (light, glass) in [(true, true), (false, true), (true, false), (false, false)] {
+                for (material, light, glass) in Material::ALL.into_iter().flat_map(|material| {
+                    [(true, true), (false, true), (true, false), (false, false)]
+                        .into_iter()
+                        .map(move |(light, glass)| (material, light, glass))
+                }) {
+                    look.material = material;
                     look.light = light;
                     look.glass = glass;
                     bar.build(&gfx, &look)?;
@@ -6656,7 +7457,11 @@ mod island_tests {
         let gfx = Gfx::new()?;
         for (light, glass) in [(true, true), (false, true), (true, false), (false, false)] {
             let root = gfx.compositor.CreateContainerVisual()?;
-            let theme = Theme::for_popup(light, glass);
+            let theme = Theme::for_popup_look(appearance::Look {
+                material: Material::Standard,
+                light,
+                glass,
+            });
             let geometry = IslandGeometry {
                 left: 90.0,
                 top: HEIGHT + PANEL_GAP,
@@ -6674,6 +7479,63 @@ mod island_tests {
             )?;
         }
         Ok(())
+    }
+
+    #[test]
+    #[ignore = "Creates the real menu bar window"]
+    fn native_the_icon_builds_in_every_look_and_opens_its_menu() -> Result<()> {
+        use anyhow::Context;
+        use windows::Win32::System::WinRT::{
+            CreateDispatcherQueueController, DQTAT_COM_STA, DQTYPE_THREAD_CURRENT,
+            DispatcherQueueOptions,
+        };
+        // SAFETY: The controller initializes the test thread's own queue.
+        let _queue = unsafe {
+            CreateDispatcherQueueController(DispatcherQueueOptions {
+                dwSize: size_of::<DispatcherQueueOptions>() as u32,
+                threadType: DQTYPE_THREAD_CURRENT,
+                apartmentType: DQTAT_COM_STA,
+            })?
+        };
+        let gfx = Gfx::new()?;
+        let mut bar = MenuBar::create(&gfx, false, false, false, MenuBarWidgets::default())?;
+        bar.picture = Some((
+            "picture".into(),
+            muelle_shell::icons::IconImage {
+                width: 1,
+                height: 1,
+                bgra: vec![255; 4],
+            },
+        ));
+        for icon in [MenuBarIcon::Ring, MenuBarIcon::Windows, MenuBarIcon::Custom] {
+            bar.set_widgets(
+                &gfx,
+                MenuBarWidgets {
+                    icon,
+                    ..MenuBarWidgets::default()
+                },
+            )?;
+            for open in [true, false] {
+                bar.set_system_menu(&gfx, open)?;
+            }
+            let (_, right, _) = bar
+                .zones
+                .iter()
+                .find(|(_, _, action)| *action == Action::SystemMenu)
+                .context("the icon opens its menu")?;
+            assert!(*right >= icon_side(icon));
+            assert!(bar.system_menu_origin().is_some());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn the_tray_arrow_points_down_until_its_menu_opens() {
+        assert_eq!(tray_arrow(true, false), glyph::HIDDEN_ICONS_CLOSED);
+        assert_eq!(tray_arrow(true, true), glyph::HIDDEN_ICONS);
+        // Off, it is the taskbar's.
+        assert_eq!(tray_arrow(false, false), glyph::HIDDEN_ICONS);
+        assert_eq!(tray_arrow(false, true), glyph::HIDDEN_ICONS);
     }
 }
 

@@ -11,6 +11,10 @@ export type DockAutoHideSpeed = "smooth" | "normal" | "fast";
 export type DockHidingMode = "visible" | "automatic" | "intelligent";
 /** `auto` follows Windows' light or dark mode. */
 export type Appearance = "auto" | "light" | "dark" | "frosted" | "clear" | "liquidGlass";
+export interface WeatherLocation { latitudeE2: number; longitudeE2: number; updatedAt: number }
+export interface LocatedWeather extends WeatherLocation { city?: WeatherCity | null }
+export type WeatherLocationMode = "auto" | "city";
+export interface WeatherCity { label: string; latitudeE2: number; longitudeE2: number }
 
 export type SearchMonitor = "mouse" | "active" | "primary";
 export type SearchEngine = "google" | "bing" | "duckduckgo" | "brave" | "ecosia" | "startpage" | "custom";
@@ -109,12 +113,20 @@ export interface Config {
   /** What the clock opens (an app, shortcut or URI); null for the notification center. */
   menuBarClockTarget: string | null;
   accessoryBattery: boolean;
+  weather?: boolean;
+  weatherLocation?: WeatherLocation | null;
+  weatherAutoCity?: WeatherCity | null;
+  weatherLocationMode?: WeatherLocationMode;
+  weatherCity?: WeatherCity | null;
   menuBarSystemMonitor?: boolean;
+  /** The menu bar on every display, not only the primary one. */
+  menuBarAllDisplays?: boolean;
   showIndicators: boolean;
   showRecents: boolean;
   bounceOnOpen: boolean;
   mascot: boolean;
   mascotCharacter?: MascotCharacter;
+  mascotAlwaysVisible?: boolean;
   mascotBreakReminder?: boolean;
   checkUpdates: boolean;
   autoUpdate: boolean;
@@ -179,6 +191,12 @@ export const checkUpdate = () => invoke<UpdateInfo | null>("check_update");
 export const openReleaseNotes = (url: string) => invoke<void>("open_release_notes", { url });
 /** Fixed project URL, opened only when the user asks. */
 export const openRepository = () => invoke<void>("open_repository");
+export const locateWeather = (language: string) => invoke<LocatedWeather>("locate_weather", { language });
+export const searchWeatherCities = (query: string, language: string) =>
+  invoke<WeatherCity[]>("search_weather_cities", { query, language });
+export const cancelWeatherLocation = () => invoke<void>("cancel_weather_location");
+export const openWeatherLocationSettings = () => invoke<void>("open_weather_location_settings");
+export const openWeatherAttribution = () => invoke<void>("open_weather_attribution");
 let wallpaperRequest: Promise<string | null> | undefined;
 /** One bounded native read per Settings process, including React StrictMode. */
 export const loadWallpaperPreview = () =>

@@ -4,8 +4,12 @@
 use std::{thread, time::Duration};
 
 use anyhow::Result;
-use muelle_shell::{launcher, system::primary_monitor, tray_host::TrayHost};
-use windows::Win32::Foundation::RECT;
+use muelle_shell::{
+    launcher,
+    system::{Monitor, monitor_at},
+    tray_host::TrayHost,
+};
+use windows::Win32::Foundation::{POINT, RECT};
 
 use crate::{
     calendar::{self, Calendar},
@@ -18,29 +22,42 @@ use super::{App, Outside};
 /// Long enough for a closed window to leave the screen before a capture.
 const CAPTURE_DELAY: Duration = Duration::from_millis(250);
 
+/// The display of the menu bar that `button`, on screen, is on.
+fn display_of(button: RECT) -> Option<Monitor> {
+    monitor_at(POINT {
+        x: (button.left + button.right) / 2,
+        y: (button.top + button.bottom) / 2,
+    })
+}
+
+/// Whether two buttons are on the same display's bar.
+fn same_display(a: RECT, b: RECT) -> bool {
+    display_of(a).map(|monitor| monitor.screen) == display_of(b).map(|monitor| monitor.screen)
+}
+
 impl App {
     /// The menu bar's control center button or network icon, at `button` on
     /// screen, was pressed.
     pub(super) fn toggle_control_center(&mut self, button: RECT, opening: Opening) -> Result<()> {
         // The other item's replaces what is open.
-        if self
-            .control_center
-            .as_ref()
-            .is_some_and(|center| !center.is_closing() && center.opening() == opening)
-        {
+        if self.control_center.as_ref().is_some_and(|center| {
+            !center.is_closing()
+                && center.opening() == opening
+                && same_display(center.button(), button)
+        }) {
             self.close_control_center();
             return Ok(());
         }
-        let Some(monitor) = primary_monitor() else {
+        let Some(monitor) = display_of(button) else {
             return Ok(());
         };
-        // One still folding away gives way to the new one.
-        self.control_center = None;
+        // One still folding away, or on another display, gives way.
+        self.drop_control_center();
         self.close_calendar();
         self.close_preview();
         self.close_group_view();
         if let Some(bar) = &mut self.menubar {
-            bar.dismiss_island(&self.gfx)?;
+            bar.dismiss_panels(&self.gfx)?;
         }
         self.control_center = Some(ControlCenter::show(
             &self.gfx,
@@ -51,6 +68,7 @@ impl App {
             self.config.control_center_tiles,
         )?);
         if let Some(bar) = &mut self.menubar {
+            let bar = bar.bar_at(button);
             match opening {
                 Opening::Tiles => bar.set_control_center(&self.gfx, true)?,
                 Opening::Network => bar.set_network_menu(&self.gfx, true)?,
@@ -86,9 +104,10 @@ impl App {
 
     fn release_menu_bar(&mut self) {
         if let Some(bar) = &mut self.menubar
-            && let Err(error) = bar
-                .set_control_center(&self.gfx, false)
-                .and_then(|()| bar.set_network_menu(&self.gfx, false))
+            && let Err(error) = bar.each_bar(|bar| {
+                bar.set_control_center(&self.gfx, false)?;
+                bar.set_network_menu(&self.gfx, false)
+            })
         {
             muelle_shell::log::line(&format!("centro de control: {error:#}"));
         }
@@ -110,15 +129,15 @@ impl App {
         if self
             .tray_menu
             .as_ref()
-            .is_some_and(|menu| !menu.is_closing())
+            .is_some_and(|menu| !menu.is_closing() && same_display(menu.button(), button))
         {
             self.close_tray_menu();
             return Ok(true);
         }
-        // One still folding away gives way to the new one.
-        self.tray_menu = None;
+        // One still folding away, or on another display, gives way.
+        self.drop_tray_menu();
         self.close_calendar();
-        let Some(monitor) = primary_monitor() else {
+        let Some(monitor) = display_of(button) else {
             return Ok(false);
         };
         if self
@@ -131,7 +150,7 @@ impl App {
         self.close_preview();
         self.close_group_view();
         if let Some(bar) = &mut self.menubar {
-            bar.dismiss_island(&self.gfx)?;
+            bar.dismiss_panels(&self.gfx)?;
         }
         let Some(host) = &self.tray_host else {
             return Ok(false);
@@ -144,7 +163,7 @@ impl App {
             host,
         )?);
         if let Some(bar) = &mut self.menubar {
-            bar.set_tray_menu(&self.gfx, true)?;
+            bar.bar_at(button).set_tray_menu(&self.gfx, true)?;
         }
         Ok(true)
     }
@@ -176,7 +195,7 @@ impl App {
 
     fn release_tray_button(&mut self) {
         if let Some(bar) = &mut self.menubar
-            && let Err(error) = bar.set_tray_menu(&self.gfx, false)
+            && let Err(error) = bar.each_bar(|bar| bar.set_tray_menu(&self.gfx, false))
         {
             muelle_shell::log::line(&format!("bandeja: {error:#}"));
         }
@@ -197,8 +216,19 @@ impl App {
             tray_menu::Outcome::Windows(anchor) => {
                 self.close_tray_menu();
                 launcher::toggle_hidden_icons(anchor);
+                // The bar the flyout was opened from.
+                let under = RECT {
+                    left: anchor.0,
+                    right: anchor.0,
+                    top: anchor.1 - 1,
+                    bottom: anchor.1,
+                };
+                let from = display_of(under).map_or(under, |monitor| RECT {
+                    top: monitor.screen.top,
+                    ..under
+                });
                 if let Some(bar) = &mut self.menubar
-                    && let Err(error) = bar.follow_windows_tray(&self.gfx)
+                    && let Err(error) = bar.bar_at(from).follow_windows_tray(&self.gfx)
                 {
                     muelle_shell::log::line(&format!("bandeja: {error:#}"));
                 }
@@ -208,17 +238,15 @@ impl App {
 
     /// The menu bar's clock, at `button` on screen, was pressed.
     pub(super) fn toggle_calendar(&mut self, button: RECT) -> Result<()> {
-        if self
-            .calendar
-            .as_ref()
-            .is_some_and(|calendar| !calendar.is_closing())
-        {
+        if self.calendar.as_ref().is_some_and(|calendar| {
+            !calendar.is_closing() && same_display(calendar.button(), button)
+        }) {
             self.close_calendar();
             return Ok(());
         }
-        // One still folding away gives way to the new one.
-        self.calendar = None;
-        let Some(monitor) = primary_monitor() else {
+        // One still folding away, or on another display, gives way.
+        self.drop_calendar();
+        let Some(monitor) = display_of(button) else {
             return Ok(());
         };
         self.close_control_center();
@@ -226,7 +254,7 @@ impl App {
         self.close_preview();
         self.close_group_view();
         if let Some(bar) = &mut self.menubar {
-            bar.dismiss_island(&self.gfx)?;
+            bar.dismiss_panels(&self.gfx)?;
         }
         self.calendar = Some(Calendar::show(
             &self.gfx,
@@ -236,7 +264,7 @@ impl App {
             self.config.calendar_week_start,
         )?);
         if let Some(bar) = &mut self.menubar {
-            bar.set_calendar(&self.gfx, true)?;
+            bar.bar_at(button).set_calendar(&self.gfx, true)?;
         }
         Ok(())
     }
@@ -268,7 +296,7 @@ impl App {
 
     fn release_clock(&mut self) {
         if let Some(bar) = &mut self.menubar
-            && let Err(error) = bar.set_calendar(&self.gfx, false)
+            && let Err(error) = bar.each_bar(|bar| bar.set_calendar(&self.gfx, false))
         {
             muelle_shell::log::line(&format!("calendario: {error:#}"));
         }
@@ -291,7 +319,7 @@ impl App {
         Some(Outside::CalendarMenu {
             gfx: self.gfx.clone(),
             anchor,
-            dark: !crate::appearance::menu_bar_light(),
+            look: crate::appearance::menu_bar(),
             spring: muelle_shell::system::animations_enabled().then_some(origin),
         })
     }

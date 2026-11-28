@@ -55,6 +55,9 @@ pub struct Slot {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layout {
     pub width: f32,
+    /// End of the elastic app strip. A fixed trailing widget adds to `width`
+    /// without stretching its own space during icon magnification.
+    pub elastic_width: f32,
     pub height: f32,
     pub slots: Vec<Slot>,
 }
@@ -96,6 +99,7 @@ pub fn layout(items: &[ItemKind], metrics: &Metrics) -> Layout {
     let content_end = if slots.is_empty() { x } else { x - m.gap };
     Layout {
         width: content_end + m.padding,
+        elastic_width: content_end + m.padding,
         height: m.icon + 2.0 * m.padding,
         slots,
     }

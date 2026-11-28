@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use anyhow::Result;
-use muelle_shell::{pins::app_exists, tracker};
+use muelle_shell::{pins::app_exists, taskbar, tracker};
 use windows::Win32::{
     Foundation::{HWND, POINT},
     UI::{
@@ -16,8 +16,8 @@ use windows::Win32::{
 };
 
 use super::{
-    App, DRAG_POLL_MS, DRAG_TIMER, Entry, HIDE_DELAY_MS, HIDE_TIMER, LEAVE_HALO, Outside, Press,
-    Role,
+    App, DRAG_POLL_MS, DRAG_TIMER, Entry, HIDE_DELAY_MS, HIDE_TIMER, LEAVE_HALO, LEAVE_RECHECK_MS,
+    LEAVE_TIMER, Outside, Press, Role,
     preferences::{explorer_id, save_settings},
     window_of,
 };
@@ -60,13 +60,24 @@ impl App {
         if self.fullscreen {
             return Ok(());
         }
-        let Some(stage) = &self.stage else {
+        if self.stage.is_none() {
             return Ok(());
-        };
+        }
         let mut point = POINT::default();
         // SAFETY: `point` remains alive for the duration of the call.
         unsafe { GetCursorPos(&mut point)? };
+        let was_hovering = self.hovering;
+        let result = self.move_pointer(point);
+        if !was_hovering && self.hovering {
+            taskbar::dismiss_hidden_tooltips();
+        }
+        result
+    }
 
+    pub(super) fn move_pointer(&mut self, point: POINT) -> Result<()> {
+        let Some(stage) = &self.stage else {
+            return Ok(());
+        };
         let (along, _) = stage.to_dock(point);
         if self.update_drag(point) {
             self.cursor = along;
@@ -79,14 +90,34 @@ impl App {
         // Keep the active-area boundary aligned with the icons as they grow.
         let rise = stage.icon * (stage.magnifier.max_scale - 1.0) * self.amount.value;
         let (along, across) = stage.to_dock(point);
+        // The fixed weather card occupies the same Dock input bounds, but
+        // must never start icon magnification when Windows routes a move here.
+        let over_weather = stage.weather_place.is_some_and(|p| {
+            let start = stage
+                .to_dock(POINT {
+                    x: p.bounds.left,
+                    y: p.bounds.top,
+                })
+                .0;
+            let end = stage
+                .to_dock(POINT {
+                    x: p.bounds.right,
+                    y: p.bounds.bottom,
+                })
+                .0;
+            along >= start.min(end)
+        });
         if self.hovering && across < -rise - LEAVE_HALO * stage.scale {
             return self.on_mouse_leave();
         }
 
         self.cursor = along;
-        if !self.hovering {
+        let amount = if over_weather { 0.0 } else { 1.0 };
+        if !self.hovering || self.amount.target != amount || self.slide.target != 0.0 {
+            // Every part of the reveal strip opens the Dock. The weather tail
+            // holds it open without magnifying apps; it is not a pointer exit.
             self.hovering = true;
-            self.amount.target = 1.0;
+            self.amount.target = amount;
             self.slide.target = 0.0;
             self.last_frame = Instant::now();
             // SAFETY: Timer on our own window; killing a timer that is not set is harmless.
@@ -122,11 +153,15 @@ impl App {
         self.menu_open = false;
         let mut point = POINT::default();
         // SAFETY: Read-only queries.
-        let over = unsafe {
-            GetCursorPos(&mut point).is_ok()
-                && windows::Win32::UI::WindowsAndMessaging::WindowFromPoint(point) == self.input
+        let pointer = unsafe {
+            if GetCursorPos(&mut point).is_ok() {
+                windows::Win32::UI::WindowsAndMessaging::WindowFromPoint(point)
+            } else {
+                HWND::default()
+            }
         };
-        if over {
+        self.weather_after_menu(pointer);
+        if pointer == self.input {
             self.on_mouse_move()
         } else {
             self.on_mouse_leave()
@@ -134,16 +169,38 @@ impl App {
     }
 
     pub(super) fn on_tracked_mouse_leave(&mut self) -> Result<()> {
-        let mut point = POINT::default();
         // Moving/resizing the magnified input area can queue a leave before
         // the pointer re-enters. Do not discard a newer hover/dwell on delivery.
-        if unsafe { GetCursorPos(&mut point) }.is_ok()
-            && unsafe { windows::Win32::UI::WindowsAndMessaging::WindowFromPoint(point) }
-                == self.input
-        {
+        if self.pointer_over_input() {
+            // Not at once: when the input area moved under a still pointer
+            // (to another display, say), Windows has not seen the pointer
+            // enter it yet and answers a new leave request with another
+            // leave straight away. That loop kept the dock frozen and
+            // invisible for over a second at full CPU, and kept away the
+            // mouse move that ends it: posted messages come before input.
+            // A timer fires only once the queue is empty, after that move.
+            // SAFETY: Timer on our own window.
+            unsafe { SetTimer(Some(self.input), LEAVE_TIMER, LEAVE_RECHECK_MS, None) };
+            return Ok(());
+        }
+        self.on_mouse_leave()
+    }
+
+    /// The leave recheck: still over the dock, or gone meanwhile.
+    pub(super) fn recheck_leave(&mut self) -> Result<()> {
+        if self.pointer_over_input() {
             return self.on_mouse_move();
         }
         self.on_mouse_leave()
+    }
+
+    fn pointer_over_input(&self) -> bool {
+        let mut point = POINT::default();
+        // SAFETY: Read-only pointer and window queries.
+        unsafe {
+            GetCursorPos(&mut point).is_ok()
+                && windows::Win32::UI::WindowsAndMessaging::WindowFromPoint(point) == self.input
+        }
     }
 
     pub(super) fn on_mouse_leave(&mut self) -> Result<()> {

@@ -3,7 +3,7 @@ use super::super::{ASSETS_READY, App, HOVER_OMEGA, Press, PreviewOrder};
 use crate::{assets::Visuals, gfx::Gfx, thumbnails::Thumbnails};
 use anyhow::Result;
 use muelle_config::Config;
-use muelle_core::{attention::Attention, frame::DockEdge, roster::Roster, spring::Spring};
+use muelle_core::{attention::Attention, roster::Roster, spring::Spring};
 use muelle_shell::{power, tracker::WindowTracker};
 use std::{collections::HashMap, time::Instant};
 use windows::{
@@ -29,12 +29,12 @@ impl Drop for Window {
         }
     }
 }
-struct Fixture {
-    app: App,
+pub(in crate::app) struct Fixture {
+    pub(in crate::app) app: App,
     _windows: [Window; 2],
 }
 impl Fixture {
-    fn new() -> Result<Self> {
+    pub(in crate::app) fn new() -> Result<Self> {
         let create = || unsafe {
             CreateWindowExW(
                 WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW,
@@ -73,6 +73,7 @@ impl Fixture {
             taskbar_attempts: 0,
             fullscreen: false,
             smart_hidden: false,
+            moving_since: None,
             roster: Roster::default(),
             tracker: WindowTracker::default(),
             windows: Vec::new(),
@@ -88,8 +89,10 @@ impl Fixture {
             badge_watch: None,
             attention: Attention::default(),
             attention_enabled: false,
+            app_badges: None,
+            badge_counts: HashMap::new(),
             assets: HashMap::new(),
-            assets_for: (0.0, false, 0, DockEdge::Bottom),
+            assets_for: None,
             placeholder: None,
             remove_label: None,
             config,
@@ -134,6 +137,8 @@ impl Fixture {
             ghost: None,
             menu_open: false,
             mascot: None,
+            companion: super::super::companion::State::default(),
+            weather: super::super::weather::State::default(),
             // Initial registration notifications establish the baseline after
             // the queue starts, without playing a startup charging/saver act.
             power_seen: None,
@@ -150,7 +155,7 @@ impl Fixture {
         })
     }
 }
-fn queue() -> windows::core::Result<windows::System::DispatcherQueueController> {
+pub(in crate::app) fn queue() -> windows::core::Result<windows::System::DispatcherQueueController> {
     unsafe {
         CreateDispatcherQueueController(DispatcherQueueOptions {
             dwSize: size_of::<DispatcherQueueOptions>() as u32,
@@ -158,6 +163,60 @@ fn queue() -> windows::core::Result<windows::System::DispatcherQueueController> 
             apartmentType: DQTAT_COM_STA,
         })
     }
+}
+
+#[test]
+#[ignore = "Own hidden windows and edge observer only; no taskbar, focus or settings changes"]
+fn native_single_monitor_hiding_keeps_an_independent_reveal_observer() -> Result<()> {
+    use muelle_config::DockPosition;
+    use windows::Win32::{Foundation::RECT, UI::WindowsAndMessaging::GetForegroundWindow};
+
+    let _queue = queue()?;
+    let mut fixture = Fixture::new()?;
+    let app = &mut fixture.app;
+    let foreground = unsafe { GetForegroundWindow() };
+    // A single synthetic display keeps the test independent of the user's
+    // connected displays and pointer. The input window receives no mouse events.
+    let screen = RECT {
+        left: -33000,
+        top: -33000,
+        right: -30000,
+        bottom: -30000,
+    };
+    let second = RECT {
+        left: -30000,
+        right: -27000,
+        ..screen
+    };
+    for position in [
+        DockPosition::Bottom,
+        DockPosition::Left,
+        DockPosition::Right,
+    ] {
+        app.config.dock_position = position;
+        for automatic in [true, false] {
+            app.config.auto_hide = automatic;
+            app.config.smart_hide = !automatic;
+            // Keeping only one display after Windows+P must not remove the
+            // independent observer either.
+            for screens in [vec![screen, second], vec![screen]] {
+                app.configure_edge_watcher(screens);
+                assert!(
+                    app.edge_watch.is_some(),
+                    "a covered reveal strip must not disable recovery: {position:?}, automatic={automatic}"
+                );
+            }
+            app.configure_edge_watcher(Vec::new());
+            assert!(app.edge_watch.is_none(), "no displays need no observer");
+            app.configure_edge_watcher(vec![screen]);
+            app.config.auto_hide = false;
+            app.config.smart_hide = false;
+            app.configure_edge_watcher(vec![screen]);
+            assert!(app.edge_watch.is_none(), "always-visible needs no observer");
+        }
+    }
+    assert_eq!(unsafe { GetForegroundWindow() }, foreground);
+    Ok(())
 }
 
 #[test]
@@ -293,4 +352,176 @@ fn flyouts_keep_the_dock_as_it_was_and_the_desktop_shows_it() {
         // A flyout or a launcher's popup (from the menu bar) changes nothing.
         assert_eq!(smart_covered(None, false, was_hidden), was_hidden);
     }
+}
+
+#[test]
+#[ignore = "Offscreen weather input only; no network, location or live Dock changes"]
+fn native_weather_hover_keeps_the_dock_open_and_disabling_releases_it() -> Result<()> {
+    use crate::{
+        appearance::{Look, Material},
+        gfx::WeatherGlyph,
+        weather::{Card, Key, Model, Placement},
+    };
+    use windows::Win32::Foundation::RECT;
+    let _queue = queue()?;
+    let mut fixture = Fixture::new()?;
+    let app = &mut fixture.app;
+    app.config.weather = true;
+    app.config.auto_hide = true;
+    app.config.smart_hide = false;
+    app.slide = Spring::at(0.0, 24.0);
+    let key = Key {
+        placement: Placement {
+            bounds: RECT {
+                left: -32000,
+                top: -32000,
+                right: -31760,
+                bottom: -31942,
+            },
+            compact: false,
+        },
+        screen: RECT {
+            left: -33000,
+            top: -33000,
+            right: -30000,
+            bottom: -30000,
+        },
+        look: Look {
+            material: Material::Standard,
+            light: false,
+            glass: false,
+        },
+        scale: 1.0,
+        revision: 0,
+        language: muelle_config::Language::En,
+    };
+    let make_card = |gfx: &Gfx| {
+        Card::new(
+            gfx,
+            key,
+            &Model {
+                degrees: "17°".into(),
+                title: "Partly cloudy".into(),
+                subtitle: "Current location".into(),
+                glyph: WeatherGlyph::PartlyCloudy,
+            },
+        )
+    };
+    app.weather.card = Some(make_card(&app.gfx)?);
+    let source = app
+        .weather
+        .card
+        .as_ref()
+        .map(Card::hwnd)
+        .unwrap_or_default();
+    app.weather_event(app.input, 1)?;
+    assert!(
+        !app.weather_holds_open(),
+        "ignore an event from a stale/foreign input window"
+    );
+    app.hovering = true;
+    app.amount.target = 1.0;
+    app.weather_event(source, 1)?;
+    assert!(!app.hovering);
+    assert_eq!(
+        app.amount.target, 0.0,
+        "weather stops app magnification without losing its reveal hold"
+    );
+    // This fixture deliberately owns no Stage. Rendering the hover exit must
+    // discard its orphaned card rather than retain an invisible reveal hold.
+    assert!(app.weather.card.is_none());
+    assert!(!app.weather_holds_open());
+    app.weather.card = Some(make_card(&app.gfx)?);
+    let source = app
+        .weather
+        .card
+        .as_ref()
+        .map(Card::hwnd)
+        .unwrap_or_default();
+    app.weather_event(source, 1)?;
+    app.hide_if_unused()?;
+    assert!(app.weather_holds_open());
+    assert_eq!(app.slide.target, 0.0);
+    app.weather_after_menu(source);
+    assert!(
+        app.weather_holds_open(),
+        "restore tracking when a menu releases capture"
+    );
+    app.weather_after_menu(app.input);
+    assert!(
+        !app.weather_holds_open(),
+        "moving to another window must release the weather hold"
+    );
+    app.weather_event(source, 0)?;
+    app.hide_if_unused()?;
+    assert!(!app.weather_holds_open());
+    assert_eq!(app.slide.target, 1.0);
+    app.config.weather = false;
+    app.sync_weather();
+    assert!(app.weather.card.is_none());
+    assert!(!app.weather_holds_open());
+    Ok(())
+}
+
+#[test]
+#[ignore = "Hidden owned forecast popup: no focus, capture, network request or live Dock changes"]
+fn native_forecast_popup_holds_autohide_ignores_foreign_events_and_closes() -> Result<()> {
+    use crate::{
+        appearance::{Look, Material},
+        weather::popup::{CLOSE, Context, Popup, data::Data},
+    };
+    use muelle_core::frame::DockEdge;
+    use windows::Win32::Foundation::RECT;
+    let _queue = queue()?;
+    let mut fixture = Fixture::new()?;
+    let app = &mut fixture.app;
+    app.config.auto_hide = true;
+    app.config.smart_hide = false;
+    let context = Context {
+        anchor: RECT {
+            left: -32000,
+            top: -31000,
+            right: -31780,
+            bottom: -30952,
+        },
+        screen: RECT {
+            left: -33000,
+            top: -33000,
+            right: -30000,
+            bottom: -30000,
+        },
+        edge: DockEdge::Bottom,
+        scale: 1.0,
+        look: Look {
+            material: Material::Frosted,
+            light: false,
+            glass: false,
+        },
+        language: muelle_config::Language::Es,
+        revision: 0,
+        hour: 0,
+        has_data: false,
+    };
+    let data = Data::new(None, context.language, 0, Default::default());
+    let popup = Popup::new(&app.gfx, context, &data)?;
+    let source = popup.hwnd();
+    app.weather.popup = Some(popup);
+    app.hide_if_unused()?;
+    assert_eq!(
+        app.slide.target, 0.0,
+        "an open forecast must keep the Dock visible"
+    );
+    app.weather_popup_event(app.input, CLOSE)?;
+    assert!(
+        app.weather.popup.is_some(),
+        "a foreign or obsolete popup event is ignored"
+    );
+    app.weather_popup_event(source, CLOSE)?;
+    assert!(app.weather.popup.is_none());
+    app.hide_if_unused()?;
+    assert_eq!(
+        app.slide.target, 1.0,
+        "closing the forecast releases the autohide hold"
+    );
+    Ok(())
 }

@@ -46,6 +46,7 @@ import { type SectionId, SectionIcon } from "./icons";
 import { SearchSection } from "./SearchSection";
 import { UpdateBanner } from "./UpdateBanner";
 import { WallpaperGallery } from "./WallpaperGallery";
+import { WeatherSettings } from "./WeatherSettings";
 import { type Texts, LANGUAGE_OPTIONS, resolveLanguage, textsFor } from "./i18n";
 
 type UpdateState =
@@ -564,6 +565,13 @@ export function App() {
                     onReselect={(mascotCharacter) => update({ mascotCharacter }, true)}
                   />
                 </SubRow>
+                <SubRow label={t.mascotAlwaysVisible} hint={t.mascotAlwaysVisibleHint} open={config.mascot}>
+                  <Toggle
+                    label={t.mascotAlwaysVisible}
+                    checked={config.mascotAlwaysVisible ?? false}
+                    onChange={(mascotAlwaysVisible) => update({ mascotAlwaysVisible })}
+                  />
+                </SubRow>
                 <SubRow label={t.mascotBreak} hint={t.mascotBreakHint} open={config.mascot}>
                   <Toggle
                     label={t.mascotBreak}
@@ -593,6 +601,7 @@ export function App() {
                   />
                 </Row>
               </Card>
+              <WeatherSettings config={config} texts={t} onChange={update} />
               <Card title={t.dockItems}>
                 <Row label={t.showStart}>
                   <Toggle label={t.showStart} checked={config.showStart ?? true} onChange={(showStart) => update({ showStart })} />
@@ -692,6 +701,13 @@ export function App() {
                       { value: "intelligent", label: t.dockHidingIntelligent },
                     ]}
                     onChange={(mode) => update({ menuBarAutoHide: mode === "automatic", menuBarSmartHide: mode === "intelligent" })}
+                  />
+                </SubRow>
+                <SubRow label={t.menuBarAllDisplays} hint={t.menuBarAllDisplaysHint} open={config.menuBar}>
+                  <Toggle
+                    label={t.menuBarAllDisplays}
+                    checked={config.menuBarAllDisplays ?? true}
+                    onChange={(menuBarAllDisplays) => update({ menuBarAllDisplays })}
                   />
                 </SubRow>
                 <SubRow label={t.menuBarMusic} hint={t.menuBarMusicHint} open={config.menuBar}>

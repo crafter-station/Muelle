@@ -42,6 +42,7 @@ pub struct Strings {
     pub usage_refreshing: &'static str,
     pub usage_sign_in: &'static str,
     pub usage_claude_sign_in: &'static str,
+    pub usage_gemini_sign_in: &'static str,
     pub usage_unavailable: &'static str,
     pub usage_loading: &'static str,
     pub usage_stale: &'static str,

@@ -41,6 +41,7 @@ mod strings;
 mod thumbnails;
 mod tray_menu;
 mod usage;
+mod weather;
 
 use std::env;
 

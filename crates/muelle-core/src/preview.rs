@@ -9,7 +9,7 @@ pub const CLOSE_BUTTON_DIAMETER: f32 = 18.0;
 /// Corner radius used by the preview card's rounded clip.
 pub const PREVIEW_CARD_CORNER_RADIUS: f32 = 12.0;
 /// Keeps the close button inside the preview card's rounded-corner clip.
-pub const CLOSE_BUTTON_INSET: f32 = PREVIEW_CARD_CORNER_RADIUS;
+pub const CLOSE_BUTTON_INSET: f32 = 6.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Point {
@@ -41,7 +41,7 @@ pub fn close_button_bounds(card: Rect, scale: f32) -> CloseButtonBounds {
     let inset = (CLOSE_BUTTON_INSET * scale).ceil();
 
     let visual = Rect {
-        x: card.x + inset,
+        x: card.x + card.width - inset - visual_size,
         y: card.y + inset,
         width: visual_size,
         height: visual_size,
@@ -158,9 +158,18 @@ mod tests {
         };
         for scale in [0.75, 1.0, 1.1, 1.25, 1.5, 2.0] {
             let bounds = close_button_bounds(card, scale);
-            let safe_inset = PREVIEW_CARD_CORNER_RADIUS * scale;
-            assert!(bounds.visual.x - card.x >= safe_inset);
-            assert!(bounds.visual.y - card.y >= safe_inset);
+            let radius = PREVIEW_CARD_CORNER_RADIUS * scale;
+            let corner = Point {
+                x: card.x + card.width - radius,
+                y: card.y + radius,
+            };
+            // The farthest corner of the button's bounding box remains inside
+            // the rounded top-right clip, including fractional DPI rounding.
+            let dx = (bounds.visual.x + bounds.visual.width - corner.x).max(0.0);
+            let dy = (corner.y - bounds.visual.y).max(0.0);
+            assert!(dx * dx + dy * dy <= radius * radius);
+            assert!(bounds.hit.x + bounds.hit.width <= card.x + card.width);
+            assert!(bounds.visual.x > card.x + card.width / 2.0);
         }
     }
 

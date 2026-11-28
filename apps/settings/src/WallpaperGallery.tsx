@@ -5,14 +5,12 @@ import { WALLPAPERS } from "./wallpaper-catalog";
 
 interface WallpaperTexts {
   wallpaperGalleryTitle: string;
-  wallpaperGalleryHint: string;
   wallpaperApplyLabel: string;
   wallpaperApplying: string;
   wallpaperApplyError: string;
   wallpaperNames: readonly string[];
 }
 
-/** Mounted only in Appearance. No polling, full-size image decoding or remote URLs. */
 export function WallpaperGallery({ texts, onApplied }: { texts: WallpaperTexts; onApplied: (preview: string) => void }) {
   const [selected, setSelected] = useState<number | null>(null);
   const [pending, setPending] = useState<number | null>(null);
@@ -32,7 +30,6 @@ export function WallpaperGallery({ texts, onApplied }: { texts: WallpaperTexts; 
   }, []);
 
   const choose = async (id: number, preview: string) => {
-    // A ref closes the gap before React paints the disabled buttons.
     if (busy.current) return;
     busy.current = true;
     revision.current += 1;
@@ -40,7 +37,6 @@ export function WallpaperGallery({ texts, onApplied }: { texts: WallpaperTexts; 
     setFailed(false);
     try {
       await applyWallpaper(id, preview);
-      // Keep other Settings previews current even if the user has navigated away.
       onApplied(preview);
       if (mounted.current) setSelected(id);
     } catch {
@@ -52,7 +48,6 @@ export function WallpaperGallery({ texts, onApplied }: { texts: WallpaperTexts; 
   };
 
   return <Card title={texts.wallpaperGalleryTitle}>
-    <p className="wallpaper-hint">{texts.wallpaperGalleryHint}</p>
     <div className="wallpaper-grid">
       {WALLPAPERS.map(({ id, preview, width, height }) => {
         const name = texts.wallpaperNames[id - 1];
