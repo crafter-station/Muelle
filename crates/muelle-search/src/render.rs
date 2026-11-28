@@ -397,6 +397,12 @@ impl Renderer {
         }
     }
 
+    /// Lets go of the drawing surface and what the graphics device holds for
+    /// it; the next paint makes them again. Icons already read are kept.
+    pub fn release(&mut self) {
+        self.target = None;
+    }
+
     pub fn paint(&mut self, window: HWND, scale: f32, view: &View) {
         // A lost graphics device makes drawing fail; rebuild and try once more.
         for _ in 0..2 {

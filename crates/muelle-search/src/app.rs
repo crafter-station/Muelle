@@ -7,6 +7,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use muelle_config::{Appearance, Config, Hotkey, Material, SearchConfig, SearchMonitor};
+use muelle_shell::power;
 use muelle_shell::search_link;
 use muelle_shell::system::{accent_color, transparency_enabled, uses_light_theme};
 use windows::Win32::Foundation::{HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -71,6 +72,10 @@ const CARET_TIMER: usize = 1;
 /// Reclaims the shortcut if Settings never gives it back.
 const RESUME_TIMER: usize = 2;
 const RESUME_AFTER_MS: u32 = 30_000;
+/// Gives idle memory back once the window has been hidden and quiet this long,
+/// as the dock does.
+const REST_TIMER: usize = 3;
+const REST_AFTER_MS: u32 = 3_000;
 const ICON_CACHE_LIMIT: usize = 1000;
 
 enum IndexUpdate {
@@ -335,6 +340,7 @@ fn install(window: HWND, config: Config, config_path: PathBuf) -> Result<()> {
     app.rebuild_index(true);
     app.look.translucent = style_window(window, app.look);
     APP.with(|cell| *cell.borrow_mut() = Some(app));
+    rest_later(window);
     Ok(())
 }
 
@@ -859,6 +865,7 @@ fn show(window: HWND) {
     }
     // SAFETY: Placing, focusing and timing our own window.
     unsafe {
+        let _ = KillTimer(Some(window), REST_TIMER);
         let _ = SetWindowPos(
             window,
             Some(HWND_TOPMOST),
@@ -883,6 +890,32 @@ fn hide(window: HWND) {
     unsafe {
         let _ = KillTimer(Some(window), CARET_TIMER);
         let _ = ShowWindow(window, SW_HIDE);
+    }
+    rest_later(window);
+}
+
+/// Arranges to rest, unless the window shows. Work done while hidden, such as
+/// reading the index, calls this again so that it is given back too.
+fn rest_later(window: HWND) {
+    // SAFETY: A query and a timer on our own window; setting it again only
+    // starts the wait over.
+    unsafe {
+        if !IsWindowVisible(window).as_bool() {
+            SetTimer(Some(window), REST_TIMER, REST_AFTER_MS, None);
+        }
+    }
+}
+
+/// Releases what drawing needs and hands the memory in use back to Windows,
+/// which brings back what the next search touches.
+fn rest(window: HWND) {
+    // SAFETY: Our own timer and window.
+    let visible = unsafe {
+        let _ = KillTimer(Some(window), REST_TIMER);
+        IsWindowVisible(window).as_bool()
+    };
+    if !visible && with_app(|app| app.renderer.release()).is_some() {
+        power::trim_memory();
     }
 }
 
@@ -1007,6 +1040,21 @@ fn perform(window: HWND, action: Action) {
     }
 }
 
+/// Whether handling `message` does work worth giving back afterwards.
+fn wakes(message: u32) -> bool {
+    matches!(
+        message,
+        WM_APP_INDEX
+            | WM_APP_ICON
+            | WM_APP_CONTENTS
+            | search_link::RELOAD
+            | search_link::SUSPEND_HOTKEY
+            | search_link::REBUILD_INDEX
+            | search_link::CLEAR_HISTORY
+            | search_link::STATUS
+    )
+}
+
 /// Handles a message, returning `None` to fall back to the default handling.
 fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
     let action = match message {
@@ -1070,6 +1118,10 @@ fn handle(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             app.caret_visible = !app.caret_visible;
             Action::Redraw
         })?,
+        WM_TIMER if wparam.0 == REST_TIMER => {
+            rest(window);
+            Action::None
+        }
         WM_TIMER if wparam.0 == RESUME_TIMER => {
             suspend_hotkey(window, false);
             Action::None
@@ -1109,7 +1161,10 @@ unsafe extern "system" fn window_procedure(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    let handled = handle(window, message, wparam, lparam);
+    if wakes(message) {
+        rest_later(window);
+    }
     // SAFETY: Windows calls this with the arguments of our own window.
-    handle(window, message, wparam, lparam)
-        .unwrap_or_else(|| unsafe { DefWindowProcW(window, message, wparam, lparam) })
+    handled.unwrap_or_else(|| unsafe { DefWindowProcW(window, message, wparam, lparam) })
 }

@@ -47,6 +47,8 @@ copia la sección de la versión que se publica a la release de GitHub.
 - Settings → Menu bar can turn off the circle, its menu, the arrow's movement, and
   Muelle's tray menu, Wi-Fi menu and control center (each then opens Windows'
   own), and choose which tiles the control center shows.
+- The search process gives its memory back a few seconds after its window
+  closes, so an idle Muelle uses a fraction of what it did with search on.
 - Muelle has its own search window, opened with Alt+Space or the menu bar's
   search button: apps, Windows settings, files by name and by content, a
   calculator, web and keyword searches, and offline definitions once the
@@ -244,6 +246,9 @@ copia la sección de la versión que se publica a la release de GitHub.
   la flecha y el menú de bandeja, el menú de Wi-Fi y el centro de control de
   Muelle (cada botón abre entonces lo propio de Windows), y elegir qué fichas
   muestra el centro de control.
+- El proceso de búsqueda devuelve su memoria unos segundos después de cerrarse
+  su ventana: Muelle en reposo con la búsqueda activada usa una fracción de la de
+  antes.
 - Muelle tiene su propia ventana de búsqueda, que se abre con Alt+Espacio o con
   el botón de búsqueda de la barra superior: aplicaciones, configuración de
   Windows, archivos por nombre y por contenido, calculadora, búsquedas web y
