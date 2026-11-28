@@ -20,7 +20,7 @@ use windows::Win32::{
     },
 };
 
-use crate::flight::Flight;
+use crate::flight::{Flight, Placement as FlightPlacement};
 
 use super::{
     App, HIDE_TIMER, LAST_FRONT, Outside, Role, SWITCHER_APPEAR, SWITCHER_ECHO, SWITCHER_POLL_MS,
@@ -193,17 +193,17 @@ impl App {
                 hwnd,
                 snapshot,
                 slot,
-                screen,
+                FlightPlacement {
+                    screen,
+                    edge: self.position(),
+                    behind: (!self.config.show_minimized).then_some(self.visual),
+                },
                 self.config.genie_speed.seconds(),
-                self.position(),
             )
         });
         let Some(flight) = flight else {
             return false;
         };
-        if !self.config.show_minimized {
-            flight.tuck_under(self.visual);
-        }
         self.snapshots.remove(position);
         self.flights.push(flight);
         self.last_frame = Instant::now();

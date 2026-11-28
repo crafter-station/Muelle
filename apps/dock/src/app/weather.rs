@@ -483,8 +483,35 @@ impl App {
         }
         if event < 2 {
             self.weather.hovering = event == 1;
-            if event == 1 && (self.hovering || self.pointed || self.amount.target != 0.0) {
-                self.on_mouse_leave()?;
+            // A captured reorder or OLE drag keeps its own hover controller.
+            if self.drag.is_some() || self.drag_over {
+                return Ok(None);
+            }
+            if event == 1
+                && (self.hovering
+                    || self.pointed
+                    || self.amount.target != 0.0
+                    || self.slide.target != 0.0
+                    || self.preview.is_some())
+            {
+                // The card can intercept input while the Dock is still sliding.
+                // Finish revealing it and transfer the hold without a hide pulse.
+                self.hovering = false;
+                self.pointed = false;
+                self.hovered = None;
+                self.amount.target = 0.0;
+                self.slide.target = 0.0;
+                self.last_frame = Instant::now();
+                self.close_preview();
+                self.place_windows()?;
+                self.render()?;
+            }
+            if event == 1 {
+                // Closing an app preview can arm this timer: cancel it after
+                // the transfer, with the weather hold already established.
+                unsafe {
+                    let _ = KillTimer(Some(self.input), HIDE_TIMER);
+                }
             }
             if event == 0 && self.config.hides_automatically() {
                 unsafe {
@@ -556,3 +583,7 @@ mod recovery;
 
 #[path = "weather/accessibility.rs"]
 mod accessibility;
+
+#[cfg(test)]
+#[path = "weather/input_tests.rs"]
+mod input_tests;

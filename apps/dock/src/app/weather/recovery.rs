@@ -172,6 +172,12 @@ mod tests {
                 "icon drag must retain the weather tile"
             );
             assert!(!app.weather_demand().visible);
+            let hover = app.hovering;
+            let amount = app.amount.target;
+            app.weather_event(card, 1)?;
+            app.weather_event(card, 0)?;
+            assert_eq!(app.hovering, hover, "drag owns hover during card input");
+            assert_eq!(app.amount.target, amount);
             app.weather_event(card, 2)?;
             app.weather_event(card, 3)?;
             assert!(app.weather.popup.is_none() && !app.menu_open);

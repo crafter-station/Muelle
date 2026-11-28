@@ -60,13 +60,24 @@ impl App {
         if self.fullscreen {
             return Ok(());
         }
-        let Some(stage) = &self.stage else {
+        if self.stage.is_none() {
             return Ok(());
-        };
+        }
         let mut point = POINT::default();
         // SAFETY: `point` remains alive for the duration of the call.
         unsafe { GetCursorPos(&mut point)? };
+        let was_hovering = self.hovering;
+        let result = self.move_pointer(point);
+        if !was_hovering && self.hovering {
+            taskbar::dismiss_hidden_tooltips();
+        }
+        result
+    }
 
+    pub(super) fn move_pointer(&mut self, point: POINT) -> Result<()> {
+        let Some(stage) = &self.stage else {
+            return Ok(());
+        };
         let (along, _) = stage.to_dock(point);
         if self.update_drag(point) {
             self.cursor = along;
@@ -96,20 +107,17 @@ impl App {
                 .0;
             along >= start.min(end)
         });
-        if over_weather && self.drag.is_none() {
-            return self.on_mouse_leave();
-        }
         if self.hovering && across < -rise - LEAVE_HALO * stage.scale {
             return self.on_mouse_leave();
         }
 
         self.cursor = along;
-        if !self.hovering {
-            // Explorer can leave its Start tooltip on screen after the last
-            // app minimizes. Only dismiss tooltips of our hidden taskbar.
-            taskbar::dismiss_hidden_tooltips();
+        let amount = if over_weather { 0.0 } else { 1.0 };
+        if !self.hovering || self.amount.target != amount || self.slide.target != 0.0 {
+            // Every part of the reveal strip opens the Dock. The weather tail
+            // holds it open without magnifying apps; it is not a pointer exit.
             self.hovering = true;
-            self.amount.target = 1.0;
+            self.amount.target = amount;
             self.slide.target = 0.0;
             self.last_frame = Instant::now();
             // SAFETY: Timer on our own window; killing a timer that is not set is harmless.

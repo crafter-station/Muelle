@@ -10,6 +10,14 @@ copia la sección de la versión que se publica a la release de GitHub.
 
 ### English
 
+- The weather end of the Dock now reveals it in automatic and intelligent
+  hiding modes, including during a slide. Moving between icons and the weather
+  card keeps it open without magnifying the card or starting extra queries.
+
+- Restoring a maximized app from its Dock icon places the genie overlay behind
+  the Dock before showing it, removing its temporary placement above the Dock.
+  No extra delays or timers.
+
 - Dismiss residual native Start/taskbar tooltips when entering the Dock after
   minimizing the last app. Hidden-taskbar focus recovery also recognizes its
   internal controls and ignores stale events after another app takes focus.
@@ -110,6 +118,14 @@ copia la sección de la versión que se publica a la release de GitHub.
   the Dock no longer redraws the menu bar.
 
 ### Español
+
+- El extremo del clima permite revelar el Dock en ocultación automática e
+  inteligente, incluso durante el deslizamiento. Pasar entre iconos y tarjeta
+  lo mantiene abierto sin ampliar el clima ni añadir consultas.
+
+- Al restaurar una app maximizada desde su icono, la copia de la animación se
+  coloca detrás del Dock antes de mostrarse, eliminando su colocación transitoria
+  por encima del Dock. Sin retrasos ni timers extra.
 
 - Se descartan las etiquetas nativas residuales de Inicio/barra de Windows al
   entrar al Dock tras minimizar la última app. La recuperación del foco reconoce
